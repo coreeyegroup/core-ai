@@ -49,6 +49,42 @@ class ConfigurationTests(unittest.TestCase):
 
 
 class PublishTests(unittest.TestCase):
+    def test_existing_individual_import_gets_only_exact_new_site(self):
+        caddy = Path('/etc/caddy/Caddyfile')
+        site = Path('/etc/caddy/sites/core-ai.caddy')
+        original = 'import /etc/caddy/sites/other.caddy\n'
+        candidate = manage.site_import_config(original, caddy, site)
+        self.assertIn(original.strip(), candidate)
+        self.assertIn('import /etc/caddy/sites/core-ai.caddy\n', candidate)
+        self.assertNotIn('*.caddy', candidate)
+        self.assertEqual(candidate, manage.site_import_config(candidate, caddy, site))
+
+    def test_existing_wildcard_is_preserved(self):
+        for original in ('import /etc/caddy/sites/*.caddy\n', 'import "sites/*.caddy" # existing\n', 'import\t/etc/caddy/sites/*\n'):
+            with self.subTest(original=original):
+                self.assertEqual(original, manage.site_import_config(original, Path('/etc/caddy/Caddyfile'), Path('/etc/caddy/sites/core-ai.caddy')))
+
+    @unittest.skipUnless(shutil.which('caddy'), 'Caddy CLI is required for integration validation')
+    def test_actual_caddy_accepts_existing_individual_site_plus_new_site(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            sites = root / 'sites'
+            sites.mkdir()
+            other = sites / 'other.caddy'
+            other.write_text('http://other.example.test {\n respond "existing"\n}\n')
+            site = sites / 'core-ai.caddy'
+            site.write_text('http://ai.example.test {\n reverse_proxy 127.0.0.1:3100\n}\n')
+            caddy = root / 'Caddyfile'
+            original = f'import {other}\n'
+            # Reproduce the previous bug with a duplicate wildcard import.
+            caddy.write_text(original + f'import {sites}/*.caddy\n')
+            bad = subprocess.run(['caddy', 'adapt', '--config', str(caddy), '--adapter', 'caddyfile'], capture_output=True, text=True)
+            self.assertNotEqual(0, bad.returncode)
+            self.assertIn('ambiguous site definition', bad.stderr)
+            caddy.write_text(manage.site_import_config(original, caddy, site))
+            fixed = subprocess.run(['caddy', 'adapt', '--config', str(caddy), '--adapter', 'caddyfile'], capture_output=True, text=True)
+            self.assertEqual(0, fixed.returncode, fixed.stderr)
+
     def test_caddy_validation_failure_restores_files(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

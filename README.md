@@ -21,10 +21,10 @@ Open WebUI uses a release tag pinned in `compose.yaml`. Dashboard state lives un
 Keep existing Ollama and models in place. From a separate checkout of this repository, run PowerShell as Administrator:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup-windows.ps1 -Tailnet 'YOUR_TAILNET_NAME'
+powershell -ExecutionPolicy Bypass -File .\setup.ps1
 ```
 
-The script installs Tailscale via winget if missing, checks/selects the requested authenticated profile, verifies the existing localhost Ollama model listing, and configures private Tailscale Serve TCP forwarding. It does not change Ollama's listener or model directory. The existing tailnet access policy controls which members can reach the forwarded port. No public Funnel is configured.
+Enter the server's active tailnet when prompted. The short launcher resolves the longer script path internally. The script installs Tailscale via winget if missing, checks/selects the requested authenticated profile, verifies the existing localhost Ollama model listing, and configures private Tailscale Serve TCP forwarding. It does not change Ollama's listener or model directory. The existing tailnet access policy controls which members can reach the forwarded port. No public Funnel is configured.
 
 Account sign-in, account selection, MFA and device approval can require the account owner's interaction. The script initiates the sign-in flow if the requested profile is not yet authenticated. Complete the displayed link using the correct account and rerun if the login timeout expires. It does not log the server out or weaken the tailnet policy.
 
@@ -125,7 +125,7 @@ Do not log an existing server out of Tailscale or replace access policies withou
 
 The repository includes the installer, pinned Compose deployment, local configuration wizard, Caddy route management, backup/update commands and a Windows private-connection setup script. Live DNS ownership, identity-provider authorization and device approval remain external prerequisites. A source push is not proof of a successful host installation.
 
-Validation covers shell syntax, configuration/secret handling and Caddy rollback behaviour. GitHub Actions also validates Compose syntax. Live Ubuntu deployment, Windows execution, inference, TLS and a restore drill require verification on the actual machines.
+Validation covers shell syntax, configuration/secret handling and Caddy rollback behaviour. A regression test reproduces duplicate-site failure from an individual site import plus a wildcard, then verifies the exact-file import fix with the real Caddy CLI. Existing wildcard imports are reused. GitHub Actions also validates Compose syntax. Live Ubuntu deployment, Windows execution, inference, TLS and a restore drill require verification on the actual machines.
 
 ## References
 

@@ -59,6 +59,24 @@ def validate_model_host(value):
     return str(address)
 
 
+def site_import_config(original, caddyfile, site):
+    """Import only our site; preserve imports that already cover it."""
+    for line in original.splitlines():
+        if not re.match(r'^\s*import\s+', line):
+            continue
+        tokens = shlex.split(line, comments=True)
+        if len(tokens) != 2:
+            continue
+        pattern = tokens[1]
+        if not os.path.isabs(pattern):
+            pattern = str(caddyfile.parent / pattern)
+        if fnmatch.fnmatch(str(site), pattern):
+            return original
+    # A new wildcard would load unrelated sites that may already be individually
+    # imported. An exact path avoids duplicate definitions for those sites.
+    return original.rstrip() + '\n\nimport ' + str(site) + '\n'
+
+
 def configure(args):
     old = read_config() if ENV.exists() else {}
     previous_domain = urllib.parse.urlsplit(old.get('WEBUI_URL', '')).hostname or ''
@@ -177,19 +195,7 @@ def publish():
         return isinstance(value, list) and any(contains_host(v) for v in value)
     if not exists and contains_host(existing_json):
         raise ValueError('The requested domain already exists in Caddy. Review its existing route before taking ownership.')
-    import_line = 'import /etc/caddy/sites/*.caddy'
-    has_import = False
-    for line in original.splitlines():
-        if not line.lstrip().startswith('import '):
-            continue
-        tokens = shlex.split(line, comments=True)
-        if len(tokens) == 2 and tokens[0] == 'import':
-            pattern = tokens[1]
-            if not os.path.isabs(pattern):
-                pattern = str(caddyfile.parent / pattern)
-            if fnmatch.fnmatch(str(site), pattern):
-                has_import = True
-    candidate = original if has_import else original.rstrip() + '\n\n' + import_line + '\n'
+    candidate = site_import_config(original, caddyfile, site)
     snippet = marker + domain + ' {\n    reverse_proxy 127.0.0.1:3100\n}\n'
     stamp = datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')
     backup_dir = CADDYBACKUPS / stamp

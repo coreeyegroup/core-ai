@@ -9,6 +9,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: Shell syntax
         run: bash -n core-ai scripts/*.sh
+      - name: Install Caddy for regression validation
+        run: sudo apt-get update && sudo apt-get install -y caddy
       - name: Deployment behavior
         run: python3 -m unittest discover -s tests -v
       - name: Compose validation
