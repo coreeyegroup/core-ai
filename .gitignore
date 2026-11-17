@@ -1,0 +1,10 @@
+.env
+.env.*
+!.env.example
+reports/
+data/
+backups/
+*.log
+*.pem
+*.key
+__pycache__/
