@@ -1,0 +1,23 @@
+name: core-ai
+services:
+  webui:
+    image: ghcr.io/open-webui/open-webui:v0.13.4
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3100:8080"
+    env_file:
+      - path: .env
+        format: raw
+    volumes:
+      - ./data:/app/backend/data
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 90s

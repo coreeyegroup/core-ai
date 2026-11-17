@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
+action="${1:-help}"
+if [ "$action" = update ]; then
+  if [ -n "$(git status --porcelain --untracked-files=normal)" ]; then
+    printf 'Tracked source or untracked files need review before updating. Runtime data is ignored.\n' >&2
+    exit 2
+  fi
+  git pull --ff-only origin main
+  shift
+  exec python3 scripts/manage.py deploy --backup "$@"
+fi
+if [ "$action" = install ] || [ "$action" = infra-update ]; then
+  bash scripts/install-infra.sh "$action"
+fi
+[ "$#" -gt 0 ] || set -- help
+exec python3 scripts/manage.py "$@"

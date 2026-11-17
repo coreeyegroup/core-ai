@@ -1,0 +1,92 @@
+import contextlib
+import importlib.util
+import io
+from pathlib import Path
+import shutil
+import subprocess
+import tempfile
+import types
+import unittest
+from unittest.mock import patch
+
+spec = importlib.util.spec_from_file_location('manage', Path(__file__).resolve().parents[1] / 'scripts/manage.py')
+manage = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(manage)
+
+
+class ConfigurationTests(unittest.TestCase):
+    def test_reject_domain_config_injection(self):
+        for value in ('https://ai.example.com', 'example.com\nimport evil', '*.example.com', 'a..com', 'x.com {'):
+            with self.assertRaises(ValueError):
+                manage.validate_domain(value)
+
+    def test_model_host_must_be_private_tailnet_address(self):
+        for value in ('127.0.0.1', '8.8.8.8', 'example.com'):
+            with self.assertRaises(ValueError):
+                manage.validate_model_host(value)
+
+    def test_config_preserves_secret_and_literal_password(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            env = root / '.env'
+            args = types.SimpleNamespace(domain='ai.example.com', model_host='100.64.0.1')
+            password = 'Literal-$-quotes-\"-=-password'
+            with patch.object(manage, 'ROOT', root), patch.object(manage, 'ENV', env), patch('builtins.input', return_value='admin@example.com'), patch('getpass.getpass', return_value=password), contextlib.redirect_stdout(io.StringIO()):
+                manage.configure(args)
+                first = manage.read_config()
+                with patch('getpass.getpass', side_effect=AssertionError('must not reset password')):
+                    manage.configure(args)
+                second = manage.read_config()
+            self.assertEqual(first['WEBUI_SECRET_KEY'], second['WEBUI_SECRET_KEY'])
+            self.assertEqual(password, second['WEBUI_ADMIN_PASSWORD'])
+            self.assertEqual(0o600, env.stat().st_mode & 0o777)
+
+    def test_compose_disables_implicit_dotenv_interpolation(self):
+        with patch.object(manage, 'run') as run:
+            manage.compose('config', '--quiet')
+        command = run.call_args.args[0]
+        self.assertEqual(command[:5], ['sudo', 'docker', 'compose', '--env-file', '/dev/null'])
+
+
+class PublishTests(unittest.TestCase):
+    def test_caddy_validation_failure_restores_files(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            caddy = root / 'Caddyfile'
+            site = root / 'sites/core-ai.caddy'
+            backups = root / 'backups'
+            original = ':80 {\n respond "existing"\n}\n'
+            caddy.write_text(original)
+
+            def fake_run(command, **kwargs):
+                command = [str(x) for x in command]
+                if command[:2] == ['sudo', 'cat']:
+                    return subprocess.CompletedProcess(command, 0, Path(command[2]).read_text(), '')
+                if command[:3] == ['sudo', 'caddy', 'adapt']:
+                    return subprocess.CompletedProcess(command, 0, '{}', '')
+                if command[:3] == ['sudo', 'caddy', 'validate']:
+                    raise subprocess.CalledProcessError(1, command)
+                if command[:3] == ['sudo', 'mkdir', '-p']:
+                    for p in command[3:]: Path(p).mkdir(parents=True, exist_ok=True)
+                elif command[:3] == ['sudo', 'cp', '-a']:
+                    shutil.copy2(command[3], command[4])
+                elif command[:2] == ['sudo', 'install']:
+                    shutil.copyfile(command[-2], command[-1])
+                elif command[:3] == ['sudo', 'rm', '-f']:
+                    Path(command[3]).unlink(missing_ok=True)
+                return subprocess.CompletedProcess(command, 0, '', '')
+
+            def fake_subprocess(command, **kwargs):
+                if command[:3] == ['sudo', 'test', '-e']:
+                    return subprocess.CompletedProcess(command, 0 if Path(command[-1]).exists() else 1)
+                return subprocess.CompletedProcess(command, 0)
+
+            with patch.object(manage, 'CADDYFILE', caddy), patch.object(manage, 'CADDYSITE', site), patch.object(manage, 'CADDYBACKUPS', backups), patch.object(manage, 'read_config', return_value={'WEBUI_URL':'https://ai.example.com'}), patch.object(manage, 'wait_ready'), patch.object(manage, 'verify_admin'), patch.object(manage, 'run', side_effect=fake_run), patch('subprocess.run', side_effect=fake_subprocess):
+                with self.assertRaises(subprocess.CalledProcessError):
+                    manage.publish()
+            self.assertEqual(original, caddy.read_text())
+            self.assertFalse(site.exists())
+
+
+if __name__ == '__main__':
+    unittest.main()

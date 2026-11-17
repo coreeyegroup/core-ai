@@ -1,0 +1,18 @@
+name: Deployment checks
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Shell syntax
+        run: bash -n core-ai scripts/*.sh
+      - name: Deployment behavior
+        run: python3 -m unittest discover -s tests -v
+      - name: Compose validation
+        run: |
+          trap 'rm -f .env' EXIT
+          printf 'WEBUI_SECRET_KEY=ci-placeholder-not-a-real-secret\n' > .env
+          docker compose --env-file /dev/null config --quiet
