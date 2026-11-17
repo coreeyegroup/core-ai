@@ -72,7 +72,7 @@ Enter the VPS public address and SSH username. The script:
 1. Installs WireGuard via winget if missing and enables the Windows OpenSSH client if needed.
 2. Verifies that existing Ollama answers on localhost and has models.
 3. Generates/reuses a private laptop key under the protected `%ProgramData%\CORE-AI\wireguard` directory.
-4. Enrolls **only its public key** over SSH into the VPS checkout; SSH host-key checks remain enabled. SSH/sudo credentials may be requested locally.
+4. Enrolls **only its public key** over an interactive SSH session into the VPS checkout; SSH host-key checks remain enabled. The server authenticates sudo before enrollment, with prompts and errors visible in the terminal. A second non-sudo SSH session reads `runtime/wireguard-public.json`, containing public routing information only. Password-based SSH may request the login password a second time; no password is stored in the script.
 5. Installs a persistent WireGuard tunnel service, preserving the key on reruns.
 6. Adds an interface-bound TCP proxy from the laptop WireGuard address to localhost Ollama, with a Windows firewall allow rule scoped to the VPS peer address.
 

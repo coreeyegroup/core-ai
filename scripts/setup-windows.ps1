@@ -45,13 +45,21 @@ if (Test-Path $PrivateKeyPath) {
 $PublicKey = ($PrivateKey | & $WgExe pubkey).Trim()
 if ($LASTEXITCODE -ne 0 -or $PublicKey -notmatch '^[A-Za-z0-9+/]{43}=$') { throw 'Invalid local public key.' }
 Write-Host 'Enrolling the laptop public key over SSH. Verify the server host fingerprint and enter SSH/sudo credentials if requested.'
-# Only the public key is sent. Existing SSH host-key verification stays enabled.
-$RemoteCommand = "cd ~/core-ai && ./core-ai peer-add --public-key '$PublicKey'"
-$Result = & ssh -tt "$VpsUser@$VpsHost" $RemoteCommand
-if ($LASTEXITCODE -ne 0) { throw 'VPS peer registration failed; run the Ubuntu migration/install first.' }
-$JsonMatch = [regex]::Match(($Result -join "`n"), '\{"server_public_key":[^\r\n]+\}')
-if (-not $JsonMatch.Success) { throw 'VPS did not return the expected public tunnel information.' }
-$Peer = $JsonMatch.Value | ConvertFrom-Json
+# Keep this SSH session attached to the console: capturing its stdout hides
+# interactive sudo prompts and remote errors. Only the public key is sent.
+$RemoteCommand = "cd ~/core-ai && sudo -v && ./core-ai peer-add --public-key '$PublicKey'"
+& ssh -tt "$VpsUser@$VpsHost" $RemoteCommand
+$EnrollmentExitCode = $LASTEXITCODE
+if ($EnrollmentExitCode -ne 0) {
+    throw "VPS enrollment exited with code $EnrollmentExitCode. Read the server message above. The local key was preserved; no local tunnel configuration was changed."
+}
+# The second session reads public metadata only and never runs sudo. SSH may
+# request authentication again when password-based login is used.
+Write-Host 'Reading the enrolled public tunnel information (SSH may request your login password again).'
+$Result = & ssh -T "$VpsUser@$VpsHost" 'cat ~/core-ai/runtime/wireguard-public.json'
+if ($LASTEXITCODE -ne 0) { throw 'Could not read the enrolled public tunnel information. Update the Ubuntu checkout and retry.' }
+try { $Peer = ($Result -join "`n") | ConvertFrom-Json }
+catch { throw 'VPS returned invalid public tunnel information; no local tunnel was installed.' }
 if ($Peer.server_public_key -notmatch '^[A-Za-z0-9+/]{43}=$' -or $Peer.endpoint -notmatch '^[a-zA-Z0-9][a-zA-Z0-9.-]*$' -or $Peer.port -ne 51820 -or $Peer.server_ip -ne '10.203.0.1' -or $Peer.client_ip -ne '10.203.0.2') {
     throw 'Unexpected server tunnel information; no local tunnel was installed.'
 }

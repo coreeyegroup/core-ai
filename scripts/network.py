@@ -116,7 +116,14 @@ def add_peer(config, key):
     if existing and existing != key:
         raise ValueError('A different laptop is already enrolled; existing peer was preserved.')
     apply(render(private_key, key), old)
-    print(json.dumps({'server_public_key': public, 'endpoint': validate_endpoint(config['CORE_VPS_ENDPOINT']), 'port': PORT, 'server_ip': SERVER_IP, 'client_ip': CLIENT_IP}))
+    info = public_info(public, config['CORE_VPS_ENDPOINT'])
+    print(json.dumps(info))
+    return info
+
+
+def public_info(public_key, endpoint):
+    """Export only public routing data; never a private tunnel configuration."""
+    return {'server_public_key': validate_key(public_key), 'endpoint': validate_endpoint(endpoint), 'port': PORT, 'server_ip': SERVER_IP, 'client_ip': CLIENT_IP}
 
 
 def doctor():

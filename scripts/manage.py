@@ -417,7 +417,8 @@ def main():
     elif args.action == 'peer-add':
         if not args.public_key:
             raise ValueError('--public-key is required.')
-        network.add_peer(read_config(), args.public_key)
+        info = network.add_peer(read_config(), args.public_key)
+        write_private(ROOT / 'runtime/wireguard-public.json', json.dumps(info) + '\n')
 
 
 if __name__ == '__main__':
