@@ -10,3 +10,7 @@ backups/
 __pycache__/
 .env-*
 runtime/
+config.env
+data-anythingllm/
+*.conf
+*.private

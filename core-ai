@@ -11,7 +11,7 @@ if [ "$action" = update ]; then
   shift
   exec python3 scripts/manage.py deploy --backup "$@"
 fi
-if [ "$action" = install ] || [ "$action" = infra-update ]; then
+if [ "$action" = install ] || [ "$action" = migrate ] || [ "$action" = infra-update ]; then
   bash scripts/install-infra.sh "$action"
 fi
 [ "$#" -gt 0 ] || set -- help

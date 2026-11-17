@@ -20,25 +20,26 @@ class ConfigurationTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 manage.validate_domain(value)
 
-    def test_model_host_must_be_private_tailnet_address(self):
-        for value in ('127.0.0.1', '8.8.8.8', 'example.com'):
+    def test_model_host_must_be_private_address(self):
+        for value in ('127.0.0.1', '8.8.8.8', 'example.com', '100.64.0.1'):
             with self.assertRaises(ValueError):
                 manage.validate_model_host(value)
 
     def test_config_preserves_secret_and_literal_password(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
-            env = root / '.env'
-            args = types.SimpleNamespace(domain='ai.example.com', model_host='100.64.0.1')
+            env = root / 'config.env'
+            args = types.SimpleNamespace(domain='ai.example.com', endpoint='vps.example.test', model_host='10.203.0.2', model=None, embedding_model=None)
             password = 'Literal-$-quotes-\"-=-password'
-            with patch.object(manage, 'ROOT', root), patch.object(manage, 'ENV', env), patch('builtins.input', return_value='admin@example.com'), patch('getpass.getpass', return_value=password), contextlib.redirect_stdout(io.StringIO()):
+            with patch.object(manage, 'ROOT', root), patch.object(manage, 'ENV', env), patch.object(manage, 'run'), patch('builtins.input', return_value='admin@example.com'), patch('getpass.getpass', return_value=password), contextlib.redirect_stdout(io.StringIO()):
                 manage.configure(args)
                 first = manage.read_config()
                 with patch('getpass.getpass', side_effect=AssertionError('must not reset password')):
                     manage.configure(args)
                 second = manage.read_config()
-            self.assertEqual(first['WEBUI_SECRET_KEY'], second['WEBUI_SECRET_KEY'])
-            self.assertEqual(password, second['WEBUI_ADMIN_PASSWORD'])
+            self.assertEqual(first['CORE_JWT_SECRET'], second['CORE_JWT_SECRET'])
+            self.assertEqual(first['CORE_SIG_KEY'], second['CORE_SIG_KEY'])
+            self.assertEqual(password, second['CORE_ADMIN_PASSWORD'])
             self.assertEqual(0o600, env.stat().st_mode & 0o777)
 
     def test_compose_disables_implicit_dotenv_interpolation(self):
@@ -117,11 +118,35 @@ class PublishTests(unittest.TestCase):
                     return subprocess.CompletedProcess(command, 0 if Path(command[-1]).exists() else 1)
                 return subprocess.CompletedProcess(command, 0)
 
-            with patch.object(manage, 'CADDYFILE', caddy), patch.object(manage, 'CADDYSITE', site), patch.object(manage, 'CADDYBACKUPS', backups), patch.object(manage, 'read_config', return_value={'WEBUI_URL':'https://ai.example.com'}), patch.object(manage, 'wait_ready'), patch.object(manage, 'verify_admin'), patch.object(manage, 'run', side_effect=fake_run), patch('subprocess.run', side_effect=fake_subprocess):
+            with patch.object(manage, 'CADDYFILE', caddy), patch.object(manage, 'CADDYSITE', site), patch.object(manage, 'CADDYBACKUPS', backups), patch.object(manage, 'read_config', return_value={'CORE_DOMAIN':'ai.example.com'}), patch.object(manage, 'wait_ready'), patch.object(manage, 'verify_admin'), patch.object(manage, 'run', side_effect=fake_run), patch('subprocess.run', side_effect=fake_subprocess):
                 with self.assertRaises(subprocess.CalledProcessError):
                     manage.publish()
             self.assertEqual(original, caddy.read_text())
             self.assertFalse(site.exists())
+
+
+class MigrationTests(unittest.TestCase):
+    def test_migration_failure_does_not_stop_legacy_dashboard(self):
+        args = types.SimpleNamespace(domain=None, endpoint=None, model_host=None, model=None, embedding_model=None)
+        with tempfile.TemporaryDirectory() as td:
+            env = Path(td) / 'config.env'
+            env.write_text('CORE_DOMAIN=ai.example.com\n')
+            with patch.object(manage, 'ENV', env), patch.object(manage, 'legacy_backup') as backup, patch.object(manage, 'read_config', return_value={}), patch.object(manage.network, 'setup'), patch.object(manage, 'deploy'), patch.object(manage, 'publish', side_effect=ValueError('validation failed')), patch.object(manage, 'docker') as docker:
+                with self.assertRaises(ValueError):
+                    manage.migrate(args)
+                backup.assert_called_once()
+                docker.assert_not_called()
+
+    def test_admin_bootstrap_is_idempotent_when_multiuser_enabled(self):
+        with patch.object(manage, 'read_config', return_value={}), patch.object(manage, 'http_json', return_value={'multiUserMode':True}) as http, patch.object(manage, 'verify_admin') as verify:
+            manage.bootstrap_admin()
+            self.assertEqual(1, http.call_count)
+            verify.assert_called_once()
+
+    def test_anonymous_access_blocks_publication(self):
+        with patch.object(manage, 'read_config', return_value={'CORE_ADMIN_USERNAME':'admin'}), patch.object(manage, 'compose'), patch.object(manage, 'http_json', return_value={'workspaces':[]}):
+            with self.assertRaisesRegex(ValueError, 'publishing is blocked'):
+                manage.verify_admin()
 
 
 if __name__ == '__main__':

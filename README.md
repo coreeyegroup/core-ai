@@ -1,135 +1,118 @@
 # CORE-AI
 
-Git-managed installation, configuration and updates for a self-hosted AI workspace using Open WebUI and Ollama.
+A Git-managed self-hosted AI workspace: **AnythingLLM + existing Ollama + direct WireGuard + Caddy + Docker Engine**.
 
-## Install on Ubuntu
+The application and private connection use open-source components. There is no hosted VPN coordination service, VPN account, or required cloud AI provider. Package registries, Git hosting and normal public certificate issuance are distribution/TLS services, not model-inference services. The existing Windows operating system and hardware drivers are outside this application's open-source component claim.
 
-From the checked-out repository, run as the normal deployment user:
+## Why this stack
+
+AnythingLLM is MIT licensed and runs in one application container with SQLite and embedded LanceDB. This avoids both Open WebUI's current branding-restricted license and adding a MongoDB dependency through a different dashboard. Ollama remains the existing model runtime. See [component licenses](docs/licenses.md).
+
+Model files have their own licenses: an MIT-licensed runtime does not change the licenses of downloaded weights. Review each model separately. These scripts do not download or replace model weights.
+
+## Initial deployment
+
+| Component | Location | Persistence |
+|---|---|---|
+| Dashboard / accounts / documents / retrieval | Ubuntu VPS | `data-anythingllm/` and `runtime/anythingllm.env` |
+| Model inference and existing weights | Windows laptop | Existing Ollama installation and model directory |
+| Private network | Direct WireGuard between the two devices | Device-local private keys; public-key exchange over SSH |
+| HTTPS | Existing VPS Caddy service | Managed site file plus backups of changed configuration |
+
+The default private addresses are `10.203.0.1` (VPS) and `10.203.0.2` (laptop); confirm this range does not overlap another private network. Only the opposite peer's `/32` route is configured. Neither device sends general internet traffic through the tunnel. The laptop initiates to VPS UDP 51820 and uses a 25-second keepalive behind NAT. Allow UDP 51820 in any provider firewall. If UFW is already active, the installer adds only that UDP rule; it does not enable or reset UFW. DNS/HTTPS still require the selected hostname to point to the VPS and inbound 80/443.
+
+## Migrate the earlier deployment
+
+From the existing `~/core-ai` checkout:
 
 ```bash
-./core-ai install --domain ai.example.com --model-host LAPTOP_TAILSCALE_IPV4
+git pull --ff-only origin main
+./core-ai migrate --endpoint YOUR_VPS_PUBLIC_IPV4_OR_DNS
 ```
 
-The installer requests sudo for package and service operations. It installs missing prerequisites from official apt repositories, reuses existing Docker/Caddy/Tailscale installations, prompts for the administrator email and password, saves local configuration with mode 0600, starts Open WebUI, verifies the administrator exists before publishing, and installs the HTTPS route. Existing services are not removed. Conflicting container package families require explicit migration rather than automatic removal.
+The migration reads the previous local domain and administrator credentials, backs up the previous data/settings and container metadata privately, prepares the WireGuard server, starts AnythingLLM on **localhost:3101**, creates/verifies the administrator in multi-user mode, rejects anonymous workspace access, and changes the Caddy upstream only after those checks pass. It then stops the old dashboard container. Existing Caddy sites are preserved, and only the exact CORE-AI site import is added when necessary.
 
-Set the selected domain's DNS to the deployment server and make ports 80/443 reachable. The installer cannot change a DNS provider account without its credentials. It reports a pending HTTPS check if DNS or certificate issuance is not ready.
+The old `data/`, `.env`, backup and stopped container are retained. Conversations/documents are **not automatically converted** into the new application's database. Backups include secrets: do not upload or commit them. If deployment or publication fails, the old dashboard remains available at its prior local port; Caddy validation/reload failure restores prior Caddy files.
 
-Open WebUI uses a release tag pinned in `compose.yaml`. Dashboard state lives under `data/`; host settings and secrets live in `.env`. Neither is committed. Raw env-file parsing preserves literal password characters. Compose must support `env_file.format: raw` (Compose 2.30+). The first install can deploy the dashboard even if the model laptop is disconnected; inference remains pending.
+There is no automated chat conversion or full application rollback command yet. Do not delete the retained data or old container. The Caddy transaction and migration ordering are tested; a real restore drill remains an operations-phase acceptance item.
 
-## Set up the Windows model connection
+The new stack never invokes the old hosted VPN software. Existing global VPN software is not silently uninstalled because other host services may use it. Remove obsolete software separately after the replacement is verified.
 
-Keep existing Ollama and models in place. From a separate checkout of this repository, run PowerShell as Administrator:
+## Fresh Ubuntu installation
+
+Clone this repository to `~/core-ai`, then run as the normal deployment user:
+
+```bash
+./core-ai install --domain ai.example.com --endpoint YOUR_VPS_PUBLIC_IPV4_OR_DNS
+```
+
+Enter the administrator username and password when prompted. Missing prerequisites are installed from official apt repositories. Existing Docker Engine and Caddy installations are reused. No Kubernetes, extra database server, hosted AI gateway or cloud VPN account is required.
+
+State layout:
+
+- `config.env`: private deployment settings and bootstrap credentials, mode 0600, ignored by Git.
+- `runtime/anythingllm.env`: persistent application dotenv file, owned by container UID 1000; includes stable JWT/encryption secrets and provider settings.
+- `data-anythingllm/`: database, documents, keys and retrieval data; separate from legacy data.
+- `/etc/wireguard/coreai.conf`: VPS-private tunnel key and enrolled laptop public key, root mode 0600.
+- `backups/`: private, consistent application backups.
+
+Provider settings changed in the application UI persist in its mounted dotenv file. An explicit `configure` command reapplies managed provider defaults; ordinary `update` does not reset them. Existing account passwords must be changed through the application's account flow, not by editing bootstrap credentials.
+
+## Windows setup
+
+In **PowerShell as Administrator**, from a separate checkout of this repository:
 
 ```powershell
+git pull --ff-only origin main
 powershell -ExecutionPolicy Bypass -File .\setup.ps1
 ```
 
-Enter the server's active tailnet when prompted. The short launcher resolves the longer script path internally. The script installs Tailscale via winget if missing, checks/selects the requested authenticated profile, verifies the existing localhost Ollama model listing, and configures private Tailscale Serve TCP forwarding. It does not change Ollama's listener or model directory. The existing tailnet access policy controls which members can reach the forwarded port. No public Funnel is configured.
+Enter the VPS public address and SSH username. The script:
 
-Account sign-in, account selection, MFA and device approval can require the account owner's interaction. The script initiates the sign-in flow if the requested profile is not yet authenticated. Complete the displayed link using the correct account and rerun if the login timeout expires. It does not log the server out or weaken the tailnet policy.
+1. Installs WireGuard via winget if missing and enables the Windows OpenSSH client if needed.
+2. Verifies that existing Ollama answers on localhost and has models.
+3. Generates/reuses a private laptop key under the protected `%ProgramData%\CORE-AI\wireguard` directory.
+4. Enrolls **only its public key** over SSH into the VPS checkout; SSH host-key checks remain enabled. SSH/sudo credentials may be requested locally.
+5. Installs a persistent WireGuard tunnel service, preserving the key on reruns.
+6. Adds an interface-bound TCP proxy from the laptop WireGuard address to localhost Ollama, with a Windows firewall allow rule scoped to the VPS peer address.
 
-## Daily commands
+The script does not expose a public model endpoint, change Ollama's model path, route unrelated traffic, or request a VPN vendor login. If Ollama already has a wildcard listener, it stops before making a proxy and asks for that listener to be corrected. A default localhost Ollama installation needs no listener change. If a different laptop is already enrolled, the VPS refuses to overwrite its public key automatically.
 
-| Command | Action |
+The SSH account must have access to `~/core-ai` and sudo permission for the managed WireGuard interface. The laptop must stay awake and online for inference. The dashboard remains available when the laptop is offline.
+
+## Verification and routine updates
+
+On Ubuntu:
+
+```bash
+./core-ai doctor
+./core-ai test-model
+```
+
+The generation check executes from inside the dashboard container. It uses the configured chat model and limits generated output. Use `--model MODEL_NAME` to test another installed model.
+
+| Command | Purpose |
 |---|---|
-| `./core-ai install` | Install missing infrastructure, configure, deploy and publish |
-| `./core-ai update` | Fast-forward source, back up state, pull the pinned image and redeploy |
-| `./core-ai configure` | Update local domain/provider configuration; preserve administrator credentials and secret |
-| `./core-ai deploy` | Apply existing local settings to the dashboard |
-| `./core-ai publish` | Validate and publish the Caddy route; restore prior files if validation/reload fails |
-| `./core-ai doctor` | Report dashboard and private model connection health |
-| `./core-ai logs` | Show recent dashboard logs |
-| `./core-ai backup` | Stop only this dashboard briefly, archive its state/settings, and resume it |
-| `./core-ai test-model --model MODEL_NAME` | Run bounded generation through the dashboard container against an installed model |
-| `./core-ai infra-update` | Explicitly upgrade installed Docker, Caddy and Tailscale apt packages |
+| `./core-ai update` | Fast-forward Git, back up current state, pull the pinned application image, redeploy |
+| `./core-ai migrate --endpoint VPS_HOST` | Back up and switch the previous stack to the open-source deployment |
+| `./core-ai configure` | Reapply local managed settings while preserving encryption secrets |
+| `./core-ai deploy` | Apply existing application configuration |
+| `./core-ai publish` | Validate authentication and safely publish the Caddy route |
+| `./core-ai doctor` | Report WireGuard handshake, app health and model connectivity |
+| `./core-ai logs` | Recent application logs |
+| `./core-ai backup` | Briefly stop only the application, archive state/settings, resume |
+| `./core-ai infra-update` | Explicit apt upgrades for installed Docker/Caddy/WireGuard packages |
 
-An infrastructure update can restart shared host services. It is separate from application updates and does not run a blanket OS upgrade. Installation preserves the VPS's active Tailscale account. For a new unauthenticated VPS, complete the sign-in link from `sudo tailscale up` once.
+Infrastructure upgrades can restart shared services, so they are separate from application updates and do not perform a blanket OS upgrade. Updates refuse a dirty source checkout and do not remove local changes.
 
-Updates refuse a dirty source checkout and do not reset local changes. Backups contain secrets and private data: keep them private. Before a database-migrating upgrade, retain its backup and prior image reference. Backup creation is implemented; automated restoration and a full restore drill remain part of the operations phase.
+## Later VPS inference migration
 
-Application configuration is managed by `.env`: `ENABLE_PERSISTENT_CONFIG=false` makes those settings authoritative. Admin settings changed only in the UI may revert at restart. Accounts, chats, documents and other database entities remain persistent. Changing the bootstrap password in `.env` does not reset an existing account password; use the application's password-change flow.
+First size RAM/VRAM/disk for the actual selected models and workload. Then install compatible Ollama on the VPS, retain a backup, transfer or re-pull the exact selected weights, and reconfigure the provider using `host.docker.internal` if Ollama runs on the Docker host. The host listener and firewall must allow only the required container network. The domain and dashboard data remain the same. Verify generation with the laptop disconnected before retiring the tunnel.
 
-## Architecture
+## Project assistance
 
-- Open WebUI provides the browser interface, authentication, conversations and document workspace.
-- Ollama serves existing local models on a separate computer initially.
-- Tailscale provides private connectivity between the dashboard host and model host.
-- Caddy provides the HTTPS reverse proxy on the dashboard host.
-- A later migration can relocate Ollama and its model files, then update the dashboard provider connection.
+Use curated project code and documentation as workspace knowledge. Exclude broker credentials, private environment files and unrelated data. AI assistance is optional for the trading platform: no generated response is connected directly to order execution. Initial project access is read-only.
 
-Keep model storage separate from dashboard state. Accounts, conversations, settings and uploaded documents need persistent storage on the dashboard host. Moving model files alone does not move inference: evaluate memory, GPU support, storage and performance on the destination first.
+## Validation scope
 
-This public repository contains reusable source and documentation only. Never commit credentials, private host inventories, access-policy exports, conversations, uploaded documents, model weights or backups.
-
-## Build phases
-
-| Phase | Scope | Completion criterion |
-|---|---|---|
-| 1. Foundation | Establish the repository and inspect existing software | Current setup recorded privately; existing installations preserved |
-| 2. Private connection | Establish device visibility and private access to Ollama | Dashboard host and eventual container can list models and complete a short generation |
-| 3. Dashboard | Deploy a pinned Open WebUI image, persistent state, authentication and HTTPS | Login and streaming chat work through the selected domain |
-| 4. Project knowledge | Import curated code and documentation; configure retrieval | Answers reference the correct project sources |
-| 5. Operations | Verify backups, restoration, updates and offline-provider behaviour | Recovery tested and maintenance procedures documented |
-| 6. Inference migration | Provision a compatible destination and transfer models | Accepted inference performance with the original model host disconnected |
-
-Authentication, a stable application secret, private bootstrap and persistent state are requirements for the first dashboard deployment. Backups must precede upgrades. The dashboard remains available when the model host is offline, but local inference cannot answer until its provider returns.
-
-## Repository workflow
-
-Implement and validate changes, push them to Git, then apply reviewed commands on the deployment host. A repository push is not evidence that the application is deployed. Keep host-specific configuration outside version control.
-
-Use `~/core-ai` as the checkout directory. If that directory already exists and is empty, it can be used directly as the destination of a clone. If it contains files, inspect them before cloning or initializing a repository; do not overwrite them blindly.
-
-After the initial clone, application updates use:
-
-```bash
-cd ~/core-ai
-./core-ai update
-```
-
-## Available checks
-
-Run the baseline inventory on Ubuntu:
-
-```bash
-bash scripts/check-ubuntu.sh
-```
-
-Run the private model connection check, replacing the argument with the model host's current Tailscale IPv4 address:
-
-```bash
-bash scripts/check-connection.sh LAPTOP_TAILSCALE_IP
-```
-
-Run the Windows inventory from a separate copy of this repository:
-
-```powershell
-powershell -NoProfile -File .\scripts\check-windows.ps1 -ProjectRoot 'YOUR_EXISTING_PROJECT_FOLDER'
-```
-
-The `check-*` scripts are read-only. They do not install services, change authentication or firewall settings, download models, or generate text. Inventory goes to the terminal; do not commit its output. Review personal device names and paths before sharing reports. Installation/setup commands are separate and do change the requested deployment.
-
-The connection check requires Python 3 and the Tailscale CLI. Exit 2 means a prerequisite failed. A successful model listing still requires a separate generation test and verification from the eventual dashboard container.
-
-## Private connection troubleshooting
-
-1. Run `tailscale status` and `tailscale switch --list` on both computers.
-2. Compare active tailnets and confirm both devices appear in the selected network's admin console.
-3. If a device is missing as a peer, review membership, device approval, key expiry and the scoped access policy. Different tailnets are one possible explanation; do not assume the cause from a timeout alone.
-4. Once peer visibility works, inspect the Ollama listener, private port access and host firewall.
-5. Verify model listing and generation from the deployment host and dashboard container.
-
-Do not log an existing server out of Tailscale or replace access policies without understanding its current dependencies. Do not expose the unauthenticated Ollama API on the public internet. Keep the existing model directory intact.
-
-## Deployment status
-
-The repository includes the installer, pinned Compose deployment, local configuration wizard, Caddy route management, backup/update commands and a Windows private-connection setup script. Live DNS ownership, identity-provider authorization and device approval remain external prerequisites. A source push is not proof of a successful host installation.
-
-Validation covers shell syntax, configuration/secret handling and Caddy rollback behaviour. A regression test reproduces duplicate-site failure from an individual site import plus a wildcard, then verifies the exact-file import fix with the real Caddy CLI. Existing wildcard imports are reused. GitHub Actions also validates Compose syntax. Live Ubuntu deployment, Windows execution, inference, TLS and a restore drill require verification on the actual machines.
-
-## References
-
-- https://docs.openwebui.com/getting-started/quick-start/
-- https://docs.openwebui.com/getting-started/quick-start/connect-a-provider/starting-with-ollama/
-- https://docs.ollama.com/faq
-- https://tailscale.com/docs/reference/troubleshooting/connectivity/connect-device-failure
+Tests cover private configuration, stable secrets, input validation, scoped WireGuard routes, preservation of an enrolled peer, authentication gating, failed-migration ordering and Caddy rollback. CI also checks PowerShell syntax, Compose syntax and real Caddy parsing. Live Ubuntu migration, Windows service setup, peer handshake, model generation, public TLS and restoration must still be verified on the actual machines. A successful Git push is not a successful host deployment.

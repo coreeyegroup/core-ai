@@ -14,7 +14,12 @@ jobs:
       - name: Deployment behavior
         run: python3 -m unittest discover -s tests -v
       - name: Compose validation
+        run: docker compose --env-file /dev/null config --quiet
+      - name: PowerShell syntax
+        shell: pwsh
         run: |
-          trap 'rm -f .env' EXIT
-          printf 'WEBUI_SECRET_KEY=ci-placeholder-not-a-real-secret\n' > .env
-          docker compose --env-file /dev/null config --quiet
+          Get-ChildItem -Path setup.ps1,scripts/*.ps1 | ForEach-Object {
+            $parseErrors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$null, [ref]$parseErrors) | Out-Null
+            if ($parseErrors) { throw ($parseErrors | Out-String) }
+          }

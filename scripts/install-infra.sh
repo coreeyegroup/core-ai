@@ -8,7 +8,7 @@ cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 sudo -v
 if [ "${1:-install}" = infra-update ]; then
   packages=()
-  for package in docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin caddy tailscale; do
+  for package in docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin caddy wireguard-tools; do
     if [ "$(dpkg-query -W -f='${db:Status-Status}' "$package" 2>/dev/null || true)" = installed ]; then
       packages+=("$package")
     fi
@@ -19,7 +19,7 @@ if [ "${1:-install}" = infra-update ]; then
   exit 0
 fi
 sudo apt-get update
-sudo apt-get install -y ca-certificates curl gnupg python3 git
+sudo apt-get install -y ca-certificates curl gnupg python3 git wireguard-tools
 download() { curl --fail --show-error --silent --location --connect-timeout 15 --max-time 120 "$1"; }
 if ! command -v docker >/dev/null 2>&1; then
   # Refuse to replace another container runtime or package family automatically.
@@ -39,17 +39,11 @@ fi
 if ! sudo docker compose version >/dev/null 2>&1; then
   sudo apt-get install -y docker-compose-plugin
 fi
-if ! command -v tailscale >/dev/null 2>&1; then
-  download "https://pkgs.tailscale.com/stable/ubuntu/${VERSION_CODENAME}.noarmor.gpg" | sudo tee /usr/share/keyrings/tailscale-archive-keyring.gpg >/dev/null
-  download "https://pkgs.tailscale.com/stable/ubuntu/${VERSION_CODENAME}.tailscale-keyring.list" | sudo tee /etc/apt/sources.list.d/tailscale.list >/dev/null
-  sudo apt-get update
-  sudo apt-get install -y tailscale
-fi
 if ! command -v caddy >/dev/null 2>&1; then
   download https://dl.cloudsmith.io/public/caddy/stable/gpg.key | sudo gpg --dearmor --yes -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
   download https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt | sudo tee /etc/apt/sources.list.d/caddy-stable.list >/dev/null
   sudo apt-get update
   sudo apt-get install -y caddy
 fi
-sudo systemctl enable --now docker tailscaled caddy
-printf 'Infrastructure ready. Existing package versions and Tailscale account were preserved.\n'
+sudo systemctl enable --now docker caddy
+printf 'Infrastructure ready: Docker Engine, Caddy and WireGuard.\n'

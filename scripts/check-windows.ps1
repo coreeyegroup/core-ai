@@ -31,8 +31,8 @@ foreach ($Scope in @('Process', 'User', 'Machine')) {
 Section 'Installed tools and model list'
 Show-Command 'ollama' @('--version')
 Show-Command 'ollama' @('list')
-Show-Command 'tailscale' @('version')
-Show-Command 'tailscale' @('ip', '-4')
+Show-Command 'wg' @('--version')
+Get-Service -Name 'WireGuardTunnel$coreai' -ErrorAction SilentlyContinue | Select-Object Name, Status
 Section 'GPU memory (if NVIDIA utility is installed)'
 Show-Command 'nvidia-smi' @('--query-gpu=name,memory.total', '--format=csv,noheader')
 Section 'Disk free space'
