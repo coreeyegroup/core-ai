@@ -383,6 +383,13 @@ def main():
             export=runtime/'wireguard-public.json'
             export.write_text(json.dumps(info)+'\n')
             export.chmod(0o644)
+        elif action=='set-login':
+            import login as credentials
+            password=getpass.getpass('New CORE-AI password (6+ characters): ')
+            if password!=getpass.getpass('Repeat password: '):
+                raise ValueError('Passwords did not match; no changes made.')
+            prepared=credentials.prepare(sys.argv[4],password)
+            backend_python(release,credentials.RESET_CODE,stdin=json.dumps(prepared))
         elif action=='backup':
             backup(source)
         elif action=='publish':

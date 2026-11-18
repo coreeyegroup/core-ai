@@ -34,3 +34,24 @@ def test_passwords_salted_and_endpoint_constraints():
 def test_seed_does_not_reset_existing_password():
     assert auth.seed('other','different-password-123') is False
     assert db.query('SELECT count(*) AS n FROM users',one=True)['n']==1
+
+
+def test_local_reset_preserves_identity_revokes_sessions_and_accepts_short_password(signed,work):
+    import importlib.util
+    import io
+    import json
+    import sys
+    from pathlib import Path
+    from unittest.mock import patch
+    path=Path(__file__).resolve().parents[2]/'scripts/login.py'
+    spec=importlib.util.spec_from_file_location('reset_credentials',path)
+    reset=importlib.util.module_from_spec(spec);spec.loader.exec_module(reset)
+    ident=db.query('SELECT id FROM users',one=True)['id']
+    payload=reset.prepare('renamed-admin','abc123')
+    with patch.object(sys,'stdin',io.StringIO(json.dumps(payload))):
+        exec(reset.RESET_CODE,{})
+    assert db.query('SELECT id,username FROM users',one=True)=={'id':ident,'username':'renamed-admin'}
+    assert signed.get('/api/v1/projects').status_code==401
+    token,new_session=auth.login('renamed-admin','abc123')
+    assert token and new_session['username']=='renamed-admin'
+    assert db.query('SELECT count(*) AS n FROM projects',one=True)['n']==1

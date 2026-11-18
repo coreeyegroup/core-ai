@@ -36,3 +36,11 @@ PY
 # Reinstall/update path must preserve the administrator, provider config and records.
 ./core-ai install --domain ai.example.invalid --endpoint 203.0.113.1 --model-host 127.0.0.1
 sudo -u postgres /usr/lib/postgresql/18/bin/psql -X -p 5434 -d core_ai -Atc "SELECT count(*) FROM projects WHERE name='Native smoke test'" | python -c "import sys; assert sys.stdin.read().strip()=='1'; print('Repeated install preserved project data')"
+# A local credential reset must work without rebuilding the installed application.
+printf 'abc123\nabc123\n' | ./core-ai set-login --username ci-renamed
+python - <<'PY'
+import json,urllib.request
+req=urllib.request.Request('http://127.0.0.1:18787/api/v1/session',data=json.dumps({'username':'ci-renamed','password':'abc123'}).encode(),headers={'Content-Type':'application/json','Origin':'https://ai.example.invalid'})
+assert json.load(urllib.request.urlopen(req))['username']=='ci-renamed'
+print('Local credential reset works against the installed API without rebuilding')
+PY

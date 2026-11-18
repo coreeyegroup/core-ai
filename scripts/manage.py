@@ -44,16 +44,22 @@ def legacy_backup():
 
 def main():
     parser=argparse.ArgumentParser(description='CORE-AI independent workstation')
-    parser.add_argument('command',nargs='?',default='help',choices=['help','doctor','status','test-model','logs','publish','backup','legacy-backup','peer-add'])
+    parser.add_argument('command',nargs='?',default='help',choices=['help','doctor','status','test-model','logs','publish','backup','legacy-backup','peer-add','set-login'])
     parser.add_argument('--public-key')
+    parser.add_argument('--username')
     args=parser.parse_args()
     if args.command=='help':
         print('CORE-AI: ./core-ai install [--domain HOST] [--model-host PRIVATE_IP] [--endpoint VPS_HOST]')
         print('         ./core-ai update | doctor | test-model | logs | publish | backup')
+        print('         ./core-ai set-login --username USER (prompts privately for the new password)')
         print('         ./core-ai peer-add --public-key KEY (called by the Windows installer)')
         return
     if args.command=='legacy-backup':
         legacy_backup()
+    elif args.command=='set-login':
+        if not args.username:
+            raise ValueError('Supply --username with the desired administrator username.')
+        run('sudo','python3',str(ROOT/'scripts/deploy-workstation.py'),'admin','set-login',str(ROOT),args.username)
     elif args.command=='logs':
         run('sudo','journalctl','-u','core-ai-api','-u','core-ai-worker','-n','120','--no-pager')
     elif args.command=='peer-add':

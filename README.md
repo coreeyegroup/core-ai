@@ -50,6 +50,16 @@ Other commands:
 
 A failed application/routing deployment restores the previous application release. Database migrations are forward-only and transactional; a failed deployment does not undo a successfully applied migration. This initial migration creates a new dedicated database rather than changing the previous dashboard database.
 
+## Set the administrator login
+
+After installing the custom workstation:
+
+```bash
+./core-ai set-login --username YOUR_USERNAME
+```
+
+Enter the desired password twice at the private prompts. This local sudo-authorized command renames the single administrator while preserving its identity and records, hashes the new password, clears lockout and revokes previous sessions. The explicit reset accepts 6–256 characters; fresh bootstrap retains its 12-character minimum. It does not store the password in Git, shell arguments or a configuration file. Pulling the updated scripts is sufficient; rebuilding the running application is not required for this command.
+
 ## Laptop setup
 
 The transport remains direct WireGuard. No hosted VPN control plane is used. Run the following from the Git checkout in **Administrator PowerShell**:
