@@ -1,0 +1,73 @@
+import {Component,useEffect,useState,type ReactNode} from 'react';
+import {api,setCsrf} from './api';
+import {views,defaults,restore,closeTab,key,type Layout,type View} from './layout';
+import {appearanceKey,defaultAppearance,restoreAppearance,type Appearance} from './appearance';
+import {MenuBar,CommandPalette,ResizeHandle,type Command} from './WorkbenchControls';
+import Icon from './WorkbenchIcon';
+import {Module,Inspector,Activity,ErrorNote} from './Modules';
+
+class Boundary extends Component<{children:ReactNode},{error:boolean}>{
+ state={error:false};static getDerivedStateFromError(){return {error:true};}
+ render(){return this.state.error?<div className="error">This panel could not render. <button onClick={()=>this.setState({error:false})}>Retry panel</button></div>:this.props.children;}
+}
+function safeGet(k:string){try{return localStorage.getItem(k);}catch{return null;}}
+const icons=[0,7,11,4,14,3,10,5,2,8,9];
+const labels=['Home','Projects','Agents','Tasks','Sources','Outputs','Models','Tools','Connect','Monitor','Settings'];
+const params=new URLSearchParams(location.search),detached=params.has('view');
+function initial(){const l=restore(safeGet(key));const v=params.get('view') as View;if(views.includes(v))return {...defaults(),groups:[[v]],active:[v],left:false,bottom:false};return l;}
+export default function App(){
+ const [layout,setLayout]=useState<Layout>(initial),[appearance,setAppearance]=useState<Appearance>(()=>restoreAppearance(safeGet(appearanceKey))),[pinned,setPinned]=useState<View[]>(()=>{try{const a=JSON.parse(safeGet('core-ai.pins.v1')||'[]');return Array.isArray(a)?views.filter(v=>a.includes(v)):[];}catch{return [];}});
+ const [session,setSession]=useState<{username:string;csrf:string}|null>(null),[checking,setChecking]=useState(true),[tick,setTick]=useState(0),[palette,setPalette]=useState(false),[error,setError]=useState(''),[health,setHealth]=useState<any>(null),[query,setQuery]=useState(''),[context,setContext]=useState<{v:View;g:number;x:number;y:number}|null>(null),[bottomTab,setBottomTab]=useState('Activity');
+ const active=layout.active[layout.focus];
+ const patch=(p:Partial<Layout>)=>setLayout(x=>({...x,...p}));
+ const appearancePatch=(p:Partial<Appearance>)=>setAppearance(x=>({...x,...p}));
+ const refresh=()=>setTick(t=>t+1);
+ useEffect(()=>{api('session').then(s=>{setCsrf(s.csrf);setSession(s);}).catch(()=>setSession(null)).finally(()=>setChecking(false));},[]);
+ useEffect(()=>{document.documentElement.dataset.theme=appearance.theme;document.documentElement.style.setProperty('--ui-size',appearance.fontSize+'px');try{localStorage.setItem(appearanceKey,JSON.stringify(appearance));if(!detached)localStorage.setItem(key,JSON.stringify(layout));localStorage.setItem('core-ai.pins.v1',JSON.stringify(pinned));}catch{setError('Browser preferences could not be saved.');}},[layout,appearance,pinned]);
+ useEffect(()=>{if(!session)return;let alive=true;api('overview').then(d=>{if(alive){setHealth(d);setError('');}}).catch(e=>{if(alive){setError(e.message);setHealth(null);if(e.status===401){setSession(null);setCsrf('');}}});return()=>{alive=false;};},[tick,session]);
+ useEffect(()=>{if(!session)return;const id=setInterval(()=>{if(document.visibilityState!=='hidden')refresh();},10000);return()=>clearInterval(id);},[session]);
+ function open(v:View,g=layout.focus){setLayout(x=>{const groups=x.groups.map(a=>[...a]),active=[...x.active];if(!groups[g])g=0;if(!groups[g].includes(v))groups[g].push(v);active[g]=v;return {...x,groups,active,focus:g};});setPalette(false);}
+ function go(v:View){const at=layout.groups.findIndex(g=>g.includes(v));open(v,at<0?layout.focus:at);}
+ function alone(v:View){patch({groups:[[v]],active:[v],focus:0,maximized:false});}
+ function split(axis:Layout['axis']='row'){setLayout(x=>x.groups.length>=4?{...x,axis}:{...x,axis,groups:[...x.groups,[x.active[x.focus]]],active:[...x.active,x.active[x.focus]],focus:x.groups.length,maximized:false});}
+ function detach(v:View){window.open('?view='+encodeURIComponent(v),'_blank','noopener,noreferrer');}
+ function pin(v:View){setPinned(x=>x.includes(v)?x.filter(y=>y!==v):[...x,v]);}
+ function close(v:View,g:number){if(!pinned.includes(v))setLayout(x=>closeTab(x,v,g));}
+ function workspace(w:Layout['workspace']){try{localStorage.setItem(key+'.'+layout.workspace,JSON.stringify(layout));}catch{setError('Workspace could not be saved.');}const saved=safeGet(key+'.'+w);setLayout({...restore(saved),workspace:w});}
+ const commands:Command[]=[
+  ...views.map(v=>({section:'Go to',label:v,run:()=>go(v)})),
+  ...(['Build','Research','Operations'] as const).map(w=>({section:'Workspace',label:w+' workspace',run:()=>workspace(w)})),
+  {section:'Workspace',label:'Open all panels',run:()=>patch({groups:[[...views]],active:['Overview'],focus:0,maximized:false})},
+  {section:'Workspace',label:'Close all unpinned panels',run:()=>{const tabs=pinned.length?[...pinned]:['Overview' as View];patch({groups:[tabs],active:[tabs[0]],focus:0,maximized:false});}},
+  {section:'Workspace',label:'Open active panel alone',run:()=>alone(active)},
+  {section:'Workspace',label:'Detach active panel',run:()=>detach(active)},
+  {section:'View',label:'Toggle explorer',shortcut:'Ctrl B',run:()=>patch({left:!layout.left})},
+  {section:'View',label:'Toggle inspector',run:()=>patch({right:!layout.right})},
+  {section:'View',label:'Toggle activity panel',shortcut:'Ctrl J',run:()=>patch({bottom:!layout.bottom})},
+  {section:'View',label:'Refresh live data',run:refresh},
+  {section:'Layout',label:'Split right',shortcut:'Ctrl \\',run:()=>split('row')},
+  {section:'Layout',label:'Split down',run:()=>split('column')},
+  {section:'Layout',label:'Toggle maximize active group',run:()=>patch({maximized:!layout.maximized})},
+  {section:'Layout',label:'Reset workspace layout',run:()=>setLayout(defaults())},
+  {section:'Appearance',label:'Appearance settings',run:()=>go('Settings')},
+  {section:'Navigate',label:'Command palette',shortcut:'Ctrl K',run:()=>setPalette(true)},
+  {section:'Help',label:'Workspace controls and runtime boundary',run:()=>go('Overview')}
+ ];
+ useEffect(()=>{const on=(e:KeyboardEvent)=>{const mod=e.ctrlKey||e.metaKey;if(e.key==='Escape'){setPalette(false);setContext(null);}if(mod&&e.key.toLowerCase()==='k'){e.preventDefault();setPalette(x=>!x);return;}if((e.target as Element)?.closest('input,textarea,select,[contenteditable]'))return;if(mod&&e.key.toLowerCase()==='b'){e.preventDefault();patch({left:!layout.left});}if(mod&&e.key.toLowerCase()==='j'){e.preventDefault();patch({bottom:!layout.bottom});}if(mod&&e.key==='\\'){e.preventDefault();split();}if(mod&&['1','2','3','4'].includes(e.key)){e.preventDefault();const focus=+e.key-1;if(focus<layout.groups.length)patch({focus});}};window.addEventListener('keydown',on);return()=>window.removeEventListener('keydown',on);},[layout]);
+ if(checking)return <div className="login"><h1>CORE-AI</h1><p>Checking workstation session…</p></div>;
+ if(!session)return <Login done={s=>{setCsrf(s.csrf);setSession(s);refresh();}}/>;
+ const worker=health?.worker?.online;
+ return <div className={'app density-'+appearance.density.toLowerCase()+(appearance.wrapTabs?' wrap-tabs':'')}>
+  <header className="top"><div className="brand"><b>◈</b> CORE-AI <span>WORKSTATION</span></div><MenuBar commands={commands}/><button className="command" onClick={()=>setPalette(true)}>Go to panel or command… <kbd>Ctrl K</kbd></button><div className="status-chips"><button className={'chip '+(health?'ok':'bad')} onClick={()=>go('Operations')}><i className="chip-dot"/>API</button><button className={'chip '+(worker?'ok':'warn')} onClick={()=>go('Operations')}><i className="chip-dot"/>{worker?'Worker online':'Worker unavailable'}</button></div><span className="top-user">{session.username}</span><button className="signout" onClick={async()=>{try{await api('session','DELETE');setSession(null);setCsrf('');setHealth(null);}catch(e){setError((e as Error).message);}}}>Sign out</button></header>
+  <ErrorNote error={error}/><div className="shell">{appearance.activity&&<nav className="activity" aria-label="Product modules">{views.map((v,i)=><button key={v} aria-current={active===v?'page':undefined} title={v} onClick={()=>go(v)}><Icon index={icons[i]}/><small>{labels[i]}</small></button>)}</nav>}
+  {layout.left&&!layout.maximized&&<><aside className="explorer" style={{width:layout.leftWidth}}><div className="panel-heading">EXPLORER<button aria-label="Hide explorer" onClick={()=>patch({left:false})}>×</button></div><div className="workspace-picker"><select aria-label="Workspace" value={layout.workspace} onChange={e=>workspace(e.target.value as Layout['workspace'])}><option>Build</option><option>Research</option><option>Operations</option></select></div><input aria-label="Filter panels" placeholder="Filter panels…" value={query} onChange={e=>setQuery(e.target.value)}/><div className="tree-project">CORE-AI / {layout.workspace.toUpperCase()}</div><nav className="tree">{views.filter(v=>v.toLowerCase().includes(query.toLowerCase())).map((v,i)=><button className={active===v?'selected':''} key={v} onClick={()=>go(v)}><span>{v}</span><small>{pinned.includes(v)?'◆':layout.groups.some(g=>g.includes(v))?'●':''}</small></button>)}</nav><div className="explorer-tools"><button onClick={()=>commands.find(c=>c.label==='Open all panels')?.run()}>Open all</button><button onClick={()=>alone(active)}>Open alone</button></div><div className="explorer-note"><b>INDEPENDENT BY DESIGN</b><p>Own runtime, own data.<br/>Optional product interfaces.</p></div></aside><ResizeHandle label="Explorer width" value={layout.leftWidth} min={160} max={380} change={leftWidth=>patch({leftWidth})}/></>}
+  <main><div className="workspace-toolbar"><span>{layout.workspace} <span className="muted">/ {active}</span></span><div><button title="Toggle explorer" onClick={()=>patch({left:!layout.left})}>Explorer</button><button onClick={()=>split()}>Split</button><button onClick={()=>patch({right:!layout.right})}>Inspector</button><button onClick={()=>patch({bottom:!layout.bottom})}>Activity</button><button onClick={refresh}>Refresh</button></div></div><div className="groups" style={{flexDirection:layout.axis}}>{layout.groups.map((group,g)=>layout.maximized&&g!==layout.focus?null:<section className={'group '+(g===layout.focus?'focused':'')} key={g} onPointerDown={()=>{if(g!==layout.focus)patch({focus:g});}}><div className="tabs" role="tablist" aria-label={'Group '+(g+1)}>{group.map(v=><div className={'tab '+(layout.active[g]===v?'active':'')} key={v} onContextMenu={e=>{e.preventDefault();setContext({v,g,x:Math.min(e.clientX,window.innerWidth-245),y:Math.min(e.clientY,window.innerHeight-255)});}}><button role="tab" id={'tab-'+g+'-'+v} aria-controls={'panel-'+g+'-'+v} aria-selected={layout.active[g]===v} onClick={()=>open(v,g)}>{pinned.includes(v)?'◆ ':''}{v}</button><button aria-label={(pinned.includes(v)?'Unpin ':'Close ')+v} onClick={()=>pinned.includes(v)?pin(v):close(v,g)}>{pinned.includes(v)?'◆':'×'}</button></div>)}<div className="tab-tools"><button aria-label="Maximize group" onClick={()=>patch({focus:g,maximized:!layout.maximized})}>□</button><button aria-label="Detach active panel" onClick={()=>detach(layout.active[g])}>↗</button></div></div>{group.map(v=><div className="view" id={'panel-'+g+'-'+v} role="tabpanel" aria-labelledby={'tab-'+g+'-'+v} hidden={v!==layout.active[g]} key={v}><Boundary><Module view={v} tick={tick} refresh={refresh} go={go} appearance={appearance} changeAppearance={appearancePatch}/></Boundary></div>)}</section>)}</div>{layout.bottom&&!layout.maximized&&<><ResizeHandle label="Activity height" value={layout.bottomHeight} min={100} max={400} horizontal reverse change={bottomHeight=>patch({bottomHeight})}/><section className="bottom" style={{height:layout.bottomHeight}}><div className="bottom-tabs">{['Activity','Runtime'].map(t=><button key={t} className={bottomTab===t?'active':''} onClick={()=>setBottomTab(t)}>{t}</button>)}<button className="push" aria-label="Close activity" onClick={()=>patch({bottom:false})}>×</button></div>{bottomTab==='Activity'?<Activity tick={tick}/>:<div className="runtime-log"><p>API: {health?'Connected':'Unavailable'} · Worker: {worker?'Online':'Unavailable'}</p><p>Model endpoint: {health?.inference.endpoint??'—'} · Default: {health?.inference.model??'—'}</p><p>Independent services: core-ai-api / core-ai-worker. Server diagnostics: ./core-ai doctor</p></div>}</section></>}</main>
+  {layout.right&&!layout.maximized&&<><ResizeHandle label="Inspector width" value={layout.rightWidth} min={200} max={440} reverse change={rightWidth=>patch({rightWidth})}/><aside className="inspector" style={{width:layout.rightWidth}}><Inspector view={active} tick={tick}/></aside></>}</div>
+  {appearance.status&&<footer><span>◈ CORE-AI</span><span>{layout.workspace}</span><span>{health?'Database connected':'Connection unavailable'}</span><span>{worker?'1 inference slot':'Worker offline'}</span><span className="push">{health?.release??'—'} · Independent operation</span><button onClick={()=>go('Settings')}>{appearance.theme}</button></footer>}
+  {palette&&<CommandPalette commands={commands} dismiss={()=>setPalette(false)}/>}{context&&<div className="context-overlay" onPointerDown={()=>setContext(null)}><div className="tab-context" style={{left:context.x,top:context.y}} onPointerDown={e=>e.stopPropagation()}>{[[pinned.includes(context.v)?'Unpin':'Pin',()=>pin(context.v)],['Open alone',()=>alone(context.v)],['Open in new window',()=>detach(context.v)],['Close',()=>close(context.v,context.g)]].map(([label,run])=><button key={label as string} onClick={()=>{(run as ()=>void)();setContext(null);}}>{label as string}</button>)}</div></div>}
+ </div>;
+}
+function Login({done}:{done:(s:{username:string;csrf:string})=>void}){
+ const [error,setError]=useState(''),[busy,setBusy]=useState(false);
+ return <main className="login"><form onSubmit={async e=>{e.preventDefault();const f=new FormData(e.currentTarget);setBusy(true);try{done(await api('session','POST',Object.fromEntries(f)));}catch(e){setError((e as Error).message);}finally{setBusy(false);}}}><div className="eyebrow">CORE EYE / INDEPENDENT AI PLATFORM</div><h1>CORE-AI</h1><p>Sign in to your workstation.</p><ErrorNote error={error}/><label>Username<input name="username" autoComplete="username" required maxLength={64}/></label><label>Password<input name="password" type="password" autoComplete="current-password" required maxLength={256}/></label><button className="primary" disabled={busy}>{busy?'Signing in…':'Sign in'}</button><small>Accounts are managed by your CORE-AI administrator.</small></form></main>;
+}

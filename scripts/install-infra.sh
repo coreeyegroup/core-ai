@@ -1,49 +1,40 @@
 #!/usr/bin/env bash
-# Install missing prerequisites. Upgrade shared infrastructure only explicitly.
+# Isolated project runtimes. Existing services and system Python/Node are preserved.
 set -euo pipefail
-cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
-[ "$(id -u)" -ne 0 ] || { printf 'Run as your normal deployment user; sudo is requested where needed.\n' >&2; exit 2; }
+cd "$(dirname "$0")/.."
+if [[ $EUID == 0 ]]; then echo 'Run as your normal Ubuntu user; sudo is requested where required.' >&2; exit 1; fi
 . /etc/os-release
-[ "$ID" = ubuntu ] || { printf 'This installer supports Ubuntu only.\n' >&2; exit 2; }
+[[ "$ID" == ubuntu && "$VERSION_ID" == 22.04 || "$ID" == ubuntu && "$VERSION_ID" == 24.04 ]] || { echo 'Ubuntu 22.04 or 24.04 is required.' >&2; exit 1; }
+[[ $(uname -m) == x86_64 ]] || { echo 'This release supports Ubuntu x86_64.' >&2; exit 1; }
 sudo -v
-if [ "${1:-install}" = infra-update ]; then
-  packages=()
-  for package in docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin caddy wireguard-tools; do
-    if [ "$(dpkg-query -W -f='${db:Status-Status}' "$package" 2>/dev/null || true)" = installed ]; then
-      packages+=("$package")
-    fi
-  done
-  [ "${#packages[@]}" -gt 0 ] || { printf 'No managed infrastructure packages found.\n'; exit 2; }
-  sudo apt-get update
-  sudo apt-get install -y --only-upgrade "${packages[@]}"
-  exit 0
-fi
 sudo apt-get update
-sudo apt-get install -y ca-certificates curl gnupg python3 git wireguard-tools
-download() { curl --fail --show-error --silent --location --connect-timeout 15 --max-time 120 "$1"; }
-if ! command -v docker >/dev/null 2>&1; then
-  # Refuse to replace another container runtime or package family automatically.
-  for package in docker.io podman-docker containerd runc; do
-    if [ "$(dpkg-query -W -f='${db:Status-Status}' "$package" 2>/dev/null || true)" = installed ]; then
-      printf 'Existing %s needs a deliberate Docker migration; nothing was removed.\n' "$package" >&2
-      exit 2
-    fi
-  done
-  sudo install -m 0755 -d /etc/apt/keyrings
-  download https://download.docker.com/linux/ubuntu/gpg | sudo tee /etc/apt/keyrings/docker.asc >/dev/null
-  sudo chmod a+r /etc/apt/keyrings/docker.asc
-  printf 'deb [arch=%s signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu %s stable\n' "$(dpkg --print-architecture)" "$VERSION_CODENAME" | sudo tee /etc/apt/sources.list.d/docker.list >/dev/null
-  sudo apt-get update
-  sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
-fi
-if ! sudo docker compose version >/dev/null 2>&1; then
-  sudo apt-get install -y docker-compose-plugin
-fi
-if ! command -v caddy >/dev/null 2>&1; then
-  download https://dl.cloudsmith.io/public/caddy/stable/gpg.key | sudo gpg --dearmor --yes -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
-  download https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt | sudo tee /etc/apt/sources.list.d/caddy-stable.list >/dev/null
+sudo apt-get install -y ca-certificates curl git gnupg xz-utils wireguard-tools
+if ! command -v caddy >/dev/null; then
+  curl --fail --silent --show-error --location https://dl.cloudsmith.io/public/caddy/stable/gpg.key | sudo gpg --dearmor --yes -o /usr/share/keyrings/core-ai-caddy.gpg
+  printf '%s\n' 'deb [signed-by=/usr/share/keyrings/core-ai-caddy.gpg] https://dl.cloudsmith.io/public/caddy/stable/deb/debian any-version main' | sudo tee /etc/apt/sources.list.d/core-ai-caddy.list >/dev/null
   sudo apt-get update
   sudo apt-get install -y caddy
 fi
-sudo systemctl enable --now docker caddy
-printf 'Infrastructure ready: Docker Engine, Caddy and WireGuard.\n'
+if [[ ! -x /usr/lib/postgresql/18/bin/postgres ]]; then
+  if ! apt-cache show postgresql-18 >/dev/null 2>&1; then
+    curl --fail --silent --show-error --location https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo gpg --dearmor --yes -o /usr/share/keyrings/core-ai-postgresql.gpg
+    printf 'deb [signed-by=/usr/share/keyrings/core-ai-postgresql.gpg] https://apt.postgresql.org/pub/repos/apt %s-pgdg main\n' "$VERSION_CODENAME" | sudo tee /etc/apt/sources.list.d/core-ai-postgresql.list >/dev/null
+    sudo apt-get update
+  fi
+  sudo apt-get install -y postgresql-18 postgresql-client-18
+fi
+TASK_NODE=/opt/core-ai/toolchain/node-v26.13.0
+if [[ ! -x "$TASK_NODE/bin/node" ]]; then
+  [[ ! -e "$TASK_NODE" ]] || { echo 'Incomplete Node toolchain; inspect it before retrying.' >&2; exit 1; }
+  TASK_BUILD=$(mktemp -d /tmp/core-ai-node.XXXXXXXX)
+  curl --fail --show-error --location --retry 3 --proto '=https' --tlsv1.2 -o "$TASK_BUILD/node.tar.xz" https://nodejs.org/dist/v26.13.0/node-v26.13.0-linux-x64.tar.xz
+  (cd "$TASK_BUILD" && printf '%s\n' 'd28a96af6c38596f6d9d97c0ee531c13d238d757742387d1928de822d959e997  node.tar.xz' | sha256sum --check -)
+  tar -xJf "$TASK_BUILD/node.tar.xz" -C "$TASK_BUILD"
+  sudo install -d -m 0755 /opt/core-ai/toolchain
+  sudo mv "$TASK_BUILD/node-v26.13.0-linux-x64" "$TASK_NODE"
+  sudo chown -R root:root "$TASK_NODE"
+fi
+[[ $("$TASK_NODE/bin/node" --version) == v26.13.0 ]] || { echo 'Unexpected Node runtime.' >&2; exit 1; }
+bash scripts/repair-python.sh
+sudo systemctl enable --now caddy
+printf '%s\n' 'Infrastructure ready: isolated Node 26.13.0 / Python 3.14.10, PostgreSQL 18, Caddy, WireGuard.' 'Existing application services and package versions were preserved.'

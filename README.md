@@ -1,118 +1,143 @@
-# CORE-AI
+# CORE-AI Workstation
 
-A Git-managed self-hosted AI workspace: **AnythingLLM + existing Ollama + direct WireGuard + Caddy + Docker Engine**.
+An independent, self-hosted AI product with a custom workbench, API and durable task worker. CORE-AI operates without COREI-OS-MINI, Core Aura or any other product. Future connections are optional versioned interfaces; each product keeps its own accounts, data, services, releases and recovery.
 
-The application and private connection use open-source components. There is no hosted VPN coordination service, VPN account, or required cloud AI provider. Package registries, Git hosting and normal public certificate issuance are distribution/TLS services, not model-inference services. The existing Windows operating system and hardware drivers are outside this application's open-source component claim.
+## Install on Ubuntu
 
-## Why this stack
-
-AnythingLLM is MIT licensed and runs in one application container with SQLite and embedded LanceDB. This avoids both Open WebUI's current branding-restricted license and adding a MongoDB dependency through a different dashboard. Ollama remains the existing model runtime. See [component licenses](docs/licenses.md).
-
-Model files have their own licenses: an MIT-licensed runtime does not change the licenses of downloaded weights. Review each model separately. These scripts do not download or replace model weights.
-
-## Initial deployment
-
-| Component | Location | Persistence |
-|---|---|---|
-| Dashboard / accounts / documents / retrieval | Ubuntu VPS | `data-anythingllm/` and `runtime/anythingllm.env` |
-| Model inference and existing weights | Windows laptop | Existing Ollama installation and model directory |
-| Private network | Direct WireGuard between the two devices | Device-local private keys; public-key exchange over SSH |
-| HTTPS | Existing VPS Caddy service | Managed site file plus backups of changed configuration |
-
-The default private addresses are `10.203.0.1` (VPS) and `10.203.0.2` (laptop); confirm this range does not overlap another private network. Only the opposite peer's `/32` route is configured. Neither device sends general internet traffic through the tunnel. The laptop initiates to VPS UDP 51820 and uses a 25-second keepalive behind NAT. Allow UDP 51820 in any provider firewall. If UFW is already active, the installer adds only that UDP rule; it does not enable or reset UFW. DNS/HTTPS still require the selected hostname to point to the VPS and inbound 80/443.
-
-## Migrate the earlier deployment
-
-From the existing `~/core-ai` checkout:
+Ubuntu 22.04/24.04 x86_64. Run as a normal user with sudo from the repository checkout:
 
 ```bash
 git pull --ff-only origin main
-./core-ai migrate --endpoint YOUR_VPS_PUBLIC_IPV4_OR_DNS
+./core-ai install --domain ai.example.com --endpoint VPS_PUBLIC_IP
 ```
 
-The migration reads the previous local domain and administrator credentials, backs up the previous data/settings and container metadata privately, prepares the WireGuard server, starts AnythingLLM on **localhost:3101**, creates/verifies the administrator in multi-user mode, rejects anonymous workspace access, and changes the Caddy upstream only after those checks pass. It then stops the old dashboard container. Existing Caddy sites are preserved, and only the exact CORE-AI site import is added when necessary.
+The installer asks for missing configuration. It reuses the previous locally configured domain, private model host and administrator credentials when migrating. On a fresh installation it asks for the administrator username and password. Passwords and keys do not belong in Git.
 
-The old `data/`, `.env`, backup and stopped container are retained. Conversations/documents are **not automatically converted** into the new application's database. Backups include secrets: do not upload or commit them. If deployment or publication fails, the old dashboard remains available at its prior local port; Caddy validation/reload failure restores prior Caddy files.
+The complete infrastructure/build/deploy sequence is in this repository:
 
-There is no automated chat conversion or full application rollback command yet. Do not delete the retained data or old container. The Caddy transaction and migration ordering are tested; a real restore drill remains an operations-phase acceptance item.
+1. Archive previous dashboard configuration/data consistently, briefly stopping only the old CORE-AI containers and restarting them afterward.
+2. Install missing Caddy, PostgreSQL 18 and WireGuard packages from their official repositories. Preserve existing system Python, Node and other applications.
+3. Install checksum-verified project Node 26.13.0 and Python 3.14.10 under `/opt/core-ai/toolchain`. Python is compiled with two jobs if absent; the first installation can take time.
+4. Build React/TypeScript with `npm ci`; build an independent Python environment in a new release directory.
+5. Create only PostgreSQL `18/core_ai` at loopback port **5434**, database `core_ai`, restricted role `core_ai_app`. Other PostgreSQL clusters/databases are not modified. Refuse an occupied port or unexpected cluster identity.
+6. Apply checksummed migrations. Seed the first administrator only; subsequent installs do not reset passwords.
+7. Install unprivileged `core-ai-api` and `core-ai-worker` systemd services; API binds **127.0.0.1:18787**.
+8. Verify backend identity, database connectivity, anonymous-access rejection and worker heartbeat.
+9. Switch immutable UI/API release pointers and validate/reload only the managed CORE-AI Caddy route. On failure restore the prior route, pointers and service units.
+10. Stop superseded CORE-AI dashboard containers after successful cutover. Keep their data and archives for review.
 
-The new stack never invokes the old hosted VPN software. Existing global VPN software is not silently uninstalled because other host services may use it. Remove obsolete software separately after the replacement is verified.
+DNS must point the configured domain to the VPS and inbound TCP 80/443 must be permitted. The installer validates local routing; `doctor` additionally checks public HTTPS. Existing WireGuard enrollment/keys are preserved; UDP 51820 is needed for laptop inference.
 
-## Fresh Ubuntu installation
-
-Clone this repository to `~/core-ai`, then run as the normal deployment user:
+## Update and operate
 
 ```bash
-./core-ai install --domain ai.example.com --endpoint YOUR_VPS_PUBLIC_IPV4_OR_DNS
-```
-
-Enter the administrator username and password when prompted. Missing prerequisites are installed from official apt repositories. Existing Docker Engine and Caddy installations are reused. No Kubernetes, extra database server, hosted AI gateway or cloud VPN account is required.
-
-State layout:
-
-- `config.env`: private deployment settings and bootstrap credentials, mode 0600, ignored by Git.
-- `runtime/anythingllm.env`: persistent application dotenv file, owned by container UID 1000; includes stable JWT/encryption secrets and provider settings.
-- `data-anythingllm/`: database, documents, keys and retrieval data; separate from legacy data.
-- `/etc/wireguard/coreai.conf`: VPS-private tunnel key and enrolled laptop public key, root mode 0600.
-- `backups/`: private, consistent application backups.
-
-Provider settings changed in the application UI persist in its mounted dotenv file. An explicit `configure` command reapplies managed provider defaults; ordinary `update` does not reset them. Existing account passwords must be changed through the application's account flow, not by editing bootstrap credentials.
-
-## Windows setup
-
-In **PowerShell as Administrator**, from a separate checkout of this repository:
-
-```powershell
-git pull --ff-only origin main
-powershell -ExecutionPolicy Bypass -File .\setup.ps1
-```
-
-Enter the VPS public address and SSH username. The script:
-
-1. Installs WireGuard via winget if missing and enables the Windows OpenSSH client if needed.
-2. Verifies that existing Ollama answers on localhost and has models.
-3. Generates/reuses a private laptop key under the protected `%ProgramData%\CORE-AI\wireguard` directory.
-4. Enrolls **only its public key** over an interactive SSH session into the VPS checkout; SSH host-key checks remain enabled. The server authenticates sudo before enrollment, with prompts and errors visible in the terminal. A second non-sudo SSH session reads `runtime/wireguard-public.json`, containing public routing information only. Password-based SSH may request the login password a second time; no password is stored in the script.
-5. Installs a persistent WireGuard tunnel service, preserving the key on reruns.
-6. Adds an interface-bound TCP proxy from the laptop WireGuard address to localhost Ollama, with a Windows firewall allow rule scoped to the VPS peer address.
-
-The script does not expose a public model endpoint, change Ollama's model path, route unrelated traffic, or request a VPN vendor login. If Ollama already has a wildcard listener, it stops before making a proxy and asks for that listener to be corrected. A default localhost Ollama installation needs no listener change. If a different laptop is already enrolled, the VPS refuses to overwrite its public key automatically.
-
-The SSH account must have access to `~/core-ai` and sudo permission for the managed WireGuard interface. The laptop must stay awake and online for inference. The dashboard remains available when the laptop is offline.
-
-## Verification and routine updates
-
-On Ubuntu:
-
-```bash
+cd ~/core-ai
+./core-ai update
 ./core-ai doctor
 ./core-ai test-model
 ```
 
-The generation check executes from inside the dashboard container. It uses the configured chat model and limits generated output. Use `--model MODEL_NAME` to test another installed model.
+Other commands:
 
-| Command | Purpose |
-|---|---|
-| `./core-ai update` | Fast-forward Git, back up current state, pull the pinned application image, redeploy |
-| `./core-ai migrate --endpoint VPS_HOST` | Back up and switch the previous stack to the open-source deployment |
-| `./core-ai configure` | Reapply local managed settings while preserving encryption secrets |
-| `./core-ai deploy` | Apply existing application configuration |
-| `./core-ai publish` | Validate authentication and safely publish the Caddy route |
-| `./core-ai doctor` | Report WireGuard handshake, app health and model connectivity |
-| `./core-ai logs` | Recent application logs |
-| `./core-ai backup` | Briefly stop only the application, archive state/settings, resume |
-| `./core-ai infra-update` | Explicit apt upgrades for installed Docker/Caddy/WireGuard packages |
+```bash
+./core-ai logs
+./core-ai backup
+./core-ai publish
+./core-ai infra-update
+```
 
-Infrastructure upgrades can restart shared services, so they are separate from application updates and do not perform a blanket OS upgrade. Updates refuse a dirty source checkout and do not remove local changes.
+`update` refuses changed/untracked source, pulls main with fast-forward only, builds a new release, backs up the current PostgreSQL database and environment, and deploys. `infra-update` ensures the declared infrastructure exists; it does not perform a blanket Ubuntu/package upgrade. Backups contain private data/secrets and stay outside Git in root-only `backups/`.
 
-## Later VPS inference migration
+A failed application/routing deployment restores the previous application release. Database migrations are forward-only and transactional; a failed deployment does not undo a successfully applied migration. This initial migration creates a new dedicated database rather than changing the previous dashboard database.
 
-First size RAM/VRAM/disk for the actual selected models and workload. Then install compatible Ollama on the VPS, retain a backup, transfer or re-pull the exact selected weights, and reconfigure the provider using `host.docker.internal` if Ollama runs on the Docker host. The host listener and firewall must allow only the required container network. The domain and dashboard data remain the same. Verify generation with the laptop disconnected before retiring the tunnel.
+## Laptop setup
 
-## Project assistance
+The transport remains direct WireGuard. No hosted VPN control plane is used. Run the following from the Git checkout in **Administrator PowerShell**:
 
-Use curated project code and documentation as workspace knowledge. Exclude broker credentials, private environment files and unrelated data. AI assistance is optional for the trading platform: no generated response is connected directly to order execution. Initial project access is read-only.
+```powershell
+git pull --ff-only origin main
+powershell -ExecutionPolicy Bypass -File .\setup.ps1 -VpsHost YOUR_VPS_HOST -VpsUser YOUR_UBUNTU_USER
+```
 
-## Validation scope
+The Windows installer installs missing WireGuard/OpenSSH, generates/preserves the laptop private key locally, enrolls only its public key through SSH, installs the project tunnel and exposes Ollama only to the VPS tunnel address through a restricted forwarding rule. The model process continues listening on Windows loopback. No models are downloaded or moved by this setup.
 
-Tests cover private configuration, stable secrets, input validation, scoped WireGuard routes, preservation of an enrolled peer, authentication gating, failed-migration ordering and Caddy rollback. CI also checks PowerShell syntax, Compose syntax and real Caddy parsing. Live Ubuntu migration, Windows service setup, peer handshake, model generation, public TLS and restoration must still be verified on the actual machines. A successful Git push is not a successful host deployment.
+## Custom application capabilities
+
+| Workbench panel | Implemented operation |
+| --- | --- |
+| Overview | Database-backed project/agent/document/task counts and worker heartbeat |
+| Projects | Create and list separate project contexts |
+| Agents | Create, edit, disable and version agent instructions; tasks snapshot instructions/version |
+| Tasks | Submit, list, inspect, cancel; durable queue, one inference slot, interrupted-lease detection |
+| Knowledge | Save/import text or Markdown under a project, list/delete documents; project-scoped full-text retrieval |
+| Artifacts | Inspect/download persisted completed task outputs |
+| Models | List the real Ollama model inventory; configure private endpoint/default model |
+| Tools | Inspect enabled backend capabilities and their limitations |
+| Integrations | Inspect independent-product connection policy and actual connected count (zero initially) |
+| Operations | Persisted audit/tool lifecycle events |
+| Settings | Themes, text size, density, rail/status visibility and tab wrapping |
+
+The shell follows COREI-OS-MINI's workbench patterns: grouped navigation, explorer, tab groups, up to four splits, inspector, activity/runtime panel, keyboard command palette, pin/close/open-alone/detach controls, saved workspace layouts, themes and narrow-screen behavior. The application operations, database and service identity are CORE-AI's own.
+
+This release implements a **fixed retrieval → local inference workflow**, using a versioned agent's instructions. It is the custom foundation for an agent platform. Model-directed tool loops, coding sandboxes, external product actions, scheduled workflows, semantic embeddings, multi-user role administration and SSO are **not implemented** and are not presented as working controls. Existing documents/chat histories from third-party dashboards are archived, not automatically converted.
+
+The local model list is discovery, not a capability certification. Do not use embedding models for generation. Model failures are recorded, not replaced with fabricated results. Output is displayed as text, not executable HTML.
+
+## Security and independence
+
+- Product-specific opaque, revocable, eight-hour sessions; scrypt password hashes, same-origin checks and CSRF tokens on mutations; login lockout after repeated failures.
+- This release has a single administrator access tier. All signed-in administrators can access all CORE-AI projects; projects are organizational contexts, not tenant security boundaries. No user invitation API is exposed.
+- No product-table sharing, broker credentials, host shell tool, Docker socket, root application process or mandatory cloud inference.
+- Tool dispatch is fixed in backend code, not decided by instructions inside uploaded documents. Only project retrieval and bounded model generation are enabled.
+- The model endpoint accepts explicit private/loopback IPv4 addresses only; redirects and inherited proxy variables are disabled.
+- Interrupted worker leases become visible failed/cancelled tasks. A model answer arriving after a cancellation cannot publish a successful output. Submit a new task deliberately to retry.
+- Server secrets are root-only in `/etc/core-ai/workstation.env`. Application data is in its dedicated PostgreSQL cluster. systemd passes configuration to the unprivileged service account.
+- Logs/audit are local. There is no application telemetry or third-party dashboard runtime.
+
+## Repository and runtime structure
+
+```text
+ui/                         React + TypeScript + Vite workstation
+backend/src/core_ai/        FastAPI, sessions, PostgreSQL, model adapter, worker
+backend/sql/                Checksummed transactional migrations
+backend/tests/              PostgreSQL-backed API/runtime/security integration tests
+scripts/                    Infrastructure, immutable releases, routing, administration
+scripts/setup-windows.ps1   Private model transport enrollment
+scripts/network.py          Direct WireGuard utility
+setup.ps1                   Short Windows launcher
+core-ai                     Stable Ubuntu command entry point
+deploy/                     Caddy template
+tests/                      Deployment/transport checks
+```
+
+Runtime paths:
+
+```text
+/opt/core-ai/toolchain/       Independent Node and Python
+/opt/core-ai/releases/        Built releases, each with its own Python environment
+/opt/core-ai/current          Active application release pointer
+/var/www/core-ai-workstation/current   Active UI release pointer
+/etc/core-ai/workstation.env Root-only application environment
+/var/lib/postgresql/18/core_ai         Dedicated database cluster
+/var/lib/core-ai/             Reserved private application storage
+/etc/caddy/sites/core-ai.caddy        Managed web route
+/etc/wireguard/coreai.conf    Existing private tunnel; preserved
+```
+
+## Development and checks
+
+Production installation pins the same runtime versions selected by the reference workstation. Source also supports Python 3.12+ for development/testing. Use a **disposable CORE-AI test database**: tests truncate their own tables.
+
+```bash
+python3 -m venv .venv-dev
+.venv-dev/bin/pip install -e './backend[test]'
+# Supply CORE_AI_DATABASE_URL for a disposable PostgreSQL database.
+.venv-dev/bin/python -m pytest backend/tests tests -q
+npm ci --prefix ui
+npm run build --prefix ui
+npm test --prefix ui
+```
+
+CI uses PostgreSQL 18 and validates the Caddy template. The UI dev server is optional (`npm run dev --prefix ui`) and proxies `/api` to the loopback API. Set `CORE_AI_ORIGIN` to that dev server's exact origin when running a local backend; production always uses the configured HTTPS origin.
+
+See [architecture](docs/architecture.md), [migration and recovery](docs/migration.md) and [software licenses](docs/licenses.md).

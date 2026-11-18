@@ -1,18 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
-cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
-action="${1:-help}"
-if [ "$action" = update ]; then
-  if [ -n "$(git status --porcelain --untracked-files=normal)" ]; then
-    printf 'Tracked source or untracked files need review before updating. Runtime data is ignored.\n' >&2
-    exit 2
-  fi
+cd "$(dirname "$0")"
+command=${1:-help}
+if [[ "$command" == update ]]; then
+  [[ -z $(git status --porcelain --untracked-files=normal) ]] || { echo 'Tracked source or untracked files changed; commit/move them before update.' >&2; exit 1; }
   git pull --ff-only origin main
   shift
-  exec python3 scripts/manage.py deploy --backup "$@"
+  exec bash scripts/install-workstation.sh "$@"
 fi
-if [ "$action" = install ] || [ "$action" = migrate ] || [ "$action" = infra-update ]; then
-  bash scripts/install-infra.sh "$action"
-fi
-[ "$#" -gt 0 ] || set -- help
-exec python3 scripts/manage.py "$@"
+case "$command" in
+  install|migrate) shift; exec bash scripts/install-workstation.sh "$@";;
+  infra-update) exec bash scripts/install-infra.sh;;
+  *) shift || true; exec python3 scripts/manage.py "$command" "$@";;
+esac
