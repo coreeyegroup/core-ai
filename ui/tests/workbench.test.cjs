@@ -15,11 +15,22 @@ test('custom workbench navigates, splits and opens every implemented module',asy
  const cache={};function load(name){const file='src/'+name+'.tsx';const fileTs='src/'+name+'.ts';const path=fs.existsSync(file)?file:fileTs;if(cache[path])return cache[path].exports;const m={exports:{}};cache[path]=m;const js=ts.transpileModule(fs.readFileSync(path,'utf8'),{compilerOptions:{jsx:ts.JsxEmit.ReactJSX,module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;vm.runInThisContext('(function(require,module,exports){'+js+'\n})', {filename:path})(id=>id.startsWith('./')?load(id.slice(2)):require(id),m,m.exports);return m.exports;}
  const React=require('react');const {act}=React;const {createRoot}=require('react-dom/client');
  const locationOld=Object.getOwnPropertyDescriptor(global,'location');Object.defineProperty(global,'location',{value:dom.window.location,configurable:true});
+ const {appearanceKey,defaultAppearance}=load('appearance');
+ localStorage.setItem(appearanceKey,JSON.stringify({...defaultAppearance,activity:true}));
  const App=load('App').default;const root=createRoot(document.getElementById('root'));
  try{
   await act(async()=>{root.render(React.createElement(App));await new Promise(r=>setTimeout(r,25));});
   assert.match(document.body.textContent,/CORE-AI/);assert.match(document.body.textContent,/test-admin/);assert.match(document.body.textContent,/Worker online/);
   assert.match(document.body.textContent,/How can I help/);
+  const ribbon=document.querySelector('[aria-label="Activity ribbon"]');
+  assert.equal(ribbon.querySelectorAll('button').length,16);
+  assert.equal(ribbon.querySelector('[aria-current="page"]').getAttribute('aria-label'),'Chat');
+  assert.ok(document.querySelector('.explorer-scroll .workspace-navigation'));
+  assert.ok(document.querySelector('.explorer-scroll .history-scroll'));
+  await act(async()=>{ribbon.querySelector('[aria-label="Models"]').click();});
+  assert.equal(document.querySelector('.workspace-navigation [aria-current="page"]').textContent,'Models');
+  await act(async()=>{ribbon.querySelector('[aria-label="Chat"]').click();});
+
   const toggle=document.querySelector('[aria-label="Hide sidebar"]');
   await act(async()=>{toggle.click();});
   assert.equal(document.querySelector('.explorer'),null);
@@ -71,9 +82,19 @@ test('custom workbench navigates, splits and opens every implemented module',asy
   await act(async()=>{Object.defineProperty(dom.window,'innerWidth',{value:390,writable:true,configurable:true});dom.window.dispatchEvent(new dom.window.Event('resize'));});
   assert.equal(document.querySelector('.explorer'),null);
   await act(async()=>{document.querySelector('[aria-label="Show sidebar"]').click();});
-  assert.ok(document.querySelector('.sidebar-backdrop')&&document.querySelector('.explorer'));
-  await act(async()=>{document.querySelector('.sidebar-backdrop').click();});
+  const drawer=document.querySelector('.explorer[role="dialog"]');
+  assert.ok(document.querySelector('.sidebar-backdrop')&&drawer);
+  assert.equal(document.activeElement.getAttribute('aria-label'),'Hide explorer');
+  assert.equal(document.querySelector('[aria-label="Explorer width"]'),null);
+  document.activeElement.dispatchEvent(new dom.window.KeyboardEvent('keydown',{key:'Tab',shiftKey:true,bubbles:true,cancelable:true}));
+  assert.equal(document.activeElement.getAttribute('aria-label'),'Open settings');
+  await act(async()=>{document.activeElement.dispatchEvent(new dom.window.KeyboardEvent('keydown',{key:'Escape',bubbles:true}));});
   assert.equal(document.querySelector('.explorer'),null);
+  assert.equal(document.activeElement.getAttribute('aria-label'),'Show sidebar');
+  await act(async()=>{document.activeElement.click();});
+  await act(async()=>{document.querySelector('.explorer [aria-label="Open settings"]').click();});
+  assert.equal(document.querySelector('.explorer'),null);
+  assert.equal(document.activeElement.className,'workspace-main');
   await act(async()=>{dom.window.innerWidth=1024;dom.window.dispatchEvent(new dom.window.Event('resize'));});
   await act(async()=>{[...document.querySelectorAll('.layout-menu button')].find(b=>b.textContent==='Workbench').click();await new Promise(r=>setTimeout(r,20));});
   await act(async()=>{[...document.querySelectorAll('.nav-group')].find(b=>b.textContent.includes('Build')).click();});

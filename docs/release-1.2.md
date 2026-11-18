@@ -2,6 +2,13 @@
 
 CORE-AI remains an independent product. No other CORE product, third-party dashboard, hosted VPN control plane or paid model account is required. Existing accounts, chats, project records, model endpoint and WireGuard enrollment are preserved by the forward migration.
 
+## 1.2.2 Explorer and navigation
+
+- The optional desktop Activity ribbon is available in Chat and Workbench. Its sections follow the same order as Explorer.
+- Explorer scrolls navigation and conversation history together, with New chat, search and account controls kept in reach.
+- Opening a module reveals its navigation group. The current module and conversation have distinct selection states.
+- The mobile Explorer drawer keeps keyboard focus inside while open, returns focus when dismissed and closes when you select a destination.
+
 ## 1.2.1 professional chat controls
 
 - Settings lets you choose the default response style, temperature and maximum reply tokens for new chats. The defaults are saved in your browser. Existing conversations keep their own settings.
