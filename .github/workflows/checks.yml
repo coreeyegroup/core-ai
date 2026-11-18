@@ -35,3 +35,5 @@ jobs:
       - run: bash -n core-ai scripts/*.sh
       - run: sudo apt-get update && sudo apt-get install -y caddy
       - run: python tests/validate_caddy.py
+      - name: Native Ubuntu installer smoke test
+        run: bash tests/install-smoke.sh

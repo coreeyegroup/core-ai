@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+umask 022
 cd "$(dirname "$0")/.."
 [[ $EUID != 0 ]] || { echo 'Run as your normal Ubuntu user.' >&2; exit 1; }
 # Snapshot the old running application before any infrastructure or source-runtime change.
