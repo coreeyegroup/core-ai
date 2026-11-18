@@ -35,7 +35,7 @@ def origin_check(request):
 
 def session(request: Request):
     token = request.cookies.get(COOKIE, '')
-    row = db.query('''SELECT u.id, u.username, s.csrf FROM sessions s JOIN users u ON u.id=s.user_id
+    row = db.query('''SELECT u.id, u.username, u.role, s.csrf FROM sessions s JOIN users u ON u.id=s.user_id
         WHERE s.token_hash=%s AND s.expires_at>now() AND u.enabled''', (token_hash(token),), one=True)
     if not row:
         raise HTTPException(401, 'Sign in to CORE-AI.')
@@ -43,6 +43,8 @@ def session(request: Request):
         origin_check(request)
         if not hmac.compare_digest(request.headers.get('x-core-ai-csrf', ''), row['csrf']):
             raise HTTPException(403, 'Session verification failed. Refresh and retry.')
+    if request.method not in ('GET','HEAD','OPTIONS') and row['role']=='VIEWER' and request.url.path!='/api/v1/session':
+        raise HTTPException(403,'This account has read-only access.')
     return row
 
 def seed(username, password):
@@ -77,4 +79,4 @@ def login(username, password):
             db.event('session.created', row['id'], conn=conn)
     if failure:
         raise HTTPException(401, 'Invalid credentials or account temporarily locked.')
-    return token, {'username': row['username'], 'csrf': csrf}
+    return token, {'username': row['username'], 'csrf': csrf, 'role': row['role'],'id':str(row['id'])}

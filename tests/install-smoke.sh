@@ -32,7 +32,7 @@ req=urllib.request.Request(base+'projects',data=json.dumps({'name':'Native smoke
 assert 'id' in json.load(urllib.request.urlopen(req))
 print('Real native login, CSRF-protected write and database persistence passed')
 PY
-./core-ai backup
+./core-ai verify-backup
 # Reinstall/update path must preserve the administrator, provider config and records.
 ./core-ai install --domain ai.example.invalid --endpoint 203.0.113.1 --model-host 127.0.0.1
 sudo -u postgres /usr/lib/postgresql/18/bin/psql -X -p 5434 -d core_ai -Atc "SELECT count(*) FROM projects WHERE name='Native smoke test'" | python -c "import sys; assert sys.stdin.read().strip()=='1'; print('Repeated install preserved project data')"
@@ -72,4 +72,33 @@ for _ in range(150):
     assert reply['status']!='FAILED',reply
     time.sleep(.1)
 else:raise AssertionError('Native chat worker did not complete')
+# Real file processing, source persistence, revisions and model-directed tools.
+project=call('projects')[0]['id']
+boundary='core-ai-disposable-upload'
+payload=('--'+boundary+'\r\nContent-Disposition: form-data; name="project_id"\r\n\r\n'+project+'\r\n--'+boundary+'\r\nContent-Disposition: form-data; name="file"; filename="evidence.md"\r\nContent-Type: text/markdown\r\n\r\n# Evidence\nMeasured native file ingestion.\r\n--'+boundary+'--\r\n').encode()
+h={**headers,'Content-Type':'multipart/form-data; boundary='+boundary}
+f=json.load(urllib.request.urlopen(urllib.request.Request(base+'files',data=payload,headers=h)))
+for _ in range(150):
+    detail=call('files/'+f['id'])
+    if detail['status']=='READY':break
+    assert detail['status']!='FAILED',detail
+    time.sleep(.1)
+else:raise AssertionError('File worker did not complete')
+assert detail['document_id'] and 'Measured native' in detail['text_content']
+artifact=call('library/artifacts',{'title':'Native revision test','content':'First version','project_id':project})
+body={'title':'Native revision test','content':'Second version','project_id':project,'expected_version':1}
+req=urllib.request.Request(base+'library/artifacts/'+artifact['id'],data=json.dumps(body).encode(),headers=headers,method='PUT')
+assert json.load(urllib.request.urlopen(req))['version']==2
+assert call('library/artifacts/'+artifact['id']+'?version=1')['content']=='First version'
+agent=call('agents',{'name':'Native tool agent','instructions':'Inspect the project and answer.','runtime_mode':'tools','tools':['project.inspect']})
+task=call('runs',{'project_id':project,'agent_id':agent['id'],'prompt':'Inspect this project','model':'qwen3:4b'})
+for _ in range(150):
+    result=call('runs/'+task['id'])
+    if result['status']=='SUCCEEDED':break
+    assert result['status'] not in ('FAILED','CANCELLED'),result
+    time.sleep(.1)
+else:raise AssertionError('Tool task did not complete')
+assert any(step['tool']=='project.inspect' for step in result['steps'])
+print('Native file processing, source creation, artifact revisions and model-directed tool execution verified')
+
 PY

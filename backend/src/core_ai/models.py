@@ -22,7 +22,7 @@ def validate_endpoint(value):
 
 def config():
     row = db.query("SELECT value FROM settings WHERE key='inference'", one=True)
-    return row['value'] if row else {'endpoint': os.environ.get('CORE_AI_MODEL_URL', 'http://10.203.0.2:11434'), 'model': 'qwen3:4b'}
+    return row['value'] if row else {'endpoint': os.environ.get('CORE_AI_MODEL_URL', 'http://127.0.0.1:11434'), 'model': 'qwen3:4b'}
 
 def configure(endpoint, model):
     endpoint = validate_endpoint(endpoint)
@@ -36,3 +36,25 @@ def list_models():
         response.raise_for_status()
         items = response.json().get('models', [])
     return {'available': True, 'models': items, 'config': cfg}
+
+
+def inspect_model(name):
+    import re
+    if not re.fullmatch(r'[A-Za-z0-9_.:/-]{1,120}',name):raise ValueError('Invalid model name.')
+    with httpx.Client(timeout=12,trust_env=False,follow_redirects=False) as client:
+        r=client.post(config()['endpoint']+'/api/show',json={'model':name})
+        r.raise_for_status();data=r.json()
+    return {'model':name,'capabilities':data.get('capabilities',[]),'details':data.get('details',{}),'parameters':data.get('parameters',''),
+            'context_windows':{k:v for k,v in data.get('model_info',{}).items() if k.endswith('.context_length')},
+            'license':data.get('license','')[:20000]}
+
+
+def metrics(data,started):
+    import time
+    result={'duration_ms':round((time.monotonic()-started)*1000)}
+    for key in ('eval_count','eval_duration','prompt_eval_count','prompt_eval_duration','load_duration','total_duration'):
+        value=data.get(key)
+        if isinstance(value,(int,float)) and value>=0:result[key]=value
+    if result.get('eval_duration',0)>0 and result.get('eval_count',0)>0:
+        result['tokens_per_second']=round(result['eval_count']/(result['eval_duration']/1e9),2)
+    return result

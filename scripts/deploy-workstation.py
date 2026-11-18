@@ -237,13 +237,30 @@ def backup(source):
     print('Private PostgreSQL/config backup:',target)
     return target
 
+def verify_backup(source):
+    """Restore a fresh snapshot into an isolated temporary database, then drop it."""
+    target=backup(source)
+    temporary='core_ai_verify_'+secrets.token_hex(6)
+    pg('CREATE DATABASE '+temporary+' OWNER '+ROLE)
+    try:
+        with (target/'core_ai.dump').open('rb') as incoming:
+            run('runuser','-u','postgres','--','/usr/lib/postgresql/18/bin/pg_restore',
+                '-w','-h','/var/run/postgresql','-p',str(PGPORT),'-d',temporary,
+                '--exit-on-error','--no-owner','--no-privileges','--role='+ROLE,stdin=incoming)
+        result=pg("SET ROLE "+ROLE+"; SELECT count(*) FROM schema_migrations; SELECT count(*) FROM users; SELECT count(*) FROM projects; SELECT count(*) FROM artifact_versions",database=temporary)
+        (target/'restore-verification.txt').write_text('Restore succeeded in isolated database; application-role queries passed.\n'+result)
+        print('PASS: backup restored and queried as the application role; live data was preserved.')
+    finally:
+        pg('DROP DATABASE '+temporary+' WITH (FORCE)')
+
 def deploy(release,source,args):
     if not re.fullmatch(r'/opt/core-ai/releases/[A-Za-z0-9_-]+',str(release)) or not (release/'ui/index.html').is_file():
         raise ValueError('Build a CORE-AI release first.')
     oldcfg=load_env() if ENV.exists() else {}
     legacy=parse_env(source/'config.env') if (source/'config.env').exists() else {}
     host=domain(args.domain or oldcfg.get('CORE_AI_ORIGIN','').removeprefix('https://') or legacy.get('CORE_DOMAIN') or input('Dashboard domain: ').strip().lower())
-    model_host=args.model_host or legacy.get('CORE_MODEL_HOST') or '10.203.0.2'
+    from urllib.parse import urlsplit
+    model_host=args.model_host or urlsplit(oldcfg.get('CORE_AI_MODEL_URL','')).hostname or legacy.get('CORE_MODEL_HOST') or input('Private model-host IPv4: ').strip()
     if model_host=='host.docker.internal':
         model_host='127.0.0.1'
     model_url='http://'+str(ipaddress.IPv4Address(model_host))+':11434'
@@ -392,6 +409,8 @@ def main():
             backend_python(release,credentials.RESET_CODE,stdin=json.dumps(prepared))
         elif action=='backup':
             backup(source)
+        elif action=='verify-backup':
+            verify_backup(source)
         elif action=='publish':
             wait_ready()
             install_route(source,load_env()['CORE_AI_ORIGIN'].removeprefix('https://'))

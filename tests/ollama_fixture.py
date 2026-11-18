@@ -11,6 +11,13 @@ class Fixture(BaseHTTPRequestHandler):
         self.wfile.write(json.dumps({'models':[{'name':'qwen3:4b','size':2500000000}]}).encode())
     def do_POST(self):
         body=json.loads(self.rfile.read(int(self.headers.get('Content-Length',0))))
+        if self.path=='/api/show':
+            self.send_response(200);self.send_header('Content-Type','application/json');self.end_headers()
+            self.wfile.write(json.dumps({'capabilities':['completion','tools'],'details':{}}).encode());return
+        if self.path=='/api/chat' and not body.get('stream',True):
+            self.send_response(200);self.send_header('Content-Type','application/json');self.end_headers()
+            message={'role':'assistant','content':'Project inspected by CI.'} if body['messages'][-1]['role']=='tool' else {'role':'assistant','content':'','tool_calls':[{'function':{'name':'project_inspect','arguments':{}}}]}
+            self.wfile.write(json.dumps({'message':message,'done':True}).encode());return
         if self.path!='/api/chat':
             self.send_response(200);self.send_header('Content-Type','application/json');self.end_headers()
             self.wfile.write(json.dumps({'response':'OK','done':True}).encode());return

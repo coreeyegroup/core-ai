@@ -44,13 +44,13 @@ def legacy_backup():
 
 def main():
     parser=argparse.ArgumentParser(description='CORE-AI independent workstation')
-    parser.add_argument('command',nargs='?',default='help',choices=['help','doctor','status','test-model','logs','publish','backup','legacy-backup','peer-add','set-login'])
+    parser.add_argument('command',nargs='?',default='help',choices=['help','doctor','status','test-model','logs','publish','backup','verify-backup','legacy-backup','peer-add','set-login'])
     parser.add_argument('--public-key')
     parser.add_argument('--username')
     args=parser.parse_args()
     if args.command=='help':
         print('CORE-AI: ./core-ai install [--domain HOST] [--model-host PRIVATE_IP] [--endpoint VPS_HOST]')
-        print('         ./core-ai update | doctor | test-model | logs | publish | backup')
+        print('         ./core-ai update | doctor | test-model | logs | publish | backup | verify-backup')
         print('         ./core-ai set-login --username USER (prompts privately for the new password)')
         print('         ./core-ai peer-add --public-key KEY (called by the Windows installer)')
         return

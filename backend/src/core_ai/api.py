@@ -6,7 +6,7 @@ from typing import Annotated
 from fastapi import FastAPI, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
-from . import __version__, auth, db, models
+from . import __version__, auth, db, models, access
 
 @asynccontextmanager
 async def lifespan(app):
@@ -18,6 +18,13 @@ User = Annotated[dict, Depends(auth.session)]
 
 @app.middleware('http')
 async def private_headers(request, call_next):
+    if request.url.path=='/api/v1/files' and request.method=='POST':
+        # Authenticate before parsing a potentially large multipart body.
+        try:auth.session(request)
+        except HTTPException as exc:return JSONResponse({'detail':exc.detail},status_code=exc.status_code)
+        length=request.headers.get('content-length','0')
+        if not length.isdigit() or int(length)>11*1024*1024:
+            return JSONResponse({'detail':'Upload exceeds the 10 MB file limit.'},status_code=413)
     response = await call_next(request)
     response.headers['Cache-Control'] = 'no-store'
     response.headers['X-Content-Type-Options'] = 'nosniff'
@@ -61,7 +68,7 @@ def sign_in(body: Credentials, request: Request, response: Response):
 
 @app.get('/api/v1/session')
 def current(user: User):
-    return {'username': user['username'], 'csrf': user['csrf']}
+    return {'username': user['username'], 'csrf': user['csrf'], 'role':user['role'],'id':str(user['id'])}
 
 @app.delete('/api/v1/session')
 def sign_out(request: Request, response: Response, user: User):
@@ -72,26 +79,30 @@ def sign_out(request: Request, response: Response, user: User):
 
 @app.get('/api/v1/overview')
 def overview(user: User):
-    counts = {}
-    for name in ('projects', 'agents', 'documents'):
-        counts[name] = db.query(f'SELECT count(*) AS n FROM {name}', one=True)['n']
-    return {**counts, 'runs': db.query('SELECT status,count(*) AS n FROM runs GROUP BY status'),
-            'worker': db.query("SELECT heartbeat,heartbeat>now()-interval '20 seconds' AS online FROM worker_status WHERE id='main'", one=True),
-            'inference': models.config(), 'release': __version__}
+    project_ids=[p['id'] for p in access.allowed_projects(user)]
+    counts={'projects':len(project_ids),'agents':db.query("SELECT count(*) AS n FROM agents WHERE owner_id=%s OR %s='ADMIN'",(user['id'],user['role']),one=True)['n'],
+            'documents':db.query('SELECT count(*) AS n FROM documents WHERE project_id=ANY(%s)',(project_ids,),one=True)['n']}
+    cfg=models.config()
+    if user['role']!='ADMIN':cfg={**cfg,'endpoint':'Private local provider'}
+    return {**counts,'runs':db.query('SELECT status,count(*) AS n FROM runs WHERE project_id=ANY(%s) GROUP BY status',(project_ids,)),
+            'worker':db.query("SELECT heartbeat,heartbeat>now()-interval '20 seconds' AS online FROM worker_status WHERE id='main'",one=True),
+            'inference':cfg,'release':__version__,'role':user['role']}
 
 class Project(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     description: str = Field(default='', max_length=4000)
+    instructions: str = Field(default='',max_length=8000)
 
 @app.get('/api/v1/projects')
 def projects(user: User):
-    return db.query('SELECT * FROM projects ORDER BY created_at')
+    return access.allowed_projects(user)
 
 @app.post('/api/v1/projects', status_code=201)
 def create_project(body: Project, user: User):
     ident = uuid.uuid4()
     with db.connect() as conn:
-        conn.execute('INSERT INTO projects(id,name,description) VALUES (%s,%s,%s)', (ident, body.name, body.description))
+        conn.execute('INSERT INTO projects(id,name,description,owner_id,instructions) VALUES (%s,%s,%s,%s,%s)', (ident, body.name, body.description,user['id'],body.instructions))
+        conn.execute("INSERT INTO project_members VALUES (%s,%s,'OWNER')",(ident,user['id']))
         db.event('project.created', user['id'], {'id': str(ident), 'name': body.name}, conn=conn)
     return {'id': ident}
 
@@ -99,23 +110,30 @@ class Agent(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     instructions: str = Field(min_length=1, max_length=16000)
     enabled: bool = True
+    runtime_mode: str = Field(default='analysis',pattern=r'^(analysis|tools)$')
+    tools: list[str] = Field(default_factory=lambda:['knowledge.search','project.inspect'],max_length=3)
 
 @app.get('/api/v1/agents')
 def agents(user: User):
-    return db.query('SELECT * FROM agents ORDER BY created_at')
+    return db.query("SELECT * FROM agents WHERE owner_id=%s OR %s='ADMIN' ORDER BY created_at",(user['id'],user['role']))
 
 @app.post('/api/v1/agents', status_code=201)
 def create_agent(body: Agent, user: User):
     ident = uuid.uuid4()
-    db.query('INSERT INTO agents(id,name,instructions,enabled) VALUES (%s,%s,%s,%s)',
-             (ident, body.name, body.instructions, body.enabled))
+    from psycopg.types.json import Jsonb
+    if any(t not in ('knowledge.search','project.inspect','artifact.create') for t in body.tools):raise HTTPException(422,'Unsupported agent tool.')
+    db.query('INSERT INTO agents(id,name,instructions,enabled,owner_id,runtime_mode,tools) VALUES (%s,%s,%s,%s,%s,%s,%s)',
+             (ident, body.name, body.instructions, body.enabled,user['id'],body.runtime_mode,Jsonb(body.tools)))
     db.event('agent.created', user['id'], {'id': str(ident)})
     return {'id': ident}
 
 @app.put('/api/v1/agents/{ident}')
 def update_agent(ident: uuid.UUID, body: Agent, user: User):
-    row = db.query('UPDATE agents SET name=%s,instructions=%s,enabled=%s,version=version+1 WHERE id=%s RETURNING version',
-                   (body.name, body.instructions, body.enabled, ident), one=True)
+    from psycopg.types.json import Jsonb
+    with db.connect() as conn:access.agent(conn,user,ident)
+    if any(t not in ('knowledge.search','project.inspect','artifact.create') for t in body.tools):raise HTTPException(422,'Unsupported agent tool.')
+    row = db.query('UPDATE agents SET name=%s,instructions=%s,enabled=%s,runtime_mode=%s,tools=%s,version=version+1 WHERE id=%s RETURNING version',
+                   (body.name, body.instructions, body.enabled,body.runtime_mode,Jsonb(body.tools),ident), one=True)
     if not row:
         raise HTTPException(404, 'Agent not found.')
     db.event('agent.updated', user['id'], {'id': str(ident), **row})
@@ -124,9 +142,11 @@ def update_agent(ident: uuid.UUID, body: Agent, user: User):
 @app.get('/api/v1/models')
 def model_list(user: User):
     try:
-        return models.list_models()
+        result=models.list_models()
+        if user['role']!='ADMIN':result['config']={**result['config'],'endpoint':'Private local provider'}
+        return result
     except Exception:
-        return {'available': False, 'models': [], 'config': models.config(),
+        return {'available': False, 'models': [], 'config':models.config() if user['role']=='ADMIN' else {'model':models.config()['model'],'endpoint':'Private local provider'},
                 'error': 'Ollama is unreachable. Check the laptop, WireGuard and Ollama listener.'}
 
 class Inference(BaseModel):
@@ -135,6 +155,7 @@ class Inference(BaseModel):
 
 @app.put('/api/v1/models/config')
 def inference(body: Inference, user: User):
+    access.admin(user)
     try:
         models.configure(body.endpoint, body.model)
     except ValueError as exc:
@@ -153,7 +174,8 @@ def runs(user: User):
     return db.query('''SELECT r.id,r.project_id,p.name AS project,r.agent_id,a.name AS agent,r.model,r.status,
         r.created_at,r.started_at,r.finished_at,left(r.prompt,200) AS prompt
         FROM runs r JOIN projects p ON p.id=r.project_id JOIN agents a ON a.id=r.agent_id
-        ORDER BY r.created_at DESC LIMIT 100''')
+        WHERE %s='ADMIN' OR EXISTS(SELECT 1 FROM project_members m WHERE m.project_id=r.project_id AND m.user_id=%s)
+        ORDER BY r.created_at DESC LIMIT 100''',(user['role'],user['id']))
 
 @app.post('/api/v1/runs', status_code=201)
 def submit_run(body: Run, user: User):
@@ -162,12 +184,14 @@ def submit_run(body: Run, user: User):
         conn.execute('SELECT pg_advisory_xact_lock(187875435)')
         if conn.execute("SELECT (SELECT count(*) FROM runs WHERE status IN ('QUEUED','RUNNING','CANCEL_REQUESTED'))+(SELECT count(*) FROM chat_generations WHERE status IN ('QUEUED','RUNNING','CANCEL_REQUESTED')) AS n").fetchone()['n'] >= 20:
             raise HTTPException(409, 'The queue is full. Wait or cancel an existing task.')
-        agent = conn.execute('SELECT * FROM agents WHERE id=%s AND enabled', (body.agent_id,)).fetchone()
-        if not agent or not conn.execute('SELECT id FROM projects WHERE id=%s', (body.project_id,)).fetchone():
+        access.project(conn,user,body.project_id,True)
+        agent = access.agent(conn,user,body.agent_id)
+        if not agent or not agent['enabled'] or not conn.execute('SELECT id FROM projects WHERE id=%s', (body.project_id,)).fetchone():
             raise HTTPException(422, 'Choose an existing project and enabled agent.')
-        conn.execute('''INSERT INTO runs(id,project_id,agent_id,agent_version,instructions,prompt,model,status,requested_by)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,'QUEUED',%s)''',
-            (ident,body.project_id,body.agent_id,agent['version'],agent['instructions'],body.prompt,body.model,user['id']))
+        from psycopg.types.json import Jsonb
+        conn.execute('''INSERT INTO runs(id,project_id,agent_id,agent_version,instructions,prompt,model,status,requested_by,runtime_mode,tools)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,'QUEUED',%s,%s,%s)''',
+            (ident,body.project_id,body.agent_id,agent['version'],agent['instructions'],body.prompt,body.model,user['id'],agent['runtime_mode'],Jsonb(agent['tools'])))
         db.event('run.queued', user['id'], {'agent_version': agent['version']}, ident, conn)
     return {'id': ident}
 
@@ -176,12 +200,17 @@ def run_detail(ident: uuid.UUID, user: User):
     row = db.query('SELECT * FROM runs WHERE id=%s', (ident,), one=True)
     if not row:
         raise HTTPException(404, 'Task not found.')
+    with db.connect() as conn:access.project(conn,user,row['project_id'])
+    row['steps']=db.query('SELECT * FROM agent_steps WHERE run_id=%s ORDER BY id',(ident,))
     row['events'] = db.query('SELECT * FROM events WHERE run_id=%s ORDER BY id', (ident,))
     return row
 
 @app.post('/api/v1/runs/{ident}/cancel')
 def cancel(ident: uuid.UUID, user: User):
     with db.connect() as conn:
+        task=conn.execute('SELECT project_id FROM runs WHERE id=%s',(ident,)).fetchone()
+        if not task:raise HTTPException(404,'Task not found.')
+        access.project(conn,user,task['project_id'],True)
         row = conn.execute("""UPDATE runs SET status=CASE WHEN status='QUEUED' THEN 'CANCELLED' ELSE 'CANCEL_REQUESTED' END,
             finished_at=CASE WHEN status='QUEUED' THEN now() ELSE finished_at END
             WHERE id=%s AND status IN ('QUEUED','RUNNING') RETURNING status""", (ident,)).fetchone()
@@ -198,38 +227,45 @@ class Document(BaseModel):
 @app.get('/api/v1/documents')
 def documents(user: User, project_id: uuid.UUID | None = None):
     if project_id:
+        with db.connect() as conn:access.project(conn,user,project_id)
         return db.query('SELECT * FROM documents WHERE project_id=%s ORDER BY created_at DESC', (project_id,))
-    return db.query('SELECT id,project_id,title,created_at FROM documents ORDER BY created_at DESC LIMIT 200')
+    return db.query("SELECT id,project_id,title,version,enabled,created_at FROM documents d WHERE %s='ADMIN' OR EXISTS(SELECT 1 FROM project_members m WHERE m.project_id=d.project_id AND m.user_id=%s) ORDER BY created_at DESC LIMIT 200",(user['role'],user['id']))
 
 @app.post('/api/v1/documents', status_code=201)
 def add_document(body: Document, user: User):
-    if not db.query('SELECT id FROM projects WHERE id=%s', (body.project_id,), one=True):
-        raise HTTPException(422, 'Project not found.')
+    with db.connect() as conn:access.project(conn,user,body.project_id,True)
     ident = uuid.uuid4()
     db.query('INSERT INTO documents(id,project_id,title,content) VALUES (%s,%s,%s,%s)',
              (ident,body.project_id,body.title,body.content))
+    db.query('INSERT INTO document_versions(document_id,project_id,version,title,content) VALUES (%s,%s,1,%s,%s)',(ident,body.project_id,body.title,body.content))
     db.event('document.created', user['id'], {'id': str(ident)})
     return {'id': ident}
 
 @app.delete('/api/v1/documents/{ident}')
 def remove_document(ident: uuid.UUID, user: User):
-    if not db.query('DELETE FROM documents WHERE id=%s RETURNING id', (ident,), one=True):
-        raise HTTPException(404, 'Document not found.')
+    with db.connect() as conn:
+        source=conn.execute('SELECT project_id FROM documents WHERE id=%s',(ident,)).fetchone()
+        if not source:raise HTTPException(404,'Document not found.')
+        access.project(conn,user,source['project_id'],True)
+        conn.execute('DELETE FROM document_versions WHERE document_id=%s',(ident,))
+        conn.execute('DELETE FROM documents WHERE id=%s',(ident,))
     db.event('document.deleted', user['id'], {'id': str(ident)})
     return {'ok': True}
 
 @app.get('/api/v1/events')
 def events(user: User):
-    return db.query('SELECT * FROM events ORDER BY id DESC LIMIT 200')
+    return db.query("SELECT * FROM events WHERE %s='ADMIN' OR actor=%s ORDER BY id DESC LIMIT 200",(user['role'],str(user['id'])))
 
 @app.get('/api/v1/artifacts')
 def artifacts(user: User):
-    return db.query("SELECT id,project_id,model,output,finished_at FROM runs WHERE status='SUCCEEDED' ORDER BY finished_at DESC LIMIT 100")
+    return db.query("SELECT id,project_id,model,output,finished_at FROM runs r WHERE status='SUCCEEDED' AND (%s='ADMIN' OR EXISTS(SELECT 1 FROM project_members m WHERE m.project_id=r.project_id AND m.user_id=%s)) ORDER BY finished_at DESC LIMIT 100",(user['role'],user['id']))
 
 @app.get('/api/v1/tools')
 def tools(user: User):
-    return [{'id':'knowledge.search', 'mode':'read', 'enabled':True, 'description':'Search task-project documents and record source IDs before inference.'},
-            {'id':'model.generate', 'mode':'inference', 'enabled':True, 'description':'Generate a bounded answer with the selected local Ollama model.'}]
+    return [{'id':'knowledge.search','mode':'read','enabled':True,'description':'Search only the authorized task project and return source excerpts.'},
+            {'id':'project.inspect','mode':'read','enabled':True,'description':'Inspect the authorized project and its source inventory.'},
+            {'id':'artifact.create','mode':'write','enabled':user['role']!='VIEWER','description':'Create a private, versioned artifact from a permitted agent task.'},
+            {'id':'model.generate','mode':'inference','enabled':True,'description':'Use the selected local model. Tools mode requires verified model tool support.'}]
 
 @app.get('/api/v1/integrations')
 def integrations(user: User):
@@ -238,3 +274,20 @@ def integrations(user: User):
 # Chat is an independent product module, sharing only local identity and inference.
 from .chat import router as chat_router
 app.include_router(chat_router)
+
+from .workspace import router as workspace_router
+from .files import router as files_router
+app.include_router(workspace_router)
+app.include_router(files_router)
+
+@app.get('/api/v1/models/inspect')
+def inspect_model(model:str,user:User):
+    try:return models.inspect_model(model)
+    except Exception:raise HTTPException(422,'Model inspection failed. Confirm the model is installed and the provider is reachable.')
+
+@app.get('/api/v1/operations/metrics')
+def operation_metrics(user:User):
+    ids=[p['id'] for p in access.allowed_projects(user)]
+    return {'tasks':db.query('SELECT id,status,model,metrics,created_at,finished_at FROM runs WHERE project_id=ANY(%s) ORDER BY created_at DESC LIMIT 100',(ids,)),
+            'chats':db.query('SELECT id,status,model,metrics,created_at,finished_at FROM chat_generations WHERE requested_by=%s ORDER BY created_at DESC LIMIT 100',(user['id'],)),
+            'files':db.query("SELECT status,count(*) AS n FROM workspace_files WHERE owner_id=%s OR %s='ADMIN' GROUP BY status",(user['id'],user['role']))}

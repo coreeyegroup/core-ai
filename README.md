@@ -42,6 +42,7 @@ Other commands:
 ```bash
 ./core-ai logs
 ./core-ai backup
+./core-ai verify-backup
 ./core-ai publish
 ./core-ai infra-update
 ```
@@ -71,30 +72,12 @@ powershell -ExecutionPolicy Bypass -File .\setup.ps1 -VpsHost YOUR_VPS_HOST -Vps
 
 The Windows installer installs missing WireGuard/OpenSSH, generates/preserves the laptop private key locally, enrolls only its public key through SSH, installs the project tunnel and exposes Ollama only to the VPS tunnel address through a restricted forwarding rule. The model process continues listening on Windows loopback. No models are downloaded or moved by this setup.
 
-## Custom application capabilities
+## Workspace release 1.2
 
-| Workbench panel | Implemented operation |
-| --- | --- |
-| Chat | Saved private conversations, incremental replies, model/style selection, stop/regenerate, non-destructive edit branches, text/code attachments, safe Markdown and export |
-| Overview | Database-backed project/agent/document/task counts and worker heartbeat |
-| Projects | Create and list separate project contexts |
-| Agents | Create, edit, disable and version agent instructions; tasks snapshot instructions/version |
-| Tasks | Submit, list, inspect, cancel; durable queue, one inference slot, interrupted-lease detection |
-| Knowledge | Save/import text or Markdown under a project, list/delete documents; project-scoped full-text retrieval |
-| Artifacts | Inspect/download persisted completed task outputs |
-| Models | List the real Ollama model inventory; configure private endpoint/default model |
-| Tools | Inspect enabled backend capabilities and their limitations |
-| Integrations | Inspect independent-product connection policy and actual connected count (zero initially) |
-| Operations | Persisted audit/tool lifecycle events |
-| Settings | Themes, text size, density, rail/status visibility and tab wrapping |
+The adopted workspace now includes unified navigation, Chat, Projects, Files, versioned Artifacts, source revisions, role and membership administration, model capability inspection, bounded model-directed task tools and observed execution metrics. Chat opens immediately without requiring a project or agent. All advanced panels remain available through grouped navigation and the command palette.
 
-Chat is the default entry point and works without first creating a project or agent. Its conversation sidebar can be hidden/shown from the always-visible top-left control or Ctrl B; on mobile it opens as a dismissible drawer. Chat and Workbench modes share the same product identity and data. The Workbench preserves the operational modules.
+See [release behavior and limits](docs/release-1.2.md) and the [requirements register](docs/requirements-register.md) for implemented features, acceptance evidence and the remaining roadmap. A full coding sandbox, scheduled workflows, semantic retrieval, SSO and multimodal processing remain planned or unavailable. No control claims to perform these operations.
 
-The shell follows COREI-OS-MINI's workbench patterns: grouped navigation, explorer, tab groups, up to four splits, inspector, activity/runtime panel, keyboard command palette, pin/close/open-alone/detach controls, saved workspace layouts, themes and narrow-screen behavior. The application operations, database and service identity are CORE-AI's own.
-
-This release implements a **fixed retrieval → local inference workflow**, using a versioned agent's instructions. It is the custom foundation for an agent platform. Model-directed tool loops, coding sandboxes, external product actions, scheduled workflows, semantic embeddings, multi-user role administration and SSO are **not implemented** and are not presented as working controls. Existing documents/chat histories from third-party dashboards are archived, not automatically converted.
-
-The local model list is discovery, not a capability certification. Do not use embedding models for generation. Model failures are recorded, not replaced with fabricated results. Chat output supports safe Markdown, tables and code blocks. Raw HTML and remote image rendering are disabled. Task artifacts remain plain text.
 
 ## Chat for general and professional work
 

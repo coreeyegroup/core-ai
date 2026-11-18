@@ -6,3 +6,14 @@ export async function api(path:string,method='GET',body?:unknown){
   if(!res.ok){const error=new Error(typeof value.detail==='string'?value.detail:'Request rejected. Check the fields.');Object.assign(error,{status:res.status});throw error;}
   return value;
 }
+
+export function uploadFile(file:File,projectId:string|null,onProgress:(n:number)=>void):Promise<any>{
+ return new Promise((resolve,reject)=>{
+  const xhr=new XMLHttpRequest();xhr.open('POST','/api/v1/files');xhr.setRequestHeader('x-core-ai-csrf',csrf);xhr.timeout=120000;
+  xhr.upload.onprogress=e=>{if(e.lengthComputable)onProgress(Math.round(e.loaded/e.total*100));};
+  xhr.onerror=()=>reject(new Error('Upload failed. Check your connection.'));
+  xhr.ontimeout=()=>reject(new Error('Upload timed out. Check the Files library before retrying.'));
+  xhr.onload=()=>{let result:any;try{result=JSON.parse(xhr.responseText);}catch{reject(new Error('Invalid upload response.'));return;}if(xhr.status>=200&&xhr.status<300)resolve(result);else reject(new Error(typeof result.detail==='string'?result.detail:'Upload was rejected.'));};
+  const form=new FormData();form.append('file',file);if(projectId)form.append('project_id',projectId);xhr.send(form);
+ });
+}

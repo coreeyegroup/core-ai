@@ -54,7 +54,7 @@ def test_running_cancel_wins_over_output(signed,work):
 
 def test_queue_limit_and_invalid_project(signed,work):
     broken={**work,'project_id':'00000000-0000-0000-0000-000000000000'}
-    assert signed.post('/api/v1/runs',json=broken).status_code==422
+    assert signed.post('/api/v1/runs',json=broken).status_code==404
     for _ in range(20):assert signed.post('/api/v1/runs',json=work).status_code==201
     assert signed.post('/api/v1/runs',json=work).status_code==409
 

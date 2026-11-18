@@ -1,14 +1,14 @@
-export const views=['Chat','Overview','Projects','Agents','Tasks','Knowledge','Artifacts','Models','Tools','Integrations','Operations','Settings'] as const;
+export const views=['Chat','Overview','Projects','Files','Agents','Tasks','Knowledge','Artifacts','Models','Tools','Integrations','Operations','Access','Capabilities','Workflows','Settings'] as const;
 export type View=typeof views[number];
 export type Layout={version:1;workspace:'Build'|'Research'|'Operations';groups:View[][];active:View[];focus:number;axis:'row'|'column';left:boolean;right:boolean;bottom:boolean;leftWidth:number;rightWidth:number;bottomHeight:number;maximized:boolean};
 export const key='core-ai.workstation.layout.v2';
-export function defaults():Layout{return {version:1,workspace:'Build',groups:[['Chat']],active:['Chat'],focus:0,axis:'row',left:true,right:false,bottom:false,leftWidth:260,rightWidth:270,bottomHeight:155,maximized:false};}
+export function defaults():Layout{return {version:1,workspace:'Build',groups:[['Chat']],active:['Chat'],focus:0,axis:'row',left:true,right:false,bottom:false,leftWidth:260,rightWidth:400,bottomHeight:155,maximized:false};}
 export function restore(raw:string|null):Layout{
  try{const x=JSON.parse(raw||'null');
   if(!x||x.version!==1||!['Build','Research','Operations'].includes(x.workspace)||!Array.isArray(x.groups)||x.groups.length<1||x.groups.length>4||!Array.isArray(x.active)||x.active.length!==x.groups.length) return defaults();
   if(x.groups.some((g:unknown)=>!Array.isArray(g)||g.length<1||g.length>views.length||new Set(g).size!==g.length||g.some(v=>!views.includes(v)))||x.active.some((v:View,i:number)=>!x.groups[i].includes(v))) return defaults();
   if(!Number.isInteger(x.focus)||x.focus<0||x.focus>=x.groups.length||!['row','column'].includes(x.axis)||['left','right','bottom','maximized'].some(k=>typeof x[k]!=='boolean'))return defaults();
-  for(const [k,min,max]of [['leftWidth',160,380],['rightWidth',200,440],['bottomHeight',100,400]] as const)if(!Number.isFinite(x[k])||x[k]<min||x[k]>max)return defaults();
+  for(const [k,min,max]of [['leftWidth',200,380],['rightWidth',260,1000],['bottomHeight',100,400]] as const)if(!Number.isFinite(x[k])||x[k]<min||x[k]>max)return defaults();
   return x;
  }catch{return defaults();}
 }

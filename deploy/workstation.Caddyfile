@@ -6,6 +6,16 @@ DOMAIN {
     header Referrer-Policy same-origin
     header Cache-Control no-store
     header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+    @file_upload {
+        path /api/v1/files
+        method POST
+    }
+    handle @file_upload {
+        request_body {
+            max_size 11MB
+        }
+        reverse_proxy 127.0.0.1:18787
+    }
     @api path /api /api/* /health
     handle @api {
         request_body {
