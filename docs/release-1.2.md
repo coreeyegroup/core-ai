@@ -31,3 +31,7 @@ cd ~/core-ai
 ```
 
 For the existing deployment, do not rerun Windows enrollment or change the model host. Updates preserve the administrator credentials; `set-login` remains an explicit local operation.
+
+## Dependency review
+
+Production dependencies pin jsdiff 8.0.4 and KaTeX 0.19.1; the KaTeX override also updates the math plugins’ transitive copies. Production npm audit is checked separately. The Vite 8.3.8 development toolchain currently depends on picomatch 4.0.7, for which the registry reports GHSA-fc5q-39xc-vjpf and no released patched version. This dependency is used for developer/build globs; it is not shipped as a server dependency or exposed as a production glob API. Vite binds only to loopback during development, builds use controlled repository patterns, and Caddy serves compiled static assets in production. Do not expose the development server or accept untrusted build configuration. Track the upstream fix rather than forcing an unrelated major downgrade.
