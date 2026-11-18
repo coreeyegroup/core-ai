@@ -20,7 +20,7 @@ function Empty({children}:{children:React.ReactNode}){return <div className="emp
 function Status({value}:{value:string}){return <span className={'state '+value.toLowerCase()}>{value.replaceAll('_',' ')}</span>;}
 export function Module({view,tick,refresh,go,appearance,changeAppearance,visible}:{view:View;visible?:boolean;tick:number;refresh:()=>void;go:(v:View)=>void;appearance:Appearance;changeAppearance:(p:Partial<Appearance>)=>void}){
  switch(view){
-  case 'Chat':return <Chat tick={tick} visible={visible} sendKey={appearance.sendKey}/>;
+  case 'Chat':return <Chat tick={tick} visible={visible} sendKey={appearance.sendKey} chatDefaults={appearance.chatDefaults}/>;
   case 'Overview':return <Overview tick={tick} go={go}/>;
   case 'Projects':return <ProjectWorkspace tick={tick} refresh={refresh}/>;
   case 'Agents':return <Agents tick={tick} refresh={refresh}/>;

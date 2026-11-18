@@ -2,6 +2,12 @@
 
 CORE-AI remains an independent product. No other CORE product, third-party dashboard, hosted VPN control plane or paid model account is required. Existing accounts, chats, project records, model endpoint and WireGuard enrollment are preserved by the forward migration.
 
+## 1.2.1 professional chat controls
+
+- Settings lets you choose the default response style, temperature and maximum reply tokens for new chats. The defaults are saved in your browser. Existing conversations keep their own settings.
+- Professional mode offers editable starters for decision briefs, document review, technical review and research planning. Selecting one adds text to the composer for review before sending.
+- The composer’s context button opens project, agent profile and response options. Starting a general chat clears the previous chat’s project and agent selections.
+
 ## Implemented increment
 
 - One grouped navigation sidebar for conversations and operational modules; keyboard commands, collapsible groups, tabs, splits and inspect panes remain available. Consolidated typography, spacing, colors and responsive controls replace overlapping style layers. Interface and reading sizes are independent.

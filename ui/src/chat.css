@@ -6,3 +6,6 @@
 @media(max-width:759px){.chat-top{min-height:36px;padding:4px 10px}.chat-scroll{padding:0 12px}.composer-area{padding:5px 10px 7px}.chat-options{padding:6px 10px}.message{padding:10px 0}.chat-model select{max-width:170px!important}.composer-hint{display:none}.composer-controls .send-button{margin-left:auto}.chat-welcome h1{font-size:18px}.history-title{height:32px!important}.history-menu summary{height:32px}.chat-top-actions select{max-width:104px}}
 
 .jump-latest{position:sticky;bottom:8px;display:block;margin:0 auto 8px;border-radius:20px;box-shadow:0 2px 8px #0003}.file-picker{padding:8px;border:1px solid var(--line);border-radius:5px;background:var(--chrome);margin-bottom:7px;max-height:180px;overflow:auto}.file-picker button{display:flex;width:100%;justify-content:space-between;border:0;background:transparent;font-size:11px;padding:5px}.composer-profile{max-width:130px;font-size:10px!important;padding:2px!important}.message-markdown .katex-display{overflow:auto;padding:4px 0}.message-markdown .katex{font-size:1.1em}
+
+.app .composer-context{font-size:10.5px;min-width:0;text-overflow:ellipsis;overflow:hidden;border-color:transparent;background:transparent}
+.app .composer-context:hover,.app .composer-context[aria-expanded=true]{border-color:var(--line);background:var(--chrome)}
