@@ -4,11 +4,11 @@ import signal
 import threading
 import time
 import httpx
-from . import db, models
+from . import db, models, chat
 
 stopping = threading.Event()
 
-def claim():
+def recover_tasks():
     with db.connect() as conn:
         # An interrupted task is explicit, never silently repeated.
         expired = conn.execute("""UPDATE runs SET status=CASE WHEN status='CANCEL_REQUESTED' THEN 'CANCELLED' ELSE 'FAILED' END,
@@ -16,9 +16,15 @@ def claim():
             WHERE status IN ('RUNNING','CANCEL_REQUESTED') AND lease_until<now() RETURNING id""").fetchall()
         for row in expired:
             db.event('run.interrupted', run_id=row['id'], conn=conn)
+
+def claim():
+    recover_tasks()
+    with db.connect() as conn:
         # Also exclude a live run if a second worker is accidentally started.
         conn.execute('SELECT pg_advisory_xact_lock(187875436)')
         if conn.execute("SELECT id FROM runs WHERE status IN ('RUNNING','CANCEL_REQUESTED') LIMIT 1").fetchone():
+            return None
+        if conn.execute("SELECT id FROM chat_generations WHERE status IN ('RUNNING','CANCEL_REQUESTED') LIMIT 1").fetchone():
             return None
         row = conn.execute("SELECT * FROM runs WHERE status='QUEUED' ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1").fetchone()
         if row:
@@ -97,11 +103,22 @@ def heartbeat():
             # Single installed worker; only renew a lease while this process executes it.
             if current[0]:
                 db.query("UPDATE runs SET lease_until=now()+interval '30 seconds' WHERE id=%s AND status IN ('RUNNING','CANCEL_REQUESTED')", (current[0],))
+            if current_chat[0]:
+                db.query("UPDATE chat_generations SET lease_until=now()+interval '30 seconds' WHERE id=%s AND status IN ('RUNNING','CANCEL_REQUESTED')", (current_chat[0],))
         except Exception:
             pass
         stopping.wait(5)
 
 current = [None]
+current_chat = [None]
+
+def claim_work():
+    recover_tasks()
+    chat.recover()
+    oldest=db.query("SELECT kind FROM (SELECT 'task' AS kind,created_at FROM runs WHERE status='QUEUED' UNION ALL SELECT 'chat' AS kind,created_at FROM chat_generations WHERE status='QUEUED') q ORDER BY created_at LIMIT 1",one=True)
+    if not oldest: return None,None
+    kind=oldest['kind']
+    return kind,chat.claim() if kind=='chat' else claim()
 
 def main():
     for sig in (signal.SIGTERM, signal.SIGINT):
@@ -116,17 +133,24 @@ def main():
         try:
             while not stopping.is_set():
                 try:
-                    run = claim()
+                    kind,run = claim_work()
                     if not run:
                         stopping.wait(1)
                         continue
-                    current[0] = run['id']
+                    if kind=='chat':
+                        current_chat[0]=run['id']
+                    else:
+                        current[0] = run['id']
                     try:
-                        execute(run)
+                        chat.execute(run,stopping) if kind=='chat' else execute(run)
                     except Exception as exc:
-                        finish(run['id'], 'FAILED', error='Inference failed ('+type(exc).__name__+'). Check model availability and connectivity.')
+                        if kind=='chat':
+                            chat.finish(run,'FAILED',error='Reply failed. Check model connectivity and retry.')
+                        else:
+                            finish(run['id'], 'FAILED', error='Inference failed ('+type(exc).__name__+'). Check model availability and connectivity.')
                     finally:
                         current[0] = None
+                        current_chat[0] = None
                 except Exception:
                     stopping.wait(3)
         finally:

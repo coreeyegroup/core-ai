@@ -160,7 +160,7 @@ def submit_run(body: Run, user: User):
     ident = uuid.uuid4()
     with db.connect() as conn:
         conn.execute('SELECT pg_advisory_xact_lock(187875435)')
-        if conn.execute("SELECT count(*) AS n FROM runs WHERE status IN ('QUEUED','RUNNING','CANCEL_REQUESTED')").fetchone()['n'] >= 20:
+        if conn.execute("SELECT (SELECT count(*) FROM runs WHERE status IN ('QUEUED','RUNNING','CANCEL_REQUESTED'))+(SELECT count(*) FROM chat_generations WHERE status IN ('QUEUED','RUNNING','CANCEL_REQUESTED')) AS n").fetchone()['n'] >= 20:
             raise HTTPException(409, 'The queue is full. Wait or cancel an existing task.')
         agent = conn.execute('SELECT * FROM agents WHERE id=%s AND enabled', (body.agent_id,)).fetchone()
         if not agent or not conn.execute('SELECT id FROM projects WHERE id=%s', (body.project_id,)).fetchone():
@@ -234,3 +234,7 @@ def tools(user: User):
 @app.get('/api/v1/integrations')
 def integrations(user: User):
     return {'connected': [], 'policy':'Optional versioned API connectors. No other product is required or configured.'}
+
+# Chat is an independent product module, sharing only local identity and inference.
+from .chat import router as chat_router
+app.include_router(chat_router)

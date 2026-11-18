@@ -1,6 +1,6 @@
 # Software and model licensing
 
-CORE-AI application source is MIT licensed. It uses open-source React, TypeScript, Vite, FastAPI, Uvicorn, HTTPX, Psycopg, PostgreSQL, Caddy and WireGuard. Consult each upstream project's license when redistributing dependencies. The Python/Node installer downloads official releases with declared checksums.
+CORE-AI application source is MIT licensed. It uses open-source React, TypeScript, Vite, FastAPI, Uvicorn, HTTPX, Psycopg, react-markdown, remark-gfm, PostgreSQL, Caddy and WireGuard. Consult each upstream project's license when redistributing dependencies. The Python/Node installer downloads official releases with declared checksums.
 
 The active application does not use AnythingLLM or Open WebUI and has no hosted VPN control-plane dependency. Their previous local data/container images may remain solely for migration recovery; they are not a runtime requirement.
 

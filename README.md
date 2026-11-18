@@ -75,6 +75,7 @@ The Windows installer installs missing WireGuard/OpenSSH, generates/preserves th
 
 | Workbench panel | Implemented operation |
 | --- | --- |
+| Chat | Saved private conversations, incremental replies, model/style selection, stop/regenerate, non-destructive edit branches, text/code attachments, safe Markdown and export |
 | Overview | Database-backed project/agent/document/task counts and worker heartbeat |
 | Projects | Create and list separate project contexts |
 | Agents | Create, edit, disable and version agent instructions; tasks snapshot instructions/version |
@@ -87,11 +88,25 @@ The Windows installer installs missing WireGuard/OpenSSH, generates/preserves th
 | Operations | Persisted audit/tool lifecycle events |
 | Settings | Themes, text size, density, rail/status visibility and tab wrapping |
 
+Chat is the default entry point and works without first creating a project or agent. Its conversation sidebar can be hidden/shown from the always-visible top-left control or Ctrl B; on mobile it opens as a dismissible drawer. Chat and Workbench modes share the same product identity and data. The Workbench preserves the operational modules.
+
 The shell follows COREI-OS-MINI's workbench patterns: grouped navigation, explorer, tab groups, up to four splits, inspector, activity/runtime panel, keyboard command palette, pin/close/open-alone/detach controls, saved workspace layouts, themes and narrow-screen behavior. The application operations, database and service identity are CORE-AI's own.
 
 This release implements a **fixed retrieval → local inference workflow**, using a versioned agent's instructions. It is the custom foundation for an agent platform. Model-directed tool loops, coding sandboxes, external product actions, scheduled workflows, semantic embeddings, multi-user role administration and SSO are **not implemented** and are not presented as working controls. Existing documents/chat histories from third-party dashboards are archived, not automatically converted.
 
-The local model list is discovery, not a capability certification. Do not use embedding models for generation. Model failures are recorded, not replaced with fabricated results. Output is displayed as text, not executable HTML.
+The local model list is discovery, not a capability certification. Do not use embedding models for generation. Model failures are recorded, not replaced with fabricated results. Chat output supports safe Markdown, tables and code blocks. Raw HTML and remote image rendering are disabled. Task artifacts remain plain text.
+
+## Chat for general and professional work
+
+- Start a new conversation, choose an installed text-generation model and send a message. No project or agent setup is required.
+- Switch between General and Professional response styles; optionally set a project, custom response instructions, temperature and maximum reply tokens under Options.
+- Replies stream into durable PostgreSQL message records. The browser refreshes the active reply incrementally; closing the browser does not cancel a generation.
+- Stop keeps the partial reply. Regenerate and Edit & branch create a new conversation branch, preserving the original thread.
+- Search, rename, pin, archive/restore or delete conversations. Delete requires confirmation in the UI and is blocked while a reply is active. Export downloads the conversation as Markdown.
+- Attach up to four text/code files, at most 32,000 combined characters. Binary/PDF/image parsing, vision, web browsing and voice are not implemented and are not presented as available attachment types.
+- Recent model context is bounded to 20 messages and 24,000 characters, plus system preferences and optional project excerpts. Large attachments may be excerpted; the full original text remains saved with the message. This is bounded local inference, not an unlimited context promise.
+- Chat and professional tasks share one FIFO inference slot and a combined queue limit of 20. This protects the initial laptop deployment.
+- Conversation history is private to its owning CORE-AI user. The UI keeps only the selected conversation ID and layout preferences in browser storage; messages and files remain in the product database.
 
 ## Security and independence
 

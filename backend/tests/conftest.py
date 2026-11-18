@@ -11,7 +11,7 @@ def database():
     os.environ['CORE_AI_ORIGIN']='http://testserver'
     from pathlib import Path
     db.migrate(Path(__file__).resolve().parents[1]/'sql')
-    db.query('TRUNCATE events,sessions,runs,documents,agents,projects,users,worker_status,settings RESTART IDENTITY CASCADE')
+    db.query('TRUNCATE chat_generations,chat_messages,conversations,events,sessions,runs,documents,agents,projects,users,worker_status,settings RESTART IDENTITY CASCADE')
     auth.seed('administrator','correct-password-123')
     yield
 

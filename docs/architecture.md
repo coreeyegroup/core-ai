@@ -50,3 +50,13 @@ All authenticated accounts currently have the administrator tier. Project separa
 7. Move inference to capable VPS hardware by changing the private Ollama endpoint, then validate latency, memory and concurrency. Do not promise all large models fit the current VPS.
 
 Workflows, scheduling, semantic search, workflow versioning, policy approvals, multi-user access administration and SSO require explicit implementation and qualification. The UI does not show fabricated working controls for these future features.
+
+## Conversational workspace — release 1.1.0
+
+The visual reference was refreshed against COREI-OS-MINI tree `45b6a0a5f5d6c65b25882ce411852a9294204bbf`. CORE-AI now uses the same font stack and dense measurement system: 12px UI text, 22px control/table rows, 32px title bar, 28px tabs, flat panel borders and 6px layout spacing. Chat preserves this typography with a bounded reading column.
+
+`conversations`, `chat_messages` and `chat_generations` are added transactionally in migration 002. Every conversation is scoped to its owning user. Generation requests snapshot model/preferences, use unique client request identifiers for idempotent submission, and persist partial answers. Chat and task queues share the existing single worker and inference slot. The API never holds a streaming model request open for a browser: the durable worker performs inference, and the browser reads incremental persisted output.
+
+Conversation state and agent-task state remain separate. General Chat does not create hidden projects or agents and does not imply tool execution. Project context is optional. Edited prompts and regenerated answers create non-destructive branches. Stop requests win over late successful output; worker lease expiry records an interrupted reply with its partial text retained.
+
+The Chat/Workbench switch changes workspace presentation. It does not connect to any other product, change product permissions or create another deployment. The sidebar is available at all widths through an explicit toggle; mobile uses an overlay drawer.

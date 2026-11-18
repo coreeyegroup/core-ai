@@ -1,6 +1,6 @@
 const {test}=require('node:test');const assert=require('node:assert/strict');const ts=require('typescript');const fs=require('node:fs');const vm=require('node:vm');
 const source=fs.readFileSync('src/layout.ts','utf8');const js=ts.transpileModule(source,{compilerOptions:{module:ts.ModuleKind.CommonJS}}).outputText;const box={exports:{}};vm.runInNewContext(js,box);const {restore,defaults,closeTab}=box.exports;
-test('corrupted browser layout resets safely',()=>{for(const s of ['no json','{}','{"version":1}','{"groups":[null]}'])assert.equal(restore(s).active[0],'Overview');});
-test('invalid active pane and dimensions reset',()=>{const l=defaults();l.groups=[['Tasks']];assert.equal(restore(JSON.stringify(l)).active[0],'Overview');l.groups=[['Overview']];l.leftWidth=99999;assert.equal(restore(JSON.stringify(l)).leftWidth,230);});
-test('closing last panel retains usable home',()=>{const l=closeTab(defaults(),'Overview',0);assert.equal(l.groups.length,1);assert.equal(l.active[0],'Overview');});
-test('closing a split clamps focused group',()=>{const l=defaults();l.groups=[['Overview'],['Tasks']];l.active=['Overview','Tasks'];l.focus=1;const out=closeTab(l,'Tasks',1);assert.equal(out.focus,0);assert.equal(out.groups.length,1);});
+test('corrupted browser layout resets safely',()=>{for(const s of ['no json','{}','{"version":1}','{"groups":[null]}'])assert.equal(restore(s).active[0],'Chat');});
+test('invalid active pane and dimensions reset',()=>{const l=defaults();l.groups=[['Tasks']];assert.equal(restore(JSON.stringify(l)).active[0],'Chat');l.groups=[['Chat']];l.leftWidth=99999;assert.equal(restore(JSON.stringify(l)).leftWidth,260);});
+test('closing last panel retains usable home',()=>{const l=closeTab(defaults(),'Chat',0);assert.equal(l.groups.length,1);assert.equal(l.active[0],'Chat');});
+test('closing a split clamps focused group',()=>{const l=defaults();l.groups=[['Chat'],['Tasks']];l.active=['Chat','Tasks'];l.focus=1;const out=closeTab(l,'Tasks',1);assert.equal(out.focus,0);assert.equal(out.groups.length,1);});

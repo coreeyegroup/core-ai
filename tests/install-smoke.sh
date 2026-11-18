@@ -44,3 +44,32 @@ req=urllib.request.Request('http://127.0.0.1:18787/api/v1/session',data=json.dum
 assert json.load(urllib.request.urlopen(req))['username']=='ci-renamed'
 print('Local credential reset works against the installed API without rebuilding')
 PY
+# Exercise the actual installed queue worker against a deterministic local provider.
+python tests/ollama_fixture.py > /tmp/core-ai-provider-fixture.log 2>&1 &
+TASK_PROVIDER_PID=$!
+trap 'kill "$TASK_PROVIDER_PID" 2>/dev/null || true' EXIT
+python - <<'PY'
+import json,time,uuid,urllib.request
+base='http://127.0.0.1:18787/api/v1/'
+headers={'Content-Type':'application/json','Origin':'https://ai.example.invalid'}
+def call(path,body=None):
+    req=urllib.request.Request(base+path,data=json.dumps(body).encode() if body is not None else None,headers=headers)
+    r=urllib.request.urlopen(req,timeout=5)
+    if path=='session':headers['Cookie']=r.headers['Set-Cookie'].split(';',1)[0]
+    return json.load(r)
+s=call('session',{'username':'ci-renamed','password':'abc123'});headers['x-core-ai-csrf']=s['csrf']
+c=call('chat/conversations',{'model':'qwen3:4b','title':'Native chat verification'})
+call('chat/conversations/'+c['id']+'/messages',{'model':'qwen3:4b','content':'Verify persisted streaming','request_id':str(uuid.uuid4())})
+partial=False
+for _ in range(150):
+    reply=call('chat/conversations/'+c['id'])['messages'][-1]
+    partial=partial or bool(reply['content'] and reply['status']=='RUNNING')
+    if reply['status']=='COMPLETE':
+        assert reply['content']=='Deterministic streamed CI reply.'
+        assert partial,'A partial streamed reply was not observed'
+        print('Native chat: real API, queue worker, incremental persistence and completed reply verified')
+        break
+    assert reply['status']!='FAILED',reply
+    time.sleep(.1)
+else:raise AssertionError('Native chat worker did not complete')
+PY

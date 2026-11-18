@@ -1,5 +1,6 @@
 import {useEffect,useState, type FormEvent} from 'react';
 import {api} from './api';
+import Chat from './Chat';
 import {views,type View} from './layout';
 import {themes,type Appearance} from './appearance';
 type Row=Record<string,any>;
@@ -12,8 +13,9 @@ const when=(v:string|null)=>v?new Date(v).toLocaleString():'—';
 export function ErrorNote({error}:{error:string}){return error?<div className="error" role="alert">{error}</div>:null;}
 function Empty({children}:{children:React.ReactNode}){return <div className="empty">{children}</div>;}
 function Status({value}:{value:string}){return <span className={'state '+value.toLowerCase()}>{value.replaceAll('_',' ')}</span>;}
-export function Module({view,tick,refresh,go,appearance,changeAppearance}:{view:View;tick:number;refresh:()=>void;go:(v:View)=>void;appearance:Appearance;changeAppearance:(p:Partial<Appearance>)=>void}){
+export function Module({view,tick,refresh,go,appearance,changeAppearance,visible}:{view:View;visible?:boolean;tick:number;refresh:()=>void;go:(v:View)=>void;appearance:Appearance;changeAppearance:(p:Partial<Appearance>)=>void}){
  switch(view){
+  case 'Chat':return <Chat tick={tick} visible={visible}/>;
   case 'Overview':return <Overview tick={tick} go={go}/>;
   case 'Projects':return <Projects tick={tick} refresh={refresh}/>;
   case 'Agents':return <Agents tick={tick} refresh={refresh}/>;
