@@ -312,11 +312,13 @@ def deploy(release,source,args):
         for i,p in enumerate(units):
             p.write_text(service_text(release,worker=i==1))
         run('systemctl','daemon-reload')
+        restart_after=datetime.datetime.now(datetime.timezone.utc).isoformat()
         run('systemctl','restart','core-ai-api','core-ai-worker')
         wait_ready()
         # Worker heartbeat proves queue service startup rather than only HTTP startup.
         for n in range(20):
-            heartbeat=pg("SELECT count(*) FROM worker_status WHERE heartbeat>now()-interval '20 seconds'",cfg['CORE_AI_DATABASE_URL'].split(':',2)[2].split('@')[0],DATABASE)
+            run('systemctl','is-active','--quiet','core-ai-worker')
+            heartbeat=pg("SELECT count(*) FROM worker_status WHERE heartbeat>'"+restart_after+"'::timestamptz AND heartbeat>now()-interval '20 seconds'",cfg['CORE_AI_DATABASE_URL'].split(':',2)[2].split('@')[0],DATABASE)
             if heartbeat=='1':
                 break
             if n==19:

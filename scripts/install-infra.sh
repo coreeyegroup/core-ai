@@ -7,8 +7,16 @@ if [[ $EUID == 0 ]]; then echo 'Run as your normal Ubuntu user; sudo is requeste
 [[ "$ID" == ubuntu && "$VERSION_ID" == 22.04 || "$ID" == ubuntu && "$VERSION_ID" == 24.04 ]] || { echo 'Ubuntu 22.04 or 24.04 is required.' >&2; exit 1; }
 [[ $(uname -m) == x86_64 ]] || { echo 'This release supports Ubuntu x86_64.' >&2; exit 1; }
 sudo -v
-sudo apt-get update
-sudo apt-get install -y ca-certificates curl git gnupg xz-utils wireguard-tools
+TASK_MISSING=0
+for TASK_COMMAND in curl git gpg xz wg; do
+  command -v "$TASK_COMMAND" >/dev/null || TASK_MISSING=1
+done
+command -v caddy >/dev/null || TASK_MISSING=1
+[[ -x /usr/lib/postgresql/18/bin/postgres ]] || TASK_MISSING=1
+if [[ $TASK_MISSING == 1 ]]; then
+  sudo apt-get update
+  sudo apt-get install -y ca-certificates curl git gnupg xz-utils wireguard-tools
+fi
 if ! command -v caddy >/dev/null; then
   curl --fail --silent --show-error --location https://dl.cloudsmith.io/public/caddy/stable/gpg.key | sudo gpg --dearmor --yes -o /usr/share/keyrings/core-ai-caddy.gpg
   printf '%s\n' 'deb [signed-by=/usr/share/keyrings/core-ai-caddy.gpg] https://dl.cloudsmith.io/public/caddy/stable/deb/debian any-version main' | sudo tee /etc/apt/sources.list.d/core-ai-caddy.list >/dev/null
