@@ -27,3 +27,7 @@ A successfully applied database migration is not automatically rolled back with 
 Use a backup produced by this product. This operation replaces CORE-AI database contents; choose the exact backup before starting. Stop `core-ai-api` and `core-ai-worker`, validate the dump with `pg_restore --list`, restore into a temporary database owned by `core_ai_app`, run schema and row-count checks, and only then replace the live CORE-AI database during the maintenance window. Restore its matching environment if credentials were lost. The cluster administrator must not point recovery at any other product database.
 
 This release deliberately provides backup plus documented recovery requirements; it does not expose a one-click destructive restore control. A successful backup does not by itself establish a tested restore. Perform a disposable restore drill before treating the installation as fully recovery-qualified.
+
+## Isolated restore verification
+
+Run `./core-ai verify-backup` after updating. It creates a fresh consistent dump, restores it into a randomly named temporary database in the dedicated CORE-AI cluster, checks schema/users/projects/artifact access as the application role, records the verification result with that backup, then drops only the temporary database. Live data and running services are retained. CI runs this drill through the native installed deployment. It verifies a current snapshot; off-host recovery and selection/replacement of a live database remain separate operator procedures.

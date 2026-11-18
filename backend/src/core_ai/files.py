@@ -16,8 +16,8 @@ MAX_TEXT=200000
 TEXT={'.txt','.md','.csv','.json','.py','.js','.ts','.tsx','.jsx','.sql','.yaml','.yml','.log','.html','.css','.xml','.toml','.ini','.sh','.ps1','.c','.cpp','.h','.java','.rs','.go','.r','.tex'}
 SUPPORTED=TEXT|{'.pdf','.docx','.xlsx'}
 
-def owned(conn,user,ident):
-    row=conn.execute('SELECT * FROM workspace_files WHERE id=%s AND (owner_id=%s OR %s=\'ADMIN\')',(ident,user['id'],user['role'])).fetchone()
+def owned(conn,user,ident,lock=False):
+    row=conn.execute('SELECT * FROM workspace_files WHERE id=%s AND (owner_id=%s OR %s=\'ADMIN\')'+(' FOR UPDATE' if lock else ''),(ident,user['id'],user['role'])).fetchone()
     if not row:raise HTTPException(404,'File not found.')
     return row
 
@@ -60,7 +60,7 @@ def download(ident:uuid.UUID,user=Depends(auth.session)):
 def remove(ident:uuid.UUID,user=Depends(auth.session)):
     access.writer(user)
     with db.connect() as conn:
-        row=owned(conn,user,ident)
+        row=owned(conn,user,ident,True)
         if row['status']=='PROCESSING':raise HTTPException(409,'Wait for file processing to finish before deleting it.')
         if row['document_id']:
             access.project(conn,user,row['project_id'],True)

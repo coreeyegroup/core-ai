@@ -1,4 +1,4 @@
-# CORE-AI architecture — custom workstation baseline
+# CORE-AI architecture — independent workspace 1.2
 
 ## Independent product contract
 
@@ -8,7 +8,7 @@ Each product owns its database, credentials, authorization, domain logic, servic
 
 ## Reference alignment
 
-Reviewed source: `coreeyegroup/corei-os-mini`, tree `8e746b2ae305593445e431dca29c00f620f02f43` on 2026-11-18. In particular `ui/src/App.tsx`, `layout.ts`, `appearance.ts`, `WorkbenchControls.tsx`, `themes.css`, `shell.css`, `scripts/install-workstation.sh`, `scripts/deploy-workstation.py` and the dedicated PostgreSQL configuration script.
+Reviewed source: `coreeyegroup/corei-os-mini`, tree `620d14fe2aaf9ef8d14bf1e606427273037ed177` on 2026-11-18. In particular `ui/src/App.tsx`, `layout.ts`, `appearance.ts`, `WorkbenchControls.tsx`, `themes.css`, `shell.css`, `scripts/install-workstation.sh`, `scripts/deploy-workstation.py` and the dedicated PostgreSQL configuration script.
 
 Reused/adapted shell controls, icon strokes and theme tokens from that user-owned reference. CORE-AI has a smaller independent shell implementation and its own module content. No trading backend, database tables, order operations, secrets or mandatory runtime calls were copied. Future reference changes do not automatically alter CORE-AI.
 
@@ -35,21 +35,21 @@ Task states: `QUEUED`, `RUNNING`, `CANCEL_REQUESTED`, `CANCELLED`, `SUCCEEDED`, 
 
 ## Current boundaries
 
-This release implements a fixed tool workflow, not autonomous model-directed actions. It provides real persisted agent instructions, tasks, project knowledge retrieval, output artifacts and tool/audit records. It does not execute shell commands, open repositories automatically, push commits, place orders, publish APKs, change infrastructure or perform cross-product writes.
+Analysis mode retrieves project sources and generates a response. Tools mode uses a bounded model-directed loop restricted to explicitly enabled typed project tools; every call rechecks current actor/project permissions. It provides versioned agent definitions, durable task steps, project knowledge, file ingestion and revisioned artifacts. It does not execute shell commands, open repositories automatically, push commits, place orders, publish APKs, change infrastructure or perform cross-product writes.
 
-All authenticated accounts currently have the administrator tier. Project separation constrains retrieval context; it is not multi-tenant authorization. Expand permissions before adding other access tiers or external users.
+ADMIN/EDITOR/VIEWER are server-enforced account roles. Project memberships determine source/task access; administrators have project administration privileges. Private conversations remain owner-scoped; artifacts have explicit private/project visibility. This is project authorization within one deployment, not infrastructure-level tenant isolation.
 
 ## Extension order
 
 1. Qualify this custom baseline on the deployment host and actual laptop models.
 2. Add model-capability evaluations, context/token limits per model and task feedback.
-3. Add constrained model-directed tools, explicit permission scopes and durable approval/reconciliation states as actions are introduced.
+3. Extend the existing typed project tools only after adding explicit approval and reconciliation states for external actions.
 4. Add isolated repository workspaces and test execution without host root or production credentials.
 5. Add optional COREI-OS-MINI API/context panels, initially read-only. Its risk, order, execution and reconciliation controls remain entirely with COREI-OS-MINI.
 6. Add other optional product connectors after inspecting their actual contracts. Each connector stays disabled until configured and validated.
 7. Move inference to capable VPS hardware by changing the private Ollama endpoint, then validate latency, memory and concurrency. Do not promise all large models fit the current VPS.
 
-Workflows, scheduling, semantic search, workflow versioning, policy approvals, multi-user access administration and SSO require explicit implementation and qualification. The UI does not show fabricated working controls for these future features.
+Workflows, scheduling, semantic search, workflow versioning, policy approvals and SSO require explicit implementation and qualification. The UI does not show fabricated working controls for these future features.
 
 ## Conversational workspace — release 1.1.0
 
@@ -60,3 +60,9 @@ The visual reference was refreshed against COREI-OS-MINI tree `45b6a0a5f5d6c65b2
 Conversation state and agent-task state remain separate. General Chat does not create hidden projects or agents and does not imply tool execution. Project context is optional. Edited prompts and regenerated answers create non-destructive branches. Stop requests win over late successful output; worker lease expiry records an interrupted reply with its partial text retained.
 
 The Chat/Workbench switch changes workspace presentation. It does not connect to any other product, change product permissions or create another deployment. The sidebar is available at all widths through an explicit toggle; mobile uses an overlay drawer.
+
+## Workspace migration 003 — release 1.2
+
+Migration 003 adds roles, project ownership/membership/instructions, file queue and raw/extracted content, versioned sources/artifacts, per-task tools and measured runtime counters. It preserves the 001/002 checksums and is additive for the previous release. Upload parsing runs in the restricted worker; unconfigured formats fail visibly. A separate library/editor supports optimistic revisions and safe Markdown previews. The unified sidebar stays present across panels; advanced groups collapse without removing capabilities. Header height is 42px; compact UI rows remain 22px and conversation reading text defaults to 14px independently of the 12px controls.
+
+See [release behavior and limits](release-1.2.md) for resource caps, tool budgets, recovery checks and remaining work.

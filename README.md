@@ -86,17 +86,17 @@ See [release behavior and limits](docs/release-1.2.md) and the [requirements reg
 - Replies stream into durable PostgreSQL message records. The browser refreshes the active reply incrementally; closing the browser does not cancel a generation.
 - Stop keeps the partial reply. Regenerate and Edit & branch create a new conversation branch, preserving the original thread.
 - Search, rename, pin, archive/restore or delete conversations. Delete requires confirmation in the UI and is blocked while a reply is active. Export downloads the conversation as Markdown.
-- Attach up to four text/code files, at most 32,000 combined characters. Binary/PDF/image parsing, vision, web browsing and voice are not implemented and are not presented as available attachment types.
+- Upload supported text/code, PDF text, DOCX or XLSX files; select up to eight processed library files for a message. Extracted excerpts are bounded to 32,000 combined characters. OCR, vision, web browsing and voice remain unavailable.
 - Recent model context is bounded to 20 messages and 24,000 characters, plus system preferences and optional project excerpts. Large attachments may be excerpted; the full original text remains saved with the message. This is bounded local inference, not an unlimited context promise.
 - Chat and professional tasks share one FIFO inference slot and a combined queue limit of 20. This protects the initial laptop deployment.
-- Conversation history is private to its owning CORE-AI user. The UI keeps only the selected conversation ID and layout preferences in browser storage; messages and files remain in the product database.
+- Conversation history is private to its owning CORE-AI user. The UI keeps the selected conversation ID and layout preferences in browser storage; unsent drafts are held in session memory; messages and files remain in the product database.
 
 ## Security and independence
 
 - Product-specific opaque, revocable, eight-hour sessions; scrypt password hashes, same-origin checks and CSRF tokens on mutations; login lockout after repeated failures.
-- This release has a single administrator access tier. All signed-in administrators can access all CORE-AI projects; projects are organizational contexts, not tenant security boundaries. No user invitation API is exposed.
+- ADMIN/EDITOR/VIEWER account roles and project owner/editor/viewer memberships are checked on the server. Administrators manage local accounts; conversation histories remain owner-private. No public signup is exposed.
 - No product-table sharing, broker credentials, host shell tool, Docker socket, root application process or mandatory cloud inference.
-- Tool dispatch is fixed in backend code, not decided by instructions inside uploaded documents. Only project retrieval and bounded model generation are enabled.
+- Tools mode lets the model select only explicitly enabled, typed project tools. Every dispatch rechecks current permissions. Uploaded documents cannot grant access or enable a tool. No host shell or external product action is exposed.
 - The model endpoint accepts explicit private/loopback IPv4 addresses only; redirects and inherited proxy variables are disabled.
 - Interrupted worker leases become visible failed/cancelled tasks. A model answer arriving after a cancellation cannot publish a successful output. Submit a new task deliberately to retry.
 - Server secrets are root-only in `/etc/core-ai/workstation.env`. Application data is in its dedicated PostgreSQL cluster. systemd passes configuration to the unprivileged service account.
