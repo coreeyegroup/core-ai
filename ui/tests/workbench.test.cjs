@@ -68,6 +68,18 @@ test('custom workbench navigates, splits and opens every implemented module',asy
   await act(async()=>{document.querySelector('.chat-composer').dispatchEvent(new dom.window.Event('submit',{bubbles:true,cancelable:true}));await new Promise(r=>setTimeout(r,40));});
   assert.equal(writes.length,1);assert.equal(writes[0].model,'test:latest');
   assert.match(document.querySelector('.conversation').textContent,/A clear explanation/);
+  const userMessage=document.querySelector('.message.user');
+  const assistantMessage=document.querySelector('.message.assistant');
+  await act(async()=>{userMessage.querySelector('.message-fold').click();});
+  assert.equal(userMessage.querySelector('.message-content').hidden,true);
+  assert.equal(assistantMessage.querySelector('.message-content').hidden,false);
+  assert.match(userMessage.querySelector('.message-preview').textContent,/Explain a concept/);
+  await act(async()=>{assistantMessage.querySelector('.message-fold').click();});
+  assert.equal(assistantMessage.querySelector('.message-content').hidden,true);
+  assert.equal(document.querySelector('.fold-all').textContent,'Expand all');
+  await act(async()=>{document.querySelector('.fold-all').click();});
+  assert.equal(userMessage.querySelector('.message-content').hidden,false);
+  assert.equal(assistantMessage.querySelector('.message-content').hidden,false);
   assert.equal(document.querySelector('[aria-label="Message CORE-AI"]').value,'');
   await act(async()=>{[...document.querySelectorAll('.message-actions button')].find(b=>b.textContent==='Open as artifact').click();await new Promise(r=>setTimeout(r,25));});
   assert.ok(document.querySelector('.artifact-editor'));
@@ -141,7 +153,7 @@ test('custom workbench navigates, splits and opens every implemented module',asy
   const change=(element,value)=>{element.value=value;element.dispatchEvent(new dom.window.Event('change',{bubbles:true}));};
   const submit=panel=>panel.querySelector('form').dispatchEvent(new dom.window.Event('submit',{bubbles:true,cancelable:true}));
   const wait=()=>new Promise(r=>setTimeout(r,35));
-  await act(async()=>{document.querySelector('.header-actions [aria-label="New chat pane"]').click();await wait();});
+  await act(async()=>{document.querySelector('[aria-label="Add chat sub-workspace"]').click();await wait();});
   assert.equal(panes().length,2);
   const [left,right]=panes();
   await act(async()=>{
@@ -168,7 +180,10 @@ test('custom workbench navigates, splits and opens every implemented module',asy
   assert.equal(panes()[1].querySelector('[aria-label="Chat model"]').value,'editor:latest');
   await act(async()=>{dom.window.innerWidth=375;dom.window.dispatchEvent(new dom.window.Event('resize'));});
   assert.equal(document.querySelectorAll('.groups>.group:not([hidden])').length,1);
-  await act(async()=>{change(document.querySelector('[aria-label="Switch chat pane"]'),'0');});
+  const chatTabs=document.querySelectorAll('.chat-pane-list button');
+  assert.equal(chatTabs.length,2);
+  await act(async()=>{chatTabs[0].click();});
+  assert.equal(chatTabs[0].getAttribute('aria-current'),'true');
   assert.match(document.querySelector('.groups>.group:not([hidden]) .user-text').textContent,/evidence/i);
   const newChat=document.querySelector('.header-actions [aria-label="New chat"]');
   await act(async()=>{newChat.click();await wait();});

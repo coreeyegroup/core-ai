@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "core-ai"
-version = "1.3.1"
+version = "1.3.2"
 description = "Independent CORE-AI agent workstation"
 requires-python = ">=3.12,<3.15"
 dependencies = ["fastapi==0.141.1", "uvicorn==0.49.0", "psycopg[binary]==3.3.3", "httpx==0.28.1", "python-multipart==0.0.34", "pypdf==7.1.1", "python-docx==1.2.0", "openpyxl==3.1.5", "defusedxml==0.7.1"]

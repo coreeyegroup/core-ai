@@ -1,6 +1,6 @@
 import {createContext,useCallback,useContext,useEffect,useId,useRef,useState,type ReactNode,type FormEvent} from 'react';
 import Markdown from 'react-markdown';
-import {Ellipsis,MessageSquare,Pin,Search} from 'lucide-react';
+import {ChevronDown,ChevronRight,Ellipsis,MessageSquare,Pin,Plus,Search} from 'lucide-react';
 import remarkGfm from 'remark-gfm';
 import {api,newId,uploadFile} from './api';
 import {useSession} from './Session';
@@ -20,6 +20,8 @@ type ChatStore={
  changed:()=>void;
  drafts:React.MutableRefObject<Record<string,Draft>>;
  selections:Record<string,Selection>;
+ titles:Record<string,string>;
+ rememberTitle:(id:string,title:string)=>void;
  selectionRef:React.MutableRefObject<Record<string,Selection>>;
  choose:(pane:string,id:string,project?:{projectId:string|null},expected?:Selection)=>void;
 };
@@ -69,6 +71,8 @@ export function ChatProvider({username,focusedPane,persist,children}:{username:s
  });
  const selectionRef=useRef(selections);
  const [revision,setRevision]=useState(0);
+ const [titles,setTitles]=useState<Record<string,string>>({});
+ const rememberTitle=useCallback((id:string,title:string)=>setTitles(current=>current[id]===title?current:{...current,[id]:title}),[]);
  const choose=useCallback((pane:string,id:string,newChat?:{projectId:string|null},expected?:Selection)=>{
   const current=selectionRef.current[pane]??blankSelection;
   if(expected&&current!==expected)return;
@@ -97,19 +101,36 @@ export function ChatProvider({username,focusedPane,persist,children}:{username:s
    window.removeEventListener('core-ai-project-chat',project);
   };
  },[focusedPane,choose]);
- return <ChatContext.Provider value={{focusedPane,selections,selectionRef,choose,revision,changed,drafts}}>{children}</ChatContext.Provider>;
+ return <ChatContext.Provider value={{focusedPane,selections,selectionRef,choose,revision,changed,drafts,titles,rememberTitle}}>{children}</ChatContext.Provider>;
 }
 export function ChatPane({name,children}:{name:string;children:ReactNode}){
  return <PaneContext.Provider value={name}>{children}</PaneContext.Provider>;
+}
+export function ChatPaneSwitcher({panes,active,open,add,canAdd}:{panes:{index:number;key:string}[];active:number;open:(index:number)=>void;add:()=>void;canAdd:boolean}){
+ const store=useContext(ChatContext);
+ if(!store)return null;
+ return <nav className="chat-pane-strip" aria-label="Chat sub-workspaces">
+  <span className="chat-pane-label">Chats</span>
+  <div className="chat-pane-list">
+   {panes.map(({index,key},order)=>{
+    const id=store.selections[key]?.id;
+    const label=id&&store.titles[id]||'Chat '+(order+1);
+    return <button key={key} type="button" aria-controls={'panel-'+index+'-Chat'} aria-current={index===active?'true':undefined} title={label} onClick={()=>open(index)}>
+     <MessageSquare size={14} aria-hidden="true"/><span>{label}</span>
+    </button>;
+   })}
+  </div>
+  <button className="chat-pane-add" type="button" disabled={!canAdd} aria-label="Add chat sub-workspace" title={canAdd?'Add chat sub-workspace':'Four panes open in this workspace'} onClick={add}><Plus size={16}/></button>
+ </nav>;
 }
 function useChat(){
  const store=useContext(ChatContext),scope=useContext(PaneContext);
  if(!store)throw new Error('Chat workspace is unavailable.');
  const pane=scope??store.focusedPane;
  const selection=store.selections[pane]??blankSelection;
- const {choose,selectionRef,revision,changed,drafts}=store;
+ const {choose,selectionRef,revision,changed,drafts,rememberTitle}=store;
  const select=useCallback((id:string,expected?:Selection)=>choose(pane,id,undefined,expected),[choose,pane]);
- return {...selection,selection,select,isCurrent:()=>selection===(selectionRef.current[pane]??blankSelection),revision,changed,drafts,pane};
+ return {...selection,selection,select,isCurrent:()=>selection===(selectionRef.current[pane]??blankSelection),revision,changed,drafts,pane,rememberTitle};
 }
 function Icon({kind}:{kind:'sidebar'|'new'|'send'|'stop'|'attach'|'chat'}){
  const paths={sidebar:'M3 4h18v16H3z M9 4v16 M5.5 8h1 M5.5 12h1',new:'M12 5v14 M5 12h14',send:'M12 20V4 M5 11l7-7 7 7',stop:'M6 6h12v12H6z',attach:'M8 12l6-6a4 4 0 016 6l-9 9a6 6 0 01-8-8l9-9 M7 15l9-9',chat:'M4 4h16v13H9l-5 4z M8 8h8 M8 12h5'};
@@ -129,10 +150,18 @@ function CodeBlock({children}:{children?:ReactNode}){const ref=useRef<HTMLPreEle
 export function MessageMarkdown({text}:{text:string}){return <div className="message-markdown"><Markdown remarkPlugins={[remarkGfm,remarkMath]} rehypePlugins={[[rehypeKatex,{trust:false,maxExpand:1000,maxSize:10}]]} skipHtml urlTransform={url=>/^(https?:\/\/|mailto:|#)/i.test(url)?url:''} components={{pre:({children})=><CodeBlock>{children}</CodeBlock>,a:({children,href})=><a href={href} target={href?.startsWith('#source:')?undefined:'_blank'} rel="noopener noreferrer" onClick={e=>{if(href?.startsWith('#source:')){e.preventDefault();window.dispatchEvent(new CustomEvent('core-ai-source',{detail:{id:href.slice(8)}}));}}}>{children}</a>,img:({alt})=><span className="attachment-reference">[Image reference: {alt||'image'}]</span>}}>{text.replace(/\[([0-9a-f]{8}-[0-9a-f-]{27})\](?!\()/gi,(_,id)=>'[Source '+id.slice(0,8)+'](#source:'+id+')')}</Markdown></div>;}
 function exportChat(c:Conversation){const text='# '+c.title+'\n\n'+c.messages.map(m=>'## '+(m.role==='user'?'You':'CORE-AI')+'\n\n'+m.content+(m.attachments.length?'\n\nAttachments: '+m.attachments.map(a=>a.name).join(', '):'')).join('\n\n');const url=URL.createObjectURL(new Blob([text],{type:'text/markdown'}));const a=document.createElement('a');a.href=url;a.download='core-ai-conversation.md';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
 export default function Chat({tick,visible=true,sendKey='Enter',chatDefaults=defaultChat}:{tick:number;visible?:boolean;sendKey?:'Enter'|'CtrlEnter';chatDefaults?:ChatDefaults}){
- const {id,select,revision,changed,drafts,newChat,pane,selection,isCurrent}=useChat();
+ const {id,select,revision,changed,drafts,newChat,pane,selection,isCurrent,rememberTitle}=useChat();
  const viewer=useSession().role==='VIEWER';
  const draftSlot=pane+'/'+(id||(newChat?.projectId?'project:'+newChat.projectId:''));
  const optionsId=useId(), messageId=useId();
+ const [folded,setFolded]=useState<ReadonlySet<string>>(()=>new Set());
+ function toggleMessage(id:string){
+  setFolded(current=>{
+   const next=new Set(current);
+   if(next.has(id))next.delete(id);else next.add(id);
+   return next;
+  });
+ }
  const [agents,setAgents]=useState<any[]>([]),[library,setLibrary]=useState<any[]>([]),[picker,setPicker]=useState(false),[uploading,setUploading]=useState<number|null>(null),[jump,setJump]=useState(false);
  const [thread,setThread]=useState<Conversation|null>(null),[error,setError]=useState(''),[loading,setLoading]=useState(false),[busy,setBusy]=useState(false),[stopping,setStopping]=useState(false),[draft,setDraft]=useState(''),[attachments,setAttachments]=useState<Attachment[]>([]),[prefs,setPrefs]=useState<Preferences>({...chatDefaults,model:'',instructions:'',project_id:null}),[settings,setSettings]=useState(false),[modelState,setModelState]=useState<any>(null),[projects,setProjects]=useState<any[]>([]),[edit,setEdit]=useState<Message|null>(null),[copied,setCopied]=useState(''),[notice,setNotice]=useState(''),[modelsBusy,setModelsBusy]=useState(false);
  const fileInput=useRef<HTMLInputElement>(null),scroll=useRef<HTMLDivElement>(null),composer=useRef<HTMLTextAreaElement>(null),hydrated=useRef(''),sequence=useRef(0),alive=useRef(true),request=useRef<{key:string;fingerprint:string}|null>(null),draftKey=useRef(draftSlot),defaultsRef=useRef(chatDefaults),defaultModel=useRef(''),atBottom=useRef(true),sending=useRef(false),prefsRef=useRef(prefs),focusedNewChat=useRef<Selection['newChat']>(null);
@@ -143,7 +172,7 @@ export default function Chat({tick,visible=true,sendKey='Enter',chatDefaults=def
  const patch=(p:Partial<Preferences>)=>setPrefs(x=>({...x,...p}));
  const refreshModels=useCallback(async()=>{setModelsBusy(true);try{const m=await api('models');if(!alive.current)return;setModelState(m);defaultModel.current=m.config.model;if(!prefsRef.current.model)patch({model:defaultModel.current});}catch(e){if(alive.current)setError((e as Error).message);}finally{if(alive.current)setModelsBusy(false);}},[]);
  useEffect(()=>{alive.current=true;void refreshModels();api('projects').then(p=>{if(alive.current)setProjects(p);}).catch(()=>{});return()=>{alive.current=false;sequence.current++;};},[refreshModels]);
- const load=useCallback(async()=>{if(!id)return;const seq=++sequence.current;try{const c=await api('chat/conversations/'+id);if(alive.current&&seq===sequence.current){setThread(c);if(hydrated.current!==id){hydrated.current=id;setPrefs(drafts.current[draftSlot]?.preferences??{model:c.model,mode:c.mode,instructions:c.instructions,project_id:c.project_id,temperature:c.temperature,max_tokens:c.max_tokens,agent_id:c.agent_id});}setError('');}}catch(e){if(alive.current&&seq===sequence.current){setError((e as Error).message);if((e as any).status===404){select('',selection);changed();}}}finally{if(alive.current&&seq===sequence.current)setLoading(false);}},[id,select,changed,drafts,draftSlot,selection]);
+ const load=useCallback(async()=>{if(!id)return;const seq=++sequence.current;try{const c=await api('chat/conversations/'+id);if(alive.current&&seq===sequence.current){setThread(c);rememberTitle(c.id,c.title);if(hydrated.current!==id){hydrated.current=id;setPrefs(drafts.current[draftSlot]?.preferences??{model:c.model,mode:c.mode,instructions:c.instructions,project_id:c.project_id,temperature:c.temperature,max_tokens:c.max_tokens,agent_id:c.agent_id});}setError('');}}catch(e){if(alive.current&&seq===sequence.current){setError((e as Error).message);if((e as any).status===404){select('',selection);changed();}}}finally{if(alive.current&&seq===sequence.current)setLoading(false);}},[id,select,changed,drafts,draftSlot,selection,rememberTitle]);
  useEffect(()=>{
   sequence.current++;
   setThread(null);setEdit(null);setError('');setStopping(false);setPicker(false);
@@ -161,7 +190,7 @@ export default function Chat({tick,visible=true,sendKey='Enter',chatDefaults=def
   if(!visible||!newChat||focusedNewChat.current===newChat||viewer)return;
   const frame=window.requestAnimationFrame(()=>{
    focusedNewChat.current=newChat;
-   composer.current?.focus();
+   if(!document.activeElement?.closest('[aria-modal="true"]'))composer.current?.focus();
   });
   return()=>window.cancelAnimationFrame(frame);
  },[visible,newChat,viewer]);
@@ -172,6 +201,7 @@ export default function Chat({tick,visible=true,sendKey='Enter',chatDefaults=def
  useEffect(()=>{if(!generating)setStopping(false);},[generating]);
  const messages=thread?.id===id?thread.messages:[];
  const lastMessage=messages[messages.length-1];
+ const allFolded=messages.length>0&&messages.every(message=>folded.has(message.id));
  useEffect(()=>{if(atBottom.current&&scroll.current)scroll.current.scrollTop=scroll.current.scrollHeight;},[id,lastMessage?.content,messages.length]);
  useEffect(()=>{if(composer.current){composer.current.style.height='auto';composer.current.style.height=Math.min(180,Math.max(46,composer.current.scrollHeight))+'px';}},[draft]);
  const textModels=(modelState?.models||[]).filter((m:any)=>!/(embed|bge-m3|nomic-embed)/i.test(m.name));
@@ -217,6 +247,39 @@ export default function Chat({tick,visible=true,sendKey='Enter',chatDefaults=def
  return <section className="chat-workspace" aria-label="Chat workspace"><header className="chat-top"><div className="chat-model"><select aria-label="Chat model" value={prefs.model} onChange={e=>patch({model:e.target.value})}><option value="">Choose a model</option>{prefs.model&&!textModels.some((m:any)=>m.name===prefs.model)&&<option value={prefs.model}>{prefs.model}</option>}{textModels.map((m:any)=><option key={m.name}>{m.name}</option>)}</select><span className={'model-connection '+(modelState?.available?'online':'offline')}>{modelState?modelState.available?'Local inference':'Model host offline':'Checking models…'}</span></div><div className="chat-top-actions"><select aria-label="Response style" value={prefs.mode} title={chatModes.find(mode=>mode.value===prefs.mode)?.description} onChange={e=>patch({mode:e.target.value as Preferences['mode']})}>{chatModes.map(({value,label})=><option key={value} value={value}>{label}</option>)}</select><button aria-expanded={settings} aria-controls={optionsId} onClick={()=>setSettings(x=>!x)}>Options</button>{thread&&<button onClick={()=>exportChat(thread)}>Export</button>}<button aria-label="Refresh chat models" disabled={modelsBusy} onClick={()=>void refreshModels()}>↻</button></div></header>
  {settings&&<div className="chat-options" id={optionsId}><label>Project context<select value={prefs.project_id||''} onChange={e=>patch({project_id:e.target.value||null})}><option value="">None · general conversation</option>{projects.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select></label><label>Temperature <span>{prefs.temperature.toFixed(1)}</span><input type="range" min="0" max="1.5" step="0.1" value={prefs.temperature} onChange={e=>patch({temperature:+e.target.value})}/></label><label>Agent profile · instructions<select aria-label="Chat agent profile" value={prefs.agent_id||''} onChange={e=>patch({agent_id:e.target.value||null})}><option value="">Default assistant</option>{agents.filter(a=>a.enabled).map(a=><option key={a.id} value={a.id}>{a.name}</option>)}</select></label><label>Maximum reply tokens<select value={prefs.max_tokens} onChange={e=>patch({max_tokens:+e.target.value})}>{replyTokenOptions.map(n=><option key={n} value={n}>{n}</option>)}</select></label><label className="instructions-field">Response instructions<textarea aria-label="Chat response instructions" maxLength={4000} rows={2} value={prefs.instructions} onChange={e=>patch({instructions:e.target.value})} placeholder="Preferred tone, format, expertise or constraints…"/></label><small>{chatModes.find(mode=>mode.value===prefs.mode)?.description}. Changes apply to your next message.</small></div>}
  <div className="chat-scroll" ref={scroll} onScroll={e=>{const el=e.currentTarget;atBottom.current=el.scrollHeight-el.scrollTop-el.clientHeight<100;setJump(!atBottom.current);}}>
- {loading&&!messages.length?<div className="chat-loading" role="status">Loading conversation…</div>:!messages.length?<div className="chat-welcome"><div className="welcome-mark">◈</div><h1>How can I help?</h1><p>A clear space for everyday questions and professional work.</p><div className="starter-grid">{(prefs.mode==='quick'?starters.general:starters[prefs.mode]).map(([label,text])=><button key={label} disabled={viewer} onClick={()=>{setDraft(current=>current.trim()?(current+'\n\n'+text).slice(0,16000):text);composer.current?.focus();}}><b>{label}</b><span>{text}</span></button>)}</div></div>:<div className="conversation" role="log" aria-label="Conversation messages" aria-live="off"><div className="conversation-label"><span>{thread?.title}</span>{thread?.pinned&&<small>Pinned</small>}{thread?.archived&&<small>Archived · restore in sidebar to continue</small>}</div>{messages.map((m,index)=><article key={m.id} className={'message '+m.role} aria-label={(m.role==='user'?'Your message':'CORE-AI reply')+' '+(index+1)}><div className="message-meta"><span className="message-avatar">{m.role==='user'?'Y':'◈'}</span><b>{m.role==='user'?'You':'CORE-AI'}</b>{m.role==='assistant'&&<span className="message-model">{m.model}</span>}<time>{new Date(m.created_at).toLocaleTimeString(undefined,{hour:'2-digit',minute:'2-digit'})}</time></div><div className="message-content">{m.role==='assistant'?<MessageMarkdown text={m.content}/>:<div className="user-text">{m.content}</div>}{m.attachments.length>0&&<div className="message-files">{m.attachments.map((f,i)=><details key={i}><summary>▧ {f.name}</summary><pre>{f.content}</pre></details>)}</div>}{['QUEUED','RUNNING','CANCEL_REQUESTED'].includes(m.status)&&<div className="reply-state" role="status"><i/>{m.status==='QUEUED'?'Queued · waiting for the inference slot':m.status==='CANCEL_REQUESTED'?'Stopping…':'Generating…'}</div>}{m.error&&<div className="inline-error" role="alert">{m.error}</div>}{m.status==='CANCELLED'&&<small className="reply-note">Stopped · partial reply retained</small>}<div className="message-actions">{m.content&&<button onClick={()=>void copy(m)}>{copied===m.id?'Copied':'Copy'}</button>}{m.role==='user'&&!generating&&!busy&&!viewer&&<button onClick={()=>{setEdit(m);setDraft(m.content);setAttachments(m.attachments);composer.current?.focus();}}>Edit & branch</button>}{m.role==='assistant'&&m.content&&!viewer&&<button onClick={()=>void saveArtifact(m)}>Open as artifact</button>}{m.role==='assistant'&&index===messages.length-1&&!generating&&!viewer&&<button disabled={busy} onClick={()=>void regenerate()}>{m.status==='FAILED'?'Retry':'Regenerate'}</button>}</div></div></article>)}</div>}
+ {loading&&!messages.length?<div className="chat-loading" role="status">Loading conversation…</div>:!messages.length?<div className="chat-welcome"><div className="welcome-mark">◈</div><h1>How can I help?</h1><p>A clear space for everyday questions and professional work.</p><div className="starter-grid">{(prefs.mode==='quick'?starters.general:starters[prefs.mode]).map(([label,text])=><button key={label} disabled={viewer} onClick={()=>{setDraft(current=>current.trim()?(current+'\n\n'+text).slice(0,16000):text);composer.current?.focus();}}><b>{label}</b><span>{text}</span></button>)}</div></div>:<div className="conversation" role="log" aria-label="Conversation messages" aria-live="off">
+  <div className="conversation-label">
+   <span>{thread?.title}</span>{thread?.pinned&&<small>Pinned</small>}{thread?.archived&&<small>Archived · restore in sidebar to continue</small>}
+   <button className="fold-all" type="button" onClick={()=>setFolded(new Set(allFolded?[]:messages.map(message=>message.id)))}>{allFolded?'Expand all':'Collapse all'}</button>
+  </div>
+  {messages.map((m,index)=>{
+   const user=m.role==='user',collapsed=folded.has(m.id);
+   const label=(user?'Your message':'CORE-AI reply')+' '+(index+1);
+   const bodyId=messageId+'-response-'+m.id;
+   const preview=collapsed?(m.content.trim().replace(/\s+/g,' ')||m.attachments.map(file=>file.name).join(', ')):'';
+   return <article key={m.id} className={'message '+m.role} aria-label={label}>
+    <div className="message-meta">
+     <b>{user?'You':'CORE-AI'}</b>{!user&&m.model&&<span className="message-model" title={m.model}>{m.model}</span>}
+     <time dateTime={m.created_at}>{new Date(m.created_at).toLocaleTimeString(undefined,{hour:'2-digit',minute:'2-digit'})}</time>
+     <button type="button" className="message-fold" aria-label={(collapsed?'Expand ':'Collapse ')+label} title={collapsed?'Expand message':'Collapse message'} aria-expanded={!collapsed} aria-controls={bodyId} onClick={()=>toggleMessage(m.id)}>
+      {collapsed?<ChevronRight size={15}/>:<ChevronDown size={15}/>}
+     </button>
+    </div>
+    {collapsed&&preview&&<div className="message-preview">{preview.slice(0,144)}</div>}
+    <div className="message-content" id={bodyId} hidden={collapsed}>
+     {user?<div className="user-text">{m.content}</div>:<MessageMarkdown text={m.content}/>}
+     {m.attachments.length>0&&<div className="message-files">{m.attachments.map((f,i)=><details key={i}><summary>{f.name}</summary><pre>{f.content}</pre></details>)}</div>}
+     <div className="message-actions">
+      {m.content&&<button onClick={()=>void copy(m)}>{copied===m.id?'Copied':'Copy'}</button>}
+      {user&&!generating&&!busy&&!viewer&&<button onClick={()=>{setEdit(m);setDraft(m.content);setAttachments(m.attachments);composer.current?.focus();}}>Edit & branch</button>}
+      {!user&&m.content&&!viewer&&<button onClick={()=>void saveArtifact(m)}>Open as artifact</button>}
+      {!user&&index===messages.length-1&&!generating&&!viewer&&<button disabled={busy} onClick={()=>void regenerate()}>{m.status==='FAILED'?'Retry':'Regenerate'}</button>}
+     </div>
+    </div>
+    {['QUEUED','RUNNING','CANCEL_REQUESTED'].includes(m.status)&&<div className="reply-state" role="status"><i/>{m.status==='QUEUED'?'Queued · waiting for the inference slot':m.status==='CANCEL_REQUESTED'?'Stopping…':'Generating…'}</div>}
+    {m.error&&<div className="inline-error" role="alert">{m.error}</div>}
+    {m.status==='CANCELLED'&&<small className="reply-note">Stopped · partial reply retained</small>}
+   </article>;
+  })}</div>}
  </div><div className="composer-area">{jump&&<button className="jump-latest" onClick={()=>{if(scroll.current)scroll.current.scrollTop=scroll.current.scrollHeight;atBottom.current=true;setJump(false);}}>↓ Jump to latest</button>}{uploading!==null&&<div className="upload-progress" role="status">Uploading {uploading}%<progress max={100} value={uploading}/></div>}{viewer&&<div className="connection-note">Read-only account. An editor role is required to send messages.</div>}{error&&<div className="inline-error" role="alert">{error}</div>}{notice&&<div role="status">{notice}</div>}{modelState&&!modelState.available&&<div className="connection-note">The model host is offline. Start the laptop and Ollama, then refresh models.</div>}{edit&&<div className="edit-banner">Editing an earlier message creates a new branch and preserves the original conversation.<button onClick={()=>{setEdit(null);setDraft('');setAttachments([]);}}>Cancel edit</button></div>}<form className={'chat-composer '+(generating?'is-generating':'')} onSubmit={send}><label className="sr-only" htmlFor={messageId}>Message CORE-AI</label><textarea id={messageId} ref={composer} aria-label="Message CORE-AI" value={draft} maxLength={16000} disabled={viewer} placeholder={generating?'You can draft your next message while CORE-AI replies…':'Message CORE-AI…'} onChange={e=>setDraft(e.target.value)} onKeyDown={e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.nativeEvent.isComposing&&(sendKey==='Enter'||e.ctrlKey||e.metaKey)){e.preventDefault();if(!generating)void send();}}}/>{attachments.length>0&&<div className="composer-files">{attachments.map((a,i)=><span key={i}>▧ {a.name}{a.file_id&&<small> · {a.status?.toLowerCase()}</small>}<button type="button" aria-label={'Remove '+a.name} onClick={()=>setAttachments(x=>x.filter((_,j)=>i!==j))}>×</button></span>)}</div>}<div className="composer-controls"><input type="file" ref={fileInput} className="sr-only" multiple accept=".txt,.md,.csv,.json,.pdf,.docx,.xlsx,.py,.js,.ts,.tsx,.jsx,.sql,.yaml,.yml,.log,.html,.css,.xml,.toml,.ini,.sh,.ps1" onChange={e=>void attach(e.target.files)}/><button className="attach-button" type="button" aria-label="Upload supported files" title="Upload text, code, PDF, DOCX or XLSX" disabled={viewer||uploading!==null} onClick={()=>fileInput.current?.click()}><Icon kind="attach"/></button><button type="button" className="library-picker-button" disabled={viewer} aria-pressed={picker} onClick={()=>void openPicker()}>Library</button><button type="button" className="composer-context" aria-label="Conversation context" aria-expanded={settings} aria-controls={optionsId} title={[prefs.project_id?projects.find(p=>p.id===prefs.project_id)?.name||'Project context':'Private conversation',agents.find(a=>a.id===prefs.agent_id)?.name].filter(Boolean).join(' · ')} onClick={()=>setSettings(x=>!x)}>{prefs.project_id?projects.find(p=>p.id===prefs.project_id)?.name||'Project context':'Private conversation'}</button><span className="composer-hint">{sendKey==='Enter'?'Enter':'Ctrl Enter'} to send · Shift Enter for a new line</span>{generating?<button type="button" className="send-button stop-button" aria-label="Stop reply" disabled={stopping} onClick={()=>void stop()}><Icon kind="stop"/></button>:<button type="submit" className="send-button" aria-label="Send message" disabled={viewer||busy||loading||(!!id&&thread?.id!==id)||uploading!==null||attachments.some(a=>a.file_id&&a.status!=='READY')||!draft.trim()||!prefs.model||!modelState?.available||thread?.archived}><Icon kind="send"/></button>}</div>{picker&&<div className="composer-library"><b>Choose a processed file</b><button type="button" aria-label="Close file picker" onClick={()=>setPicker(false)}>×</button>{library.filter(f=>f.status==='READY').map(f=><button key={f.id} type="button" disabled={attachments.some(a=>a.file_id===f.id)||attachments.length>=4} onClick={()=>{setAttachments(a=>[...a,{name:f.name,content:'',file_id:f.id,status:f.status}]);setPicker(false);}}>▧ {f.name}</button>)}{library.filter(f=>f.status==='READY').length===0&&<p>No ready files. Upload a file or check its processing status in Files.</p>}</div>}</form><div className="composer-footnote"><span>CORE-AI can make mistakes. Check important information.</span><span>Self-hosted · {chatModes.find(mode=>mode.value===prefs.mode)?.label} · Text, PDF & Office files</span></div></div></section>;
 }

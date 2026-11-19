@@ -152,6 +152,8 @@ See [architecture](docs/architecture.md), [migration and recovery](docs/migratio
 
 ### Multi-chat workspaces
 
-Use **New chat** to start a clean conversation in the focused pane. Use **New chat pane** in the header or Layout menu to open a separate pane. Each workspace supports up to four panes. Explorer becomes a drawer on narrower displays, and the pane selector appears when there is insufficient room for split view. The Explorer workspace selector switches between Build, Research, and Operations; saved layouts and open conversations reopen in the same browser for the signed-in account. Search and conversation history open in the focused pane. Unsent drafts stay in memory while the workspace is open.
+Use **New chat** to start a clean conversation in the focused pane. Use **Add chat sub-workspace** in the Chats strip to open a separate pane. Choose a chat in that strip to focus it or switch to it on narrow screens. **New chat pane** is also available in the header or Layout menu. Each workspace supports up to four panes. Explorer becomes a drawer on narrower displays, and the pane selector appears when there is insufficient room for split view. The Explorer workspace selector switches between Build, Research, and Operations; saved layouts and open conversations reopen in the same browser for the signed-in account. Search and conversation history open in the focused pane. Unsent drafts stay in memory while the workspace is open.
 
 Each chat can select its own installed model and response mode: General, Quick, Professional, Deep analysis, Research, or Coding. Modes change answer guidance. Local generation requests share the existing inference queue.
+
+AI replies are left-aligned and your messages appear on the right. Use the arrow beside a message to collapse or expand it, or use **Collapse all** and **Expand all** above the conversation.
