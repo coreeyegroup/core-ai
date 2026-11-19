@@ -152,7 +152,7 @@ See [architecture](docs/architecture.md), [migration and recovery](docs/migratio
 
 ### Multi-chat workspaces
 
-Use **New chat** to start a clean conversation in the focused pane. Use **Add chat sub-workspace** in the Chats strip to open a separate pane. Choose a chat in that strip to focus it or switch to it on narrow screens. **New chat pane** is also available in the header or Layout menu. Each workspace supports up to four panes. Explorer becomes a drawer on narrower displays, and the pane selector appears when there is insufficient room for split view. The Explorer workspace selector switches between Build, Research, and Operations; saved layouts and open conversations reopen in the same browser for the signed-in account. Search and conversation history open in the focused pane. Unsent drafts stay in memory while the workspace is open.
+Within **Chat**, use **+** in the Chats strip to add a conversation tab. Up to 12 conversation tabs fit in one Chat panel. Opening or closing one does not change the workbench layout; saved conversations remain in history. **New chat** opens a fresh tab when the active tab contains a saved conversation. **New chat pane** and **Split workspace** are separate layout controls for opening another workbench group. The Explorer workspace selector switches between Build, Research, and Operations. Layouts and saved conversation tabs reopen in the same browser for the signed-in account, and unsent drafts stay in memory while the workspace is open.
 
 Each chat can select its own installed model and response mode: General, Quick, Professional, Deep analysis, Research, or Coding. Modes change answer guidance. Local generation requests share the existing inference queue.
 

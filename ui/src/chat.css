@@ -25,14 +25,14 @@
  .app .chat-composer textarea{font-size:max(16px,var(--reading-size))}
 }
 
-.chat-pane-strip{flex:none;display:flex;align-items:center;gap:8px;min-width:0;padding:4px 8px;background:var(--chrome);border-bottom:1px solid var(--line)}
+.chat-tab-workspace{height:100%;min-height:0;display:flex;flex-direction:column}.chat-tab-body{flex:1;min-height:0}.chat-pane-strip{flex:none;display:flex;align-items:center;gap:6px;min-width:0;padding:2px 8px;background:var(--chrome);border-bottom:1px solid var(--line)}
 .chat-pane-label{padding-inline:4px;color:var(--muted);font-size:11px}
 .chat-pane-list{display:flex;flex:1;min-width:0;gap:4px;overflow-x:auto;scrollbar-width:thin}
-.app .chat-pane-list button{flex:0 1 160px;min-width:64px;max-width:170px;justify-content:flex-start;gap:6px;padding:4px 8px;min-height:29px;background:transparent;color:var(--muted);border-color:transparent}
+.chat-pane-tab{display:flex;align-items:center;flex:0 1 180px;min-width:88px;max-width:180px;border:1px solid transparent;border-radius:4px}.app .chat-pane-tab button{min-width:0;gap:5px;padding:2px 6px;min-height:25px;background:transparent;color:var(--muted);border-color:transparent}.app .chat-pane-tab [data-chat-tab]{flex:1;justify-content:flex-start}.app .chat-pane-tab .chat-tab-close{flex:none;width:24px;padding:2px}.app .chat-pane-tab .chat-tab-close:hover{background:var(--hover)}
 .chat-pane-list button span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .chat-pane-list button svg{flex-shrink:0}
-.app .chat-pane-list button[aria-current]{border-color:var(--line);box-shadow:inset 0 -2px var(--accent);background:var(--selection);color:var(--selected-text)}
-.app .chat-pane-add{width:30px;height:30px;flex-shrink:0;padding:4px}
+.chat-pane-tab[data-current=true]{border-color:var(--line);box-shadow:inset 0 -2px var(--accent);background:var(--selection)}.app .chat-pane-tab [aria-current]{color:var(--selected-text)}
+.app .chat-pane-add{width:29px;height:27px;flex-shrink:0;padding:4px}
 .message.user{width:fit-content;max-width:85%;margin-left:auto;display:flex;flex-direction:column;align-items:flex-end}
 .message.user .message-content{max-width:100%}
 .message.user .user-text{margin-left:auto}
@@ -42,7 +42,7 @@
 .app .message-fold:hover,.app .message-fold:focus-visible{border-color:var(--line);color:var(--text)}
 @media(max-width:480px){
  .chat-pane-label{display:none}
- .app .chat-pane-list button{min-height:34px;padding-inline:5px;gap:3px}
+ .app .chat-pane-tab button{min-height:32px;padding-inline:4px;gap:3px}
  .app .chat-pane-add{height:34px}
  .message.user{max-width:92%}
  .app .message-fold{min-height:32px;width:32px}
