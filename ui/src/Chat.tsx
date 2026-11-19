@@ -2,7 +2,7 @@ import {createContext,useCallback,useContext,useEffect,useId,useRef,useState,typ
 import Markdown from 'react-markdown';
 import {Ellipsis,MessageSquare,Pin,Search} from 'lucide-react';
 import remarkGfm from 'remark-gfm';
-import {api,uploadFile} from './api';
+import {api,newId,uploadFile} from './api';
 import {useSession} from './Session';
 import {chatModes,defaultChat,replyTokenOptions,type ChatDefaults} from './appearance';
 import remarkMath from 'remark-math';
@@ -82,7 +82,8 @@ export function ChatProvider({username,focusedPane,persist,children}:{username:s
  useEffect(()=>{
   const start=(projectId:string|null)=>{
    const key=focusedPane+'/'+(projectId?'project:'+projectId:'');
-   if(drafts.current[key])delete drafts.current[key].preferences;
+   if(projectId===null)delete drafts.current[key];
+   else if(drafts.current[key])delete drafts.current[key].preferences;
    choose(focusedPane,'',{projectId});
   };
   const fresh=()=>start(null),open=(e:Event)=>choose(focusedPane,(e as CustomEvent).detail.id);
@@ -134,7 +135,7 @@ export default function Chat({tick,visible=true,sendKey='Enter',chatDefaults=def
  const optionsId=useId(), messageId=useId();
  const [agents,setAgents]=useState<any[]>([]),[library,setLibrary]=useState<any[]>([]),[picker,setPicker]=useState(false),[uploading,setUploading]=useState<number|null>(null),[jump,setJump]=useState(false);
  const [thread,setThread]=useState<Conversation|null>(null),[error,setError]=useState(''),[loading,setLoading]=useState(false),[busy,setBusy]=useState(false),[stopping,setStopping]=useState(false),[draft,setDraft]=useState(''),[attachments,setAttachments]=useState<Attachment[]>([]),[prefs,setPrefs]=useState<Preferences>({...chatDefaults,model:'',instructions:'',project_id:null}),[settings,setSettings]=useState(false),[modelState,setModelState]=useState<any>(null),[projects,setProjects]=useState<any[]>([]),[edit,setEdit]=useState<Message|null>(null),[copied,setCopied]=useState(''),[notice,setNotice]=useState(''),[modelsBusy,setModelsBusy]=useState(false);
- const fileInput=useRef<HTMLInputElement>(null),scroll=useRef<HTMLDivElement>(null),composer=useRef<HTMLTextAreaElement>(null),hydrated=useRef(''),sequence=useRef(0),alive=useRef(true),request=useRef<{key:string;fingerprint:string}|null>(null),draftKey=useRef(draftSlot),defaultsRef=useRef(chatDefaults),defaultModel=useRef(''),atBottom=useRef(true),sending=useRef(false),prefsRef=useRef(prefs);
+ const fileInput=useRef<HTMLInputElement>(null),scroll=useRef<HTMLDivElement>(null),composer=useRef<HTMLTextAreaElement>(null),hydrated=useRef(''),sequence=useRef(0),alive=useRef(true),request=useRef<{key:string;fingerprint:string}|null>(null),draftKey=useRef(draftSlot),defaultsRef=useRef(chatDefaults),defaultModel=useRef(''),atBottom=useRef(true),sending=useRef(false),prefsRef=useRef(prefs),focusedNewChat=useRef<Selection['newChat']>(null);
  prefsRef.current=prefs;
  defaultsRef.current=chatDefaults;
  const generation=thread?.id===id?thread.generation:null;
@@ -156,6 +157,14 @@ export default function Chat({tick,visible=true,sendKey='Enter',chatDefaults=def
  },[id,load,newChat,drafts,draftSlot]);
  useEffect(()=>{if(draftKey.current===draftSlot&&(!id||hydrated.current===id))drafts.current[draftSlot]={text:draft,attachments,preferences:prefs};},[draft,attachments,prefs,drafts,draftSlot,id]);
  useEffect(()=>{draftKey.current=draftSlot;},[draftSlot]);
+ useEffect(()=>{
+  if(!visible||!newChat||focusedNewChat.current===newChat||viewer)return;
+  const frame=window.requestAnimationFrame(()=>{
+   focusedNewChat.current=newChat;
+   composer.current?.focus();
+  });
+  return()=>window.cancelAnimationFrame(frame);
+ },[visible,newChat,viewer]);
  useEffect(()=>{if(visible){api('agents').then(setAgents).catch(()=>{});api('projects').then(setProjects).catch(()=>{});}},[tick,visible]);
  useEffect(()=>{if(!attachments.some(a=>a.file_id&&a.status!=='READY'&&a.status!=='FAILED'))return;const timer=setInterval(async()=>{const pending=attachments.filter(a=>a.file_id&&a.status!=='READY'&&a.status!=='FAILED');const done=await Promise.all(pending.map(a=>api('files/'+a.file_id).catch(()=>null)));if(alive.current&&isCurrent())setAttachments(old=>old.map(a=>{const f=done.find(x=>x?.id===a.file_id);return f?{...a,status:f.status}:a;}));},1500);return()=>clearInterval(timer);},[attachments,selection]);
  useEffect(()=>{if(id&&visible)void load();},[tick,revision,id,visible,load]);
@@ -178,7 +187,7 @@ export default function Chat({tick,visible=true,sendKey='Enter',chatDefaults=def
    }
    const body={...prefs,content:draft,attachments:attachments.filter(a=>!a.file_id).map(a=>({name:a.name,content:a.content})),file_ids:attachments.filter(a=>a.file_id).map(a=>a.file_id)};
    const fingerprint=JSON.stringify({conversationId,edit:edit?.id,...body});
-   if(!request.current||request.current.fingerprint!==fingerprint)request.current={key:crypto.randomUUID(),fingerprint};
+   if(!request.current||request.current.fingerprint!==fingerprint)request.current={key:newId(),fingerprint};
    const response=await api('chat/conversations/'+conversationId+(edit?'/fork':'/messages'),'POST',{...body,request_id:request.current.key,...(edit?{message_id:edit.id}:{})});
    request.current=null;
    if(isCurrent()){
@@ -199,7 +208,7 @@ export default function Chat({tick,visible=true,sendKey='Enter',chatDefaults=def
   }finally{sending.current=false;if(alive.current)setBusy(false);}
  }
  async function stop(){if(!id||stopping)return;setStopping(true);try{await api('chat/conversations/'+id+'/stop','POST',{});await load();changed();}catch(e){setError((e as Error).message);setStopping(false);}}
- async function regenerate(){const question=[...messages].reverse().find(m=>m.role==='user');if(!question)return;setBusy(true);setError('');try{const r=await api('chat/conversations/'+id+'/fork','POST',{...prefs,content:question.content,attachments:question.attachments,message_id:question.id,request_id:crypto.randomUUID()});select(r.conversation_id,selection);changed();}catch(e){setError((e as Error).message);}finally{setBusy(false);}}
+ async function regenerate(){const question=[...messages].reverse().find(m=>m.role==='user');if(!question)return;setBusy(true);setError('');try{const r=await api('chat/conversations/'+id+'/fork','POST',{...prefs,content:question.content,attachments:question.attachments,message_id:question.id,request_id:newId()});select(r.conversation_id,selection);changed();}catch(e){setError((e as Error).message);}finally{setBusy(false);}}
  async function attach(files:FileList|null){if(!files||viewer)return;try{if(attachments.length+files.length>4)throw new Error('Attach up to four files.');for(const f of Array.from(files)){if(!isCurrent())break;setUploading(0);const result=await uploadFile(f,prefs.project_id,setUploading);if(alive.current&&isCurrent())setAttachments(old=>[...old,{name:result.name,content:'',file_id:result.id,status:result.status}]);}if(isCurrent())setError('');}catch(e){if(isCurrent())setError((e as Error).message);}finally{setUploading(null);if(fileInput.current)fileInput.current.value='';}}
  async function openPicker(){try{const files=await api('files');if(isCurrent()){setLibrary(files);setPicker(x=>!x);}}catch(e){setError((e as Error).message);}}
  async function saveArtifact(m:Message){try{const result=await api('library/artifacts','POST',{title:thread?.title||'Chat document',kind:'markdown',content:m.content,source_message_id:m.id,project_id:prefs.project_id});window.dispatchEvent(new CustomEvent('core-ai-artifact',{detail:{id:result.id}}));setNotice('Saved as a versioned artifact.');}catch(e){setError((e as Error).message);}}

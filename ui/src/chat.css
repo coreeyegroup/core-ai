@@ -9,3 +9,18 @@
 
 .app .composer-context{font-size:10.5px;min-width:0;text-overflow:ellipsis;overflow:hidden;border-color:transparent;background:transparent}
 .app .composer-context:hover,.app .composer-context[aria-expanded=true]{border-color:var(--line);background:var(--chrome)}
+
+.chat-top-actions,.composer-controls{flex-wrap:wrap}
+.chat-top-actions{min-width:0}
+.chat-top-actions select{max-width:100%}
+.composer-files>span{max-width:100%;overflow-wrap:anywhere}
+.chat-options label{min-width:0}
+.chat-options select{width:100%;min-width:0}
+@container(max-width:460px){
+ .chat-top .chat-model,.chat-top .chat-top-actions{max-width:100%}
+ .app .chat-top select{max-width:100%}
+ .chat-options{grid-template-columns:repeat(2,minmax(0,1fr))}
+}
+@media(max-width:599px){
+ .app .chat-composer textarea{font-size:max(16px,var(--reading-size))}
+}

@@ -61,6 +61,10 @@ test('custom workbench navigates, splits and opens every implemented module',asy
   const starter=[...document.querySelectorAll('.starter-grid button')].find(b=>b.textContent.includes('Understand'));
   await act(async()=>{starter.click();});
   assert.match(document.querySelector('[aria-label="Message CORE-AI"]').value,/Explain a concept/);
+  await act(async()=>{document.querySelector('.new-chat').click();await new Promise(r=>setTimeout(r,25));});
+  assert.equal(document.querySelector('[aria-label="Message CORE-AI"]').value,'','New chat must start with an empty composer');
+  assert.equal(document.activeElement.getAttribute('aria-label'),'Message CORE-AI');
+  await act(async()=>{starter.click();});
   await act(async()=>{document.querySelector('.chat-composer').dispatchEvent(new dom.window.Event('submit',{bubbles:true,cancelable:true}));await new Promise(r=>setTimeout(r,40));});
   assert.equal(writes.length,1);assert.equal(writes[0].model,'test:latest');
   assert.match(document.querySelector('.conversation').textContent,/A clear explanation/);
@@ -99,7 +103,7 @@ test('custom workbench navigates, splits and opens every implemented module',asy
   assert.equal(document.querySelector('[aria-label="Message CORE-AI"]').value,'');
   await act(async()=>{document.querySelector('.new-chat').click();});
   assert.equal(document.querySelector('.composer-context').textContent,'Private conversation');
-  assert.match(document.querySelector('[aria-label="Message CORE-AI"]').value,/trade-offs/);
+  assert.equal(document.querySelector('[aria-label="Message CORE-AI"]').value,'');
 
   await act(async()=>{Object.defineProperty(dom.window,'innerWidth',{value:390,writable:true,configurable:true});dom.window.dispatchEvent(new dom.window.Event('resize'));});
   assert.equal(document.querySelector('.explorer'),null);
@@ -108,6 +112,7 @@ test('custom workbench navigates, splits and opens every implemented module',asy
   assert.ok(document.querySelector('.sidebar-backdrop')&&drawer);
   assert.equal(document.activeElement.getAttribute('aria-label'),'Hide explorer');
   assert.equal(document.querySelector('[aria-label="Explorer width"]'),null);
+  drawer.querySelector('select').focus();
   document.activeElement.dispatchEvent(new dom.window.KeyboardEvent('keydown',{key:'Tab',shiftKey:true,bubbles:true,cancelable:true}));
   assert.equal(document.activeElement.getAttribute('aria-label'),'Open settings');
   await act(async()=>{document.activeElement.dispatchEvent(new dom.window.KeyboardEvent('keydown',{key:'Escape',bubbles:true}));});
@@ -165,6 +170,14 @@ test('custom workbench navigates, splits and opens every implemented module',asy
   assert.equal(document.querySelectorAll('.groups>.group:not([hidden])').length,1);
   await act(async()=>{change(document.querySelector('[aria-label="Switch chat pane"]'),'0');});
   assert.match(document.querySelector('.groups>.group:not([hidden]) .user-text').textContent,/evidence/i);
+  const newChat=document.querySelector('.header-actions [aria-label="New chat"]');
+  await act(async()=>{newChat.click();await wait();});
+  const focusedChat=document.querySelector('.groups>.group:not([hidden]) .chat-workspace');
+  assert.equal(focusedChat.querySelector('textarea').value,'');
+  assert.equal(focusedChat.querySelector('.conversation'),null);
+  assert.equal(panes()[1].querySelector('[aria-label="Chat model"]').value,'editor:latest');
+  await act(async()=>{dom.window.innerWidth=820;dom.window.dispatchEvent(new dom.window.Event('resize'));});
+  assert.equal(document.querySelectorAll('.groups>.group:not([hidden])').length,2);
 
  }finally{await act(async()=>root.unmount());global.fetch=fetchOld;delete global.IS_REACT_ACT_ENVIRONMENT;for(const k of Object.keys(old)){if(old[k])Object.defineProperty(global,k,old[k]);else delete global[k];}if(locationOld)Object.defineProperty(global,'location',locationOld);else delete global.location;dom.window.close();}
 });
