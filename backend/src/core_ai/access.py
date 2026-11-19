@@ -13,6 +13,7 @@ def project(conn,user,ident,write=False):
     if not row or (user.get('role','ADMIN')!='ADMIN' and row['member_role'] is None): raise HTTPException(404,'Project not found or access unavailable.')
     if write:
         writer(user)
+        if row['archived_at'] is not None: raise HTTPException(409,'Restore the archived project before making changes.')
         if user.get('role','ADMIN')!='ADMIN' and row['member_role'] not in ('OWNER','EDITOR'): raise HTTPException(403,'Project editor access is required.')
     return row
 

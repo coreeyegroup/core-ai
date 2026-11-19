@@ -192,7 +192,7 @@ def submit_run(body: Run, user: User):
 @app.get('/api/v1/runs/{ident}')
 def run_detail(ident: uuid.UUID, user: User):
     row = db.query('SELECT * FROM runs WHERE id=%s', (ident,), one=True)
-    if not row:
+    if not row or row['project_id'] is None or row['agent_id'] is None:
         raise HTTPException(404, 'Task not found.')
     with db.connect() as conn:access.project(conn,user,row['project_id'])
     row['steps']=db.query('SELECT * FROM agent_steps WHERE run_id=%s ORDER BY id',(ident,))
@@ -202,8 +202,8 @@ def run_detail(ident: uuid.UUID, user: User):
 @app.post('/api/v1/runs/{ident}/cancel')
 def cancel(ident: uuid.UUID, user: User):
     with db.connect() as conn:
-        task=conn.execute('SELECT project_id FROM runs WHERE id=%s',(ident,)).fetchone()
-        if not task:raise HTTPException(404,'Task not found.')
+        task=conn.execute('SELECT project_id,agent_id FROM runs WHERE id=%s',(ident,)).fetchone()
+        if not task or task['project_id'] is None or task['agent_id'] is None:raise HTTPException(404,'Task not found.')
         access.project(conn,user,task['project_id'],True)
         row = conn.execute("""UPDATE runs SET status=CASE WHEN status='QUEUED' THEN 'CANCELLED' ELSE 'CANCEL_REQUESTED' END,
             finished_at=CASE WHEN status='QUEUED' THEN now() ELSE finished_at END
@@ -252,7 +252,7 @@ def events(user: User):
 
 @app.get('/api/v1/artifacts')
 def artifacts(user: User):
-    return db.query("SELECT id,project_id,model,output,finished_at FROM runs r WHERE status='SUCCEEDED' AND (%s='ADMIN' OR EXISTS(SELECT 1 FROM project_members m WHERE m.project_id=r.project_id AND m.user_id=%s)) ORDER BY finished_at DESC LIMIT 100",(user['role'],user['id']))
+    return db.query("SELECT id,project_id,model,output,finished_at FROM runs r WHERE status='SUCCEEDED' AND r.project_id IS NOT NULL AND r.agent_id IS NOT NULL AND (%s='ADMIN' OR EXISTS(SELECT 1 FROM project_members m WHERE m.project_id=r.project_id AND m.user_id=%s)) ORDER BY finished_at DESC LIMIT 100",(user['role'],user['id']))
 
 @app.get('/api/v1/tools')
 def tools(user: User):

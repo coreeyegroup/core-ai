@@ -93,13 +93,18 @@ See [release behavior and limits](docs/release-1.2.md) and the [requirements reg
 
 ## Connect n8n or another service
 
-In CORE-AI, open **Manage → Connections** as an administrator. Choose a project, an enabled Analysis agent and a local text-generation model. Create a key and save it in your service’s credential store. The key is shown once. CORE-AI stores its hash.
+In CORE-AI, open **Manage → Connections → New connection** as an administrator. Give the connection a name and select the installed text models it may use. Set a default or require the caller to specify a model. A project and an Analysis agent are optional. A linked project provides its instructions and matching sources, so select a project whose contents the receiving service may process.
 
-Each key can submit analysis jobs against the selected project and retrieve the results of its own jobs. The model can use the project's instructions and matching sources, so choose a project whose contents the receiving service may process. Analysis jobs run through the same durable queue as workspace tasks and appear in Tasks. Revoke a key in Connections to block new requests and result access immediately. Previously accepted jobs can still finish.
+The key is shown once. Save it in your service’s credential store. The Connections panel can test an allowed model, view job metadata, pause or resume a key, rotate it, revoke it, and configure request and generation limits. Rotation invalidates the previous key immediately. An already accepted job can finish after a pause or revocation. Existing single-model project keys keep their original model and scope when upgrading.
 
 1. Configure an n8n [HTTP Request](https://docs.n8n.io/integrations/builtin/core-nodes/n8n-nodes-base.httprequest/) node with **Generic Credential Type → Header Auth**. Set the name to `Authorization` and value to `Bearer YOUR_KEY`.
-2. Send a `POST` to `https://ai.coreeye.in/api/v1/automation/jobs` with a JSON body such as `{"request_id":"summary-123","prompt":"Summarize the supplied notes."}`. The API returns HTTP `202` and a job `id`. Use a stable request ID for a retry of the same prompt. Reusing the ID for a different prompt returns `409`.
-3. Use another HTTP Request node with the same credential to `GET https://ai.coreeye.in/api/v1/automation/jobs/{id}`. Use a Wait node between polls with a bounded retry count. Read `output` on `SUCCEEDED`. Stop polling on `FAILED` or `CANCELLED` and inspect `error` or CORE-AI Tasks.
+2. Optionally send `GET https://ai.coreeye.in/api/v1/automation/models` to see the allowed model names and default. A fixed-model key returns only its default.
+3. Send a `POST` to `https://ai.coreeye.in/api/v1/automation/jobs` with JSON such as `{"request_id":"summary-123","prompt":"Summarize the supplied notes.","model":"qwen3:4b"}`. Omit `model` if the connection has a default. The API returns HTTP `202` and a job `id`. Retries should reuse the same request ID and payload. A changed explicit model or prompt for that ID returns `409`.
+4. Poll `GET https://ai.coreeye.in/api/v1/automation/jobs/{id}` with the same credential and a bounded retry count. Read `output` on `SUCCEEDED`. Stop polling on `FAILED` or `CANCELLED`. For a submission rate limit, respect the `Retry-After` header.
+
+## Work inside a project
+
+Open or create a project to see its chats, sources, instructions, artifacts, and members. Start a new chat from the project to preselect its context and any project model or response-style defaults. Moving a chat changes context for future replies and keeps the conversation private to its owner. Project sources and explicitly shared artifacts follow project membership. Owners and administrators can archive or restore projects from Settings. Archived projects remain readable and can be restored before accepting new project work.
 
 ## Security and independence
 

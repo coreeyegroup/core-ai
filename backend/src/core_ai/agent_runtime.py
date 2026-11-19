@@ -28,7 +28,8 @@ def actor(run,write=False):
         user=conn.execute('SELECT id,role FROM users WHERE id=%s AND enabled',(run['requested_by'],)).fetchone()
         if not user:raise ValueError('The requesting account is inactive.')
         access.writer(user)
-        access.project(conn,user,run['project_id'],write)
+        if run['project_id'] is not None:
+            access.project(conn,user,run['project_id'],write)
         return user
 
 def check_cancel(run,stopping):

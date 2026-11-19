@@ -105,3 +105,53 @@ def test_model_without_tool_capability_is_rejected(signed,work,monkeypatch):
     monkeypatch.setattr(models,'inspect_model',lambda _: {'capabilities':['completion']})
     import pytest
     with pytest.raises(ValueError,match='tool support'):agent_runtime.execute(run,threading.Event())
+
+
+def test_project_workspace_filters_chat_movement_and_archive(signed, work):
+    project = work['project_id']
+    other = signed.post('/api/v1/projects', json={'name': 'Other project'}).json()['id']
+    settings = {'name': 'Workspace', 'instructions': 'Use project context.', 'default_mode': 'research',
+                'default_model': work['model']}
+    assert signed.put(f'/api/v1/projects/{project}', json=settings).status_code == 200
+    detail = next(item for item in signed.get('/api/v1/projects').json() if item['id'] == project)
+    assert detail['default_model'] == work['model'] and detail['default_mode'] == 'research'
+
+    chat = signed.post('/api/v1/chat/conversations', json={'title': 'Existing chat', 'model': work['model']}).json()['id']
+    path = f'/api/v1/chat/conversations/{chat}/project'
+    assert signed.put(path, json={'project_id': project}).status_code == 200
+    assert [item['id'] for item in signed.get('/api/v1/chat/conversations', params={'project_id': project}).json()] == [chat]
+    assert signed.get('/api/v1/chat/conversations', params={'project_id': other}).json() == []
+
+    source = signed.post('/api/v1/documents', json={
+        'project_id':project,'title':'Matching reference','content':'matching reference',
+    }).json()['id']
+    submitted = signed.post(f'/api/v1/chat/conversations/{chat}/messages', json={
+        'content':'matching reference','project_id':project,'model':work['model'],'request_id':str(uuid.uuid4()),
+    }).json()
+    db.event('chat.sources', detail={'generation_id':submitted['id'],'sources':[source]})
+    reply = signed.get(f'/api/v1/chat/conversations/{chat}').json()['messages'][-1]
+    assert reply['sources'] == [{'id':source,'title':'Matching reference'}]
+    assert signed.put(path,json={'project_id':other}).status_code == 409
+    assert signed.post(f'/api/v1/chat/conversations/{chat}/stop').status_code == 200
+
+    assert signed.put(f'/api/v1/projects/{project}/instructions', json={
+        'instructions':'New instructions','default_mode':'coding',
+    }).status_code == 200
+    assert signed.put(f'/api/v1/projects/{project}', json={'name':'Renamed'}).status_code == 200
+    detail = next(item for item in signed.get('/api/v1/projects').json() if item['id'] == project)
+    assert detail['instructions'] == 'New instructions' and detail['default_mode'] == 'coding'
+
+    for ident in (project, other):
+        assert signed.post('/api/v1/library/artifacts', json={
+            'title': ident, 'kind': 'markdown', 'content': 'Output', 'project_id': ident,
+        }).status_code == 201
+    artifacts = signed.get('/api/v1/library/artifacts', params={'project_id': project}).json()
+    assert [item['project_id'] for item in artifacts] == [project]
+    assert signed.get('/api/v1/files', params={'project_id': project}).json() == []
+
+    assert signed.put(f'/api/v1/projects/{project}/archive', json={'archived': True}).status_code == 200
+    assert signed.post('/api/v1/chat/conversations', json={'project_id': project, 'model': work['model']}).status_code == 409
+    assert signed.put(path, json={'project_id': None}).status_code == 200
+    assert signed.put(path, json={'project_id': project}).status_code == 409
+    assert signed.put(f'/api/v1/projects/{project}/archive', json={'archived': False}).status_code == 200
+    assert signed.put(path, json={'project_id': project}).status_code == 200

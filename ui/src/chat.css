@@ -84,3 +84,7 @@ select option{background-color:var(--input);color:var(--text)}
 .conversation-dialog h2,.conversation-dialog p{margin:0}
 .conversation-dialog form>div{display:flex;justify-content:flex-end;gap:6px;margin-top:5px}
 .conversation-dialog .chat-menu-danger{color:var(--danger)}
+
+.message-sources{margin-block:7px;color:var(--muted);font-size:11px}
+.message-sources summary{cursor:pointer}
+.app .message-sources button{display:block;max-width:100%;overflow-wrap:anywhere;margin:3px 0 0 10px}

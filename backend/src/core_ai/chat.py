@@ -82,7 +82,9 @@ def owned(conn, ident, user_id, lock=False):
 
 
 def project_check(conn,project_id,user):
-    if project_id:access.project(conn,user,project_id)
+    if project_id:
+        project=access.project(conn,user,project_id)
+        if project['archived_at'] is not None:raise HTTPException(409,'Restore the archived project before using it for chat.')
 
 
 def create(conn,user_id,body, title=None, forked_from=None):
@@ -169,6 +171,23 @@ def conversation(ident:uuid.UUID,user=Depends(auth.session)):
     with db.connect() as conn:
         row=owned(conn,ident,user['id'])
         row['messages']=conn.execute('SELECT * FROM chat_messages WHERE conversation_id=%s ORDER BY sequence',(ident,)).fetchall()
+        sources=conn.execute("""
+            SELECT DISTINCT g.assistant_message_id,d.id,d.title
+            FROM chat_generations g
+            JOIN events e ON e.action='chat.sources' AND e.detail->>'generation_id'=g.id::text
+            CROSS JOIN LATERAL jsonb_array_elements_text(e.detail->'sources') AS selected(id)
+            JOIN documents d ON d.id=selected.id::uuid AND d.project_id=g.project_id
+            WHERE g.conversation_id=%s AND (%s='ADMIN' OR EXISTS (
+                SELECT 1 FROM project_members m WHERE m.project_id=d.project_id AND m.user_id=%s))
+            ORDER BY d.title,d.id
+        """,(ident,user['role'],user['id'])).fetchall()
+        sources_by_message={}
+        for source in sources:
+            sources_by_message.setdefault(source['assistant_message_id'],[]).append(
+                {'id':source['id'],'title':source['title']})
+        for message in row['messages']:
+            if message['id'] in sources_by_message:
+                message['sources']=sources_by_message[message['id']]
         row['generation']=conn.execute("SELECT id,status,model,created_at FROM chat_generations WHERE conversation_id=%s AND status IN ('QUEUED','RUNNING','CANCEL_REQUESTED')",(ident,)).fetchone()
     return row
 
@@ -193,6 +212,27 @@ def metadata(ident:uuid.UUID,body:Metadata,user=Depends(auth.session)):
             conn.execute(f'UPDATE conversations SET {name}=%s,updated_at=now() WHERE id=%s',(value,ident))
         db.event('chat.metadata_updated',user['id'],{'conversation_id':str(ident),'fields':list(values)},conn=conn)
     return {'ok':True}
+
+class ConversationProject(BaseModel):
+    project_id: uuid.UUID | None
+
+
+@router.put('/conversations/{ident}/project')
+def move_conversation(ident: uuid.UUID, body: ConversationProject, user=Depends(auth.session)):
+    with db.connect() as conn:
+        row=owned(conn,ident,user['id'],True)
+        if row['project_id']==body.project_id:
+            return {'ok': True}
+        if conn.execute("""
+            SELECT 1 FROM chat_generations WHERE conversation_id=%s
+            AND status IN ('QUEUED','RUNNING','CANCEL_REQUESTED')
+        """,(ident,)).fetchone():
+            raise HTTPException(409,'Stop the active reply before moving this conversation.')
+        project_check(conn,body.project_id,user)
+        conn.execute('UPDATE conversations SET project_id=%s,updated_at=now() WHERE id=%s',(body.project_id,ident))
+        db.event('chat.project_updated',user['id'],{'conversation_id':str(ident)},conn=conn)
+    return {'ok': True}
+
 
 @router.delete('/conversations/{ident}')
 def delete_conversation(ident:uuid.UUID,user=Depends(auth.session)):

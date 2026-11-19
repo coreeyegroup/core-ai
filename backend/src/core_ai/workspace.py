@@ -7,6 +7,7 @@ from fastapi import APIRouter,Depends,HTTPException
 from pydantic import BaseModel,Field,field_validator
 from typing import Literal
 from . import access,auth,db
+from .chat import ResponseMode
 
 router=APIRouter(prefix='/api/v1')
 
@@ -14,14 +15,70 @@ class ProjectEdit(BaseModel):
     name:str=Field(min_length=1,max_length=120)
     description:str=Field(default='',max_length=4000)
     instructions:str=Field(default='',max_length=8000)
+    default_model:str|None=Field(default=None,min_length=1,max_length=120,pattern=r'^[A-Za-z0-9_.:/-]+$')
+    default_mode:ResponseMode|None=None
 
 @router.put('/projects/{ident}')
 def edit_project(ident:uuid.UUID,body:ProjectEdit,user=Depends(auth.session)):
     with db.connect() as conn:
         access.project(conn,user,ident,True)
-        conn.execute('UPDATE projects SET name=%s,description=%s,instructions=%s,updated_at=now() WHERE id=%s',(body.name,body.description,body.instructions,ident))
+        conn.execute('''
+            UPDATE projects SET name=%s,description=%s,
+                instructions=CASE WHEN %s THEN %s ELSE instructions END,
+                default_model=CASE WHEN %s THEN %s ELSE default_model END,
+                default_mode=CASE WHEN %s THEN %s ELSE default_mode END,updated_at=now()
+            WHERE id=%s
+        ''',(body.name,body.description,'instructions' in body.model_fields_set,body.instructions,'default_model' in body.model_fields_set,
+             body.default_model,'default_mode' in body.model_fields_set,body.default_mode,ident))
         db.event('project.updated',user['id'],{'project_id':str(ident)},conn=conn)
     return {'ok':True}
+
+class ProjectInstructions(BaseModel):
+    instructions: str = Field(max_length=8000)
+    default_model: str | None = Field(default=None,min_length=1,max_length=120,pattern=r'^[A-Za-z0-9_.:/-]+$')
+    default_mode: ResponseMode | None = None
+
+
+@router.put('/projects/{ident}/instructions')
+def edit_project_instructions(ident: uuid.UUID, body: ProjectInstructions, user=Depends(auth.session)):
+    with db.connect() as conn:
+        access.project(conn,user,ident,True)
+        conn.execute("""
+            UPDATE projects SET instructions=%s,default_model=%s,default_mode=%s,updated_at=now()
+            WHERE id=%s
+        """,(body.instructions,body.default_model,body.default_mode,ident))
+        db.event('project.instructions_updated',user['id'],{'project_id':str(ident)},conn=conn)
+    return {'ok': True}
+
+
+class ProjectArchive(BaseModel):
+    archived: bool
+
+
+@router.put('/projects/{ident}/archive')
+def archive_project(ident: uuid.UUID, body: ProjectArchive, user=Depends(auth.session)):
+    access.writer(user)
+    with db.connect() as conn:
+        project = access.project(conn, user, ident)
+        if user['role'] != 'ADMIN' and project['owner_id'] != user['id']:
+            raise HTTPException(403, 'Project owner access is required.')
+        conn.execute("""
+            UPDATE projects SET archived_at=CASE WHEN %s THEN coalesce(archived_at,now()) END,
+               updated_at=now() WHERE id=%s
+        """, (body.archived, ident))
+        db.event('project.archived' if body.archived else 'project.restored', user['id'],
+                 {'project_id':str(ident)}, conn=conn)
+    return {'ok': True}
+
+
+@router.get('/projects/{ident}/connections')
+def project_connections(ident: uuid.UUID, user=Depends(auth.session)):
+    access.admin(user)
+    return db.query("""
+        SELECT id,name,model,allowed_models,paused,expires_at,revoked_at
+        FROM automation_connections WHERE project_id=%s ORDER BY created_at DESC
+    """, (ident,))
+
 
 @router.get('/projects/{ident}/members')
 def members(ident:uuid.UUID,user=Depends(auth.session)):
@@ -127,7 +184,7 @@ def validate_artifact(conn,user,body):
     if body.source_message_id and not conn.execute('SELECT m.id FROM chat_messages m JOIN conversations c ON c.id=m.conversation_id WHERE m.id=%s AND c.user_id=%s',(body.source_message_id,user['id'])).fetchone():raise HTTPException(404,'Source message not found.')
     if body.source_run_id:
         run=conn.execute('SELECT project_id FROM runs WHERE id=%s',(body.source_run_id,)).fetchone()
-        if not run:raise HTTPException(404,'Source task not found.')
+        if not run or run['project_id'] is None:raise HTTPException(404,'Source task not found.')
         access.project(conn,user,run['project_id'])
 
 def new_artifact(conn,user,body):
@@ -140,11 +197,14 @@ def new_artifact(conn,user,body):
     return ident
 
 @router.get('/library/artifacts')
-def artifact_list(source_message_id:uuid.UUID|None=None,user=Depends(auth.session)):
+def artifact_list(source_message_id:uuid.UUID|None=None,project_id:uuid.UUID|None=None,user=Depends(auth.session)):
+    if project_id is not None:
+        with db.connect() as conn: access.project(conn,user,project_id)
     return db.query('''SELECT a.*,u.username AS owner FROM workspace_artifacts a JOIN users u ON u.id=a.owner_id
         WHERE (a.owner_id=%s OR %s='ADMIN' OR (a.visibility='PROJECT' AND EXISTS(SELECT 1 FROM project_members m WHERE m.project_id=a.project_id AND m.user_id=%s)))
         AND (%s::uuid IS NULL OR (a.owner_id=%s AND a.source_message_id=%s))
-        ORDER BY a.updated_at DESC LIMIT 200''',(user['id'],user['role'],user['id'],source_message_id,user['id'],source_message_id))
+        AND (%s::uuid IS NULL OR a.project_id=%s)
+        ORDER BY a.updated_at DESC LIMIT 200''',(user['id'],user['role'],user['id'],source_message_id,user['id'],source_message_id,project_id,project_id))
 
 @router.post('/library/artifacts',status_code=201)
 def artifact_create(body:Artifact,user=Depends(auth.session)):

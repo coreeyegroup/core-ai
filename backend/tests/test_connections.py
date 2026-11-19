@@ -83,3 +83,106 @@ def test_connection_admin_csrf_and_analysis_scope(signed, work):
     assert signed.get('/api/v1/connections').status_code == 403
     assert signed.post('/api/v1/connections', json=body).status_code == 403
     assert signed.post(JOBS, json={'request_id': 'job-2', 'prompt': 'Test'}, headers=headers).status_code == 401
+
+
+def test_direct_multi_model_jobs_and_optional_default(signed, monkeypatch):
+    config = {'name': 'n8n local', 'model': 'local:chat', 'allowed_models': ['local:chat', 'local:code'],
+              'allow_model_choice': True, 'max_output_tokens': 512}
+    issued = signed.post('/api/v1/connections', json=config)
+    assert issued.status_code == 201
+    connection = issued.json()['id']
+    headers = {'Authorization': 'Bearer ' + issued.json()['token']}
+    assert signed.get('/api/v1/automation/models', headers=headers).json() == {
+        'models': ['local:chat', 'local:code'], 'default': 'local:chat'}
+    first = {'request_id': 'summarize', 'prompt': 'Summarize this'}
+    second = {'request_id': 'code', 'prompt': 'Write code', 'model': 'local:code'}
+    for body in (first, second):
+        assert signed.post(JOBS, headers=headers, json=body).status_code == 202
+    assert signed.post(JOBS, headers=headers, json={**second, 'model': 'local:chat'}).status_code == 409
+    assert signed.post(JOBS, headers=headers, json={**second, 'request_id': 'other', 'model': 'different'}).status_code == 403
+
+    real_client = httpx.Client
+    seen = []
+    def provider(request):
+        payload = json.loads(request.content)
+        seen.append(payload['model'])
+        assert 'Project instructions' not in payload['messages'][0]['content']
+        assert payload['options']['num_predict'] == 512
+        return httpx.Response(200, text=json.dumps({'message': {'content': 'Done'}, 'done': True}) + '\n')
+
+    monkeypatch.setattr(worker.httpx, 'Client', lambda **kwargs: real_client(transport=httpx.MockTransport(provider)))
+    for _ in range(2):
+        run = worker.claim()
+        assert run['project_id'] is None and run['agent_id'] is None
+        worker.execute(run)
+    assert seen == ['local:chat', 'local:code']
+    activity = signed.get(f'/api/v1/connections/{connection}/activity').json()
+    assert {item['request_id'] for item in activity} == {'code', 'summarize'}
+    assert all(item['status'] == 'SUCCEEDED' and 'prompt' not in item and 'output' not in item for item in activity)
+    assert signed.get(JOBS + '/' + activity[0]['id'], headers=headers).json()['output'] == 'Done'
+
+    assert signed.put(f'/api/v1/connections/{connection}', json={**config, 'model': None}).status_code == 200
+    assert signed.post(JOBS, headers=headers, json={**first, 'request_id': 'missing-model'}).status_code == 422
+    assert signed.post(JOBS, headers=headers, json=first).status_code == 202
+
+
+def test_connection_limits_permissions_pause_and_rotation(signed):
+    config = {'name': 'Limited', 'model': 'local:chat', 'requests_per_minute': 1,
+              'can_discover': False, 'can_read': False}
+    issued = signed.post('/api/v1/connections', json=config).json()
+    path = '/api/v1/connections/' + issued['id']
+    headers = {'Authorization': 'Bearer ' + issued['token']}
+    assert signed.get('/api/v1/automation/models', headers=headers).status_code == 403
+    response = signed.post(JOBS, headers=headers, json={'request_id': 'first', 'prompt': 'Hello'})
+    assert response.status_code == 202
+    job = response.json()['id']
+    assert signed.get(f'{JOBS}/{job}', headers=headers).status_code == 403
+    limited = signed.post(JOBS, headers=headers, json={'request_id': 'second', 'prompt': 'Hello'})
+    assert limited.status_code == 429 and limited.headers['retry-after']
+    assert signed.put(path + '/pause', json={'paused': True}).status_code == 200
+    assert signed.get(f'{JOBS}/{job}', headers=headers).status_code == 401
+    assert signed.put(path + '/pause', json={'paused': False}).status_code == 200
+    rotated = signed.post(path + '/rotate').json()
+    assert signed.get(f'{JOBS}/{job}', headers=headers).status_code == 401
+    new_headers = {'Authorization': 'Bearer ' + rotated['token']}
+    assert signed.get(f'{JOBS}/{job}', headers=new_headers).status_code == 403
+    assert signed.put(path, json={**config, 'expires_at': '2000-01-01T00:00:00Z'}).status_code == 200
+    assert signed.get(f'{JOBS}/{job}', headers=new_headers).status_code == 401
+
+
+def test_migration_preserves_existing_key_and_job(tmp_path, monkeypatch):
+    from pathlib import Path
+    from shutil import copyfile
+    import os
+    import uuid
+    from psycopg.conninfo import make_conninfo
+    from psycopg import sql
+    from core_ai import auth
+
+    schema = 'upgrade_' + uuid.uuid4().hex
+    with db.connect() as conn:
+        conn.execute(sql.SQL('CREATE SCHEMA {}').format(sql.Identifier(schema)))
+    monkeypatch.setenv('CORE_AI_DATABASE_URL', make_conninfo(os.environ['CORE_AI_DATABASE_URL'],
+                                                           options='-c search_path=' + schema))
+    migrations = Path(__file__).resolve().parents[1] / 'sql'
+    for initial in sorted(migrations.glob('*.sql'))[:5]:
+        copyfile(initial, tmp_path / initial.name)
+    db.migrate(tmp_path)
+    auth.seed('upgrade-admin', 'disposable-upgrade-password')
+    user = db.query('SELECT id FROM users', one=True)['id']
+    project, agent, connection, job = [uuid.uuid4() for _ in range(4)]
+    with db.connect() as conn:
+        conn.execute('INSERT INTO projects(id,name,owner_id) VALUES (%s,%s,%s)', (project,'Project',user))
+        conn.execute('INSERT INTO agents(id,name,instructions,owner_id) VALUES (%s,%s,%s,%s)', (agent,'Agent','Scope',user))
+        conn.execute('INSERT INTO automation_connections(id,name,token_hash,project_id,agent_id,model,created_by) VALUES (%s,%s,%s,%s,%s,%s,%s)',
+                     (connection,'Existing','fixture-hash',project,agent,'local:existing',user))
+        conn.execute("""
+            INSERT INTO runs(id,project_id,agent_id,agent_version,instructions,prompt,model,status,requested_by,connection_id,request_id)
+            VALUES (%s,%s,%s,1,'Scope','Prompt','local:existing','QUEUED',%s,%s,'first')
+        """,(job,project,agent,user,connection))
+    db.migrate(migrations)
+    current = db.query('SELECT * FROM automation_connections WHERE id=%s',(connection,),one=True)
+    assert current['allowed_models'] == ['local:existing'] and not current['allow_model_choice']
+    assert (current['token_hash'],current['project_id'],current['agent_id']) == ('fixture-hash',project,agent)
+    existing = db.query('SELECT status,connection_id,project_id,agent_id FROM runs WHERE id=%s',(job,),one=True)
+    assert existing == {'status':'QUEUED','connection_id':connection,'project_id':project,'agent_id':agent}

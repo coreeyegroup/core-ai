@@ -10,11 +10,12 @@ import rehypeKatex from 'rehype-katex';
 import {ChatModelPicker,ChatPopover,ConversationDialog,isTextModel} from './ChatPopover';
 
 type Attachment={name:string;content:string;file_id?:string;status?:string};
-type Message={id:string;role:'user'|'assistant';content:string;attachments:Attachment[];model:string|null;status:string;error:string|null;created_at:string};
+type Message={id:string;role:'user'|'assistant';content:string;sources?:{id:string;title:string}[];attachments:Attachment[];model:string|null;status:string;error:string|null;created_at:string};
 type Conversation={id:string;title:string;model:string;mode:ChatDefaults['mode'];instructions:string;project_id:string|null;temperature:number;max_tokens:number;pinned:boolean;archived:boolean;updated_at:string;messages:Message[];generation:{id:string;status:string}|null};
 type Preferences=ChatDefaults&{model:string;instructions:string;project_id:string|null;agent_id?:string|null};
 type Draft={text:string;attachments:Attachment[];preferences?:Preferences};
-type Selection={id:string;newChat:{projectId:string|null}|null};
+type NewChat={projectId:string|null;model?:string;mode?:ChatDefaults['mode']};
+type Selection={id:string;newChat:NewChat|null};
 type ChatTabs={ids:string[];active:string};
 const groupPattern=/^(Build|Research|Operations):[a-z0-9-]{1,48}$/;
 const tabLimit=12;
@@ -40,13 +41,13 @@ type ChatStore={
  titles:Record<string,string>;
  statuses:Record<string,string>;
  tabs:Record<string,ChatTabs>;
- startTab:(group:string)=>void;
+ startTab:(group:string,preferences?:NewChat)=>void;
  openConversation:(group:string,id:string)=>void;
  selectTab:(group:string,id:string)=>void;
  closeTab:(group:string,id:string)=>void;
  rememberTitle:(id:string,title:string)=>void;
  selectionRef:React.MutableRefObject<Record<string,Selection>>;
- choose:(pane:string,id:string,project?:{projectId:string|null},expected?:Selection)=>void;
+ choose:(pane:string,id:string,project?:NewChat,expected?:Selection)=>void;
 };
 const blankSelection:Selection={id:'',newChat:null};
 const ChatContext=createContext<ChatStore|null>(null);
@@ -119,7 +120,7 @@ export function ChatProvider({username,focusedPane,persist,tick,children}:{usern
  },[statusQuery,tick,revision]);
  const [titles,setTitles]=useState<Record<string,string>>({});
  const rememberTitle=useCallback((id:string,title:string)=>setTitles(current=>current[id]===title?current:{...current,[id]:title}),[]);
- const choose=useCallback((pane:string,id:string,newChat?:{projectId:string|null},expected?:Selection)=>{
+ const choose=useCallback((pane:string,id:string,newChat?:NewChat,expected?:Selection)=>{
   const current=selectionRef.current[pane]??blankSelection;
   if(expected&&current!==expected)return;
   if(!newChat&&current.id===id&&!current.newChat)return;
@@ -129,12 +130,12 @@ export function ChatProvider({username,focusedPane,persist,tick,children}:{usern
   if(persist)try{localStorage.setItem(storageKey,JSON.stringify(Object.fromEntries(Object.entries(next).filter(([,value])=>value.id).map(([key,value])=>[key,value.id]))));}catch{/* browser storage is optional */}
  },[persist,storageKey]);
  const changed=useCallback(()=>setRevision(v=>v+1),[]);
- const startTab=useCallback((group:string)=>{
+ const startTab=useCallback((group:string,preferences:NewChat={projectId:null})=>{
   const current=tabsRef.current[group]??baseTabs(group);
   if(current.ids.length>=tabLimit)return;
   const id=group+'/'+newId();
   updateTabs(group,{ids:[...current.ids,id],active:id});
-  choose(id,'',{projectId:null});
+  choose(id,'',preferences);
  },[updateTabs,choose]);
  const selectTab=useCallback((group:string,id:string)=>{
   const current=tabsRef.current[group]??baseTabs(group);
@@ -161,7 +162,8 @@ export function ChatProvider({username,focusedPane,persist,tick,children}:{usern
  },[updateTabs,choose]);
  useEffect(()=>{
   const scope=()=>(tabsRef.current[focusedPane]??baseTabs(focusedPane)).active;
-  const start=(projectId:string|null)=>{
+  const start=(preferences:NewChat)=>{
+   const {projectId}=preferences;
    const pane=scope(),key=pane+'/'+(projectId?'project:'+projectId:'');
    if(projectId===null&&selectionRef.current[pane]?.id&&(tabsRef.current[focusedPane]?.ids.length??1)<tabLimit){
     startTab(focusedPane);
@@ -169,19 +171,33 @@ export function ChatProvider({username,focusedPane,persist,tick,children}:{usern
    }
    if(projectId===null)delete drafts.current[key];
    else if(drafts.current[key])delete drafts.current[key].preferences;
-   choose(pane,'',{projectId});
+   choose(pane,'',preferences);
   };
-  const fresh=()=>start(null),open=(e:Event)=>openConversation(focusedPane,(e as CustomEvent).detail.id);
-  const project=(e:Event)=>start((e as CustomEvent).detail.projectId);
+  const fresh=()=>start({projectId:null}),open=(e:Event)=>openConversation(focusedPane,(e as CustomEvent).detail.id);
+  const project=(e:Event)=>{
+   const preferences=(e as CustomEvent<NewChat>).detail;
+   if((tabsRef.current[focusedPane]?.ids.length??1)<tabLimit)startTab(focusedPane,preferences);
+   else start(preferences);
+  };
+  const projectChanged=(event:Event)=>{
+   const {chatId,projectId}=(event as CustomEvent<{chatId:string;projectId:string|null}>).detail;
+   for(const [pane,selection] of Object.entries(selectionRef.current)){
+    const draft=drafts.current[pane+'/'+chatId];
+    if(selection.id===chatId&&draft?.preferences)draft.preferences={...draft.preferences,project_id:projectId};
+   }
+   changed();
+  };
   window.addEventListener('core-ai-new-chat',fresh);
   window.addEventListener('core-ai-open-chat',open);
   window.addEventListener('core-ai-project-chat',project);
+  window.addEventListener('core-ai-chat-project-updated',projectChanged);
   return()=>{
    window.removeEventListener('core-ai-new-chat',fresh);
    window.removeEventListener('core-ai-open-chat',open);
    window.removeEventListener('core-ai-project-chat',project);
+   window.removeEventListener('core-ai-chat-project-updated',projectChanged);
   };
- },[focusedPane,choose,startTab,openConversation]);
+ },[focusedPane,choose,startTab,openConversation,changed]);
  return <ChatContext.Provider value={{focusedPane,selections,selectionRef,choose,revision,changed,drafts,titles,statuses,rememberTitle,tabs,startTab,selectTab,closeTab,openConversation}}>{children}</ChatContext.Provider>;
 }
 export function ChatPane({name,enabled,children}:{name:string;enabled:boolean;children:ReactNode}){
@@ -313,10 +329,20 @@ export default function Chat({tick,visible=true,sendKey='Enter',chatDefaults=def
   setDraft(saved.text);setAttachments(saved.attachments);
   hydrated.current='';
   setLoading(!!id);
-  if(!id)setPrefs(saved.preferences??{...defaultsRef.current,model:defaultModel.current,instructions:'',project_id:newChat?.projectId??null});
+  if(!id)setPrefs(saved.preferences??{...defaultsRef.current,model:newChat?.model||defaultModel.current,mode:newChat?.mode??defaultsRef.current.mode,instructions:'',project_id:newChat?.projectId??null});
  },[id,load,newChat,drafts,draftSlot]);
  useEffect(()=>{if(draftKey.current===draftSlot&&(!id||hydrated.current===id))drafts.current[draftSlot]={text:draft,attachments,preferences:prefs};},[draft,attachments,prefs,drafts,draftSlot,id]);
  useEffect(()=>{draftKey.current=draftSlot;},[draftSlot]);
+ useEffect(()=>{
+  const onMove=(event:Event)=>{
+   const {chatId,projectId}=(event as CustomEvent<{chatId:string;projectId:string|null}>).detail;
+   if(id!==chatId)return;
+   setPrefs(current=>({...current,project_id:projectId}));
+   setThread(current=>current?{...current,project_id:projectId}:current);
+  };
+  window.addEventListener('core-ai-chat-project-updated',onMove);
+  return()=>window.removeEventListener('core-ai-chat-project-updated',onMove);
+ },[id]);
  useEffect(()=>{
   if(!visible||!newChat||focusedNewChat.current===newChat||viewer)return;
   const frame=window.requestAnimationFrame(()=>{
@@ -415,7 +441,7 @@ export default function Chat({tick,visible=true,sendKey='Enter',chatDefaults=def
 
  async function copy(m:Message){try{await navigator.clipboard.writeText(m.content);setCopied(m.id);setTimeout(()=>setCopied(''),1800);}catch{setError('Clipboard access was denied. Select the reply text to copy it.');}}
  return <section className="chat-workspace" aria-label="Chat workspace"><header className="chat-top"><div className="chat-model"><span className={'model-connection '+(modelReady?'online':'offline')} aria-live="polite">{modelNotice}</span></div><div className="chat-top-actions"><button aria-expanded={settings} aria-controls={optionsId} onClick={()=>setSettings(x=>!x)}>Advanced</button>{thread&&<button onClick={()=>exportChat(thread)}>Export</button>}<button aria-label="Refresh chat models" disabled={modelsBusy} onClick={()=>void refreshModels(true)}>↻</button></div></header>
- {settings&&<div className="chat-options" id={optionsId}><label>Project context<select value={prefs.project_id||''} onChange={e=>patch({project_id:e.target.value||null})}><option value="">None · general conversation</option>{projects.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select></label><label>Temperature <span>{prefs.temperature.toFixed(1)}</span><input type="range" min="0" max="1.5" step="0.1" value={prefs.temperature} onChange={e=>patch({temperature:+e.target.value})}/></label><label>Agent profile · instructions<select aria-label="Chat agent profile" value={prefs.agent_id||''} onChange={e=>patch({agent_id:e.target.value||null})}><option value="">Default assistant</option>{agents.filter(a=>a.enabled).map(a=><option key={a.id} value={a.id}>{a.name}</option>)}</select></label><label>Maximum reply tokens<select value={prefs.max_tokens} onChange={e=>patch({max_tokens:+e.target.value})}>{replyTokenOptions.map(n=><option key={n} value={n}>{n}</option>)}</select></label><label className="instructions-field">Response instructions<textarea aria-label="Chat response instructions" maxLength={4000} rows={2} value={prefs.instructions} onChange={e=>patch({instructions:e.target.value})} placeholder="Preferred tone, format, expertise or constraints…"/></label><small>{chatModes.find(mode=>mode.value===prefs.mode)?.description}. Changes apply to your next message.</small></div>}
+ {settings&&<div className="chat-options" id={optionsId}><label>Project context<select value={prefs.project_id||''} onChange={e=>patch({project_id:e.target.value||null})}><option value="">None · general conversation</option>{projects.filter(p=>!p.archived_at||p.id===prefs.project_id).map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select></label><label>Temperature <span>{prefs.temperature.toFixed(1)}</span><input type="range" min="0" max="1.5" step="0.1" value={prefs.temperature} onChange={e=>patch({temperature:+e.target.value})}/></label><label>Agent profile · instructions<select aria-label="Chat agent profile" value={prefs.agent_id||''} onChange={e=>patch({agent_id:e.target.value||null})}><option value="">Default assistant</option>{agents.filter(a=>a.enabled).map(a=><option key={a.id} value={a.id}>{a.name}</option>)}</select></label><label>Maximum reply tokens<select value={prefs.max_tokens} onChange={e=>patch({max_tokens:+e.target.value})}>{replyTokenOptions.map(n=><option key={n} value={n}>{n}</option>)}</select></label><label className="instructions-field">Response instructions<textarea aria-label="Chat response instructions" maxLength={4000} rows={2} value={prefs.instructions} onChange={e=>patch({instructions:e.target.value})} placeholder="Preferred tone, format, expertise or constraints…"/></label><small>{chatModes.find(mode=>mode.value===prefs.mode)?.description}. Changes apply to your next message.</small></div>}
  <div className="chat-scroll" ref={scroll} onScroll={e=>{const el=e.currentTarget;atBottom.current=el.scrollHeight-el.scrollTop-el.clientHeight<100;setJump(!atBottom.current);}}>
  {loading&&!messages.length?<div className="chat-loading" role="status">Loading conversation…</div>:!messages.length?<div className="chat-welcome"><div className="welcome-mark">◈</div><h1>How can I help?</h1><p>A clear space for everyday questions and professional work.</p><div className="starter-grid">{(prefs.mode==='quick'?starters.general:starters[prefs.mode]).map(([label,text])=><button key={label} disabled={viewer} onClick={()=>{setDraft(current=>current.trim()?(current+'\n\n'+text).slice(0,16000):text);composer.current?.focus();}}><b>{label}</b><span>{text}</span></button>)}</div></div>:<div className="conversation" role="log" aria-label="Conversation messages" aria-live="off">
   <div className="conversation-label">
@@ -438,6 +464,10 @@ export default function Chat({tick,visible=true,sendKey='Enter',chatDefaults=def
     {collapsed&&preview&&<div className="message-preview">{preview.slice(0,144)}</div>}
     <div className="message-content" id={bodyId} hidden={collapsed}>
      {user?<div className="user-text">{m.content}</div>:<MessageMarkdown text={m.content}/>}
+     {!!m.sources?.length&&<details className="message-sources">
+      <summary>Project sources supplied to the model</summary>
+      {m.sources.map(source=><button type="button" className="link" key={source.id} onClick={()=>window.dispatchEvent(new CustomEvent('core-ai-source',{detail:{id:source.id}}))}>{source.title}</button>)}
+     </details>}
      {m.attachments.length>0&&<div className="message-files">{m.attachments.map((f,i)=><details key={i}><summary>{f.name}</summary><pre>{f.content}</pre></details>)}</div>}
      <div className="message-actions">
       {m.content&&<button onClick={()=>void copy(m)}>{copied===m.id?'Copied':'Copy'}</button>}

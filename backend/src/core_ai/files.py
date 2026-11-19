@@ -22,8 +22,15 @@ def owned(conn,user,ident,lock=False):
     return row
 
 @router.get('')
-def listing(user=Depends(auth.session)):
-    return db.query('SELECT id,owner_id,project_id,name,media_type,size_bytes,sha256,status,error,truncated,document_id,created_at,processed_at FROM workspace_files WHERE owner_id=%s OR %s=\'ADMIN\' ORDER BY created_at DESC LIMIT 200',(user['id'],user['role']))
+def listing(project_id:uuid.UUID|None=None,user=Depends(auth.session)):
+    if project_id is not None:
+        with db.connect() as conn: access.project(conn,user,project_id)
+    return db.query("""
+        SELECT id,owner_id,project_id,name,media_type,size_bytes,sha256,status,error,truncated,document_id,created_at,processed_at
+        FROM workspace_files WHERE (owner_id=%s OR %s='ADMIN') AND (%s::uuid IS NULL OR project_id=%s)
+        ORDER BY created_at DESC LIMIT 200
+    """,(user['id'],user['role'],project_id,project_id))
+
 
 @router.post('',status_code=201)
 async def upload(file:UploadFile=File(...),project_id:uuid.UUID|None=Form(default=None),user=Depends(auth.session)):
