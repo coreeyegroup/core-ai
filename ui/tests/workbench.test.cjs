@@ -4,10 +4,22 @@ test('custom workbench navigates, splits and opens every implemented module',asy
  const old={};for(const k of ['window','document','navigator','HTMLElement','Element','Node','Event','CustomEvent','localStorage']){old[k]=Object.getOwnPropertyDescriptor(global,k);Object.defineProperty(global,k,{value:dom.window[k],configurable:true,writable:true});}
  global.IS_REACT_ACT_ENVIRONMENT=true;dom.window.HTMLElement.prototype.scrollIntoView=function(){};
  const fetched=[];const overview={projects:1,agents:1,documents:0,runs:[],worker:{online:true},inference:{endpoint:'http://127.0.0.1:11434',model:'test:latest'},release:'test'};
- const responses={'chat/conversations?archived=false&q=':[],session:{username:'test-admin',csrf:'csrf-test'},overview,projects:[{id:'project',name:'Project one',description:'',created_at:new Date().toISOString()}],agents:[{id:'agent',name:'Analyst',instructions:'Test',version:1,enabled:true}],models:{available:true,models:[{name:'test:latest',size:1000000}],config:overview.inference},runs:[],events:[],documents:[],artifacts:[],files:[],'library/artifacts':[],'access/users':[],capabilities:{features:[]},'operations/metrics':{tasks:[],chat:[],files:[]},tools:[],integrations:{connected:[],policy:'Optional'}};
- const writes=[];const fetchOld=global.fetch;global.fetch=async(path,options={})=>{fetched.push(path);const key=path.replace('/api/v1/','');let result=responses[key]??{};
-  if(options.method==='POST'&&key==='chat/conversations'){const b=JSON.parse(options.body);responses['chat/conversations/chat-1']={...b,id:'chat-1',pinned:false,archived:false,updated_at:new Date().toISOString(),messages:[],generation:null};result={id:'chat-1'};}
-  if(options.method==='POST'&&key==='chat/conversations/chat-1/messages'){const b=JSON.parse(options.body);writes.push(b);const c=responses['chat/conversations/chat-1'];c.messages=[{id:'q1',role:'user',content:b.content,attachments:[],model:null,status:'COMPLETE',created_at:new Date().toISOString()},{id:'a1',role:'assistant',content:'A **clear** explanation.',attachments:[],model:b.model,status:'COMPLETE',created_at:new Date().toISOString()}];responses['chat/conversations?archived=false&q=']=[c];result={id:'generation-1',conversation_id:'chat-1',assistant_message_id:'a1'};}
+ const responses={'chat/conversations?archived=false&q=':[],session:{username:'test-admin',csrf:'csrf-test'},overview,projects:[{id:'project',name:'Project one',description:'',created_at:new Date().toISOString()}],agents:[{id:'agent',name:'Analyst',instructions:'Test',version:1,enabled:true}],models:{available:true,models:[{name:'test:latest',size:1000000},{name:'editor:latest',size:1000000}],config:overview.inference},runs:[],events:[],documents:[],artifacts:[],files:[],'library/artifacts':[],'access/users':[],capabilities:{features:[]},'operations/metrics':{tasks:[],chat:[],files:[]},tools:[],integrations:{connected:[],policy:'Optional'}};
+ let conversationCount=0;const writes=[];const fetchOld=global.fetch;global.fetch=async(path,options={})=>{fetched.push(path);const key=path.replace('/api/v1/','');let result=responses[key]??{};
+  if(options.method==='POST'&&key==='chat/conversations'){
+   const b=JSON.parse(options.body),id='chat-'+(++conversationCount);
+   responses['chat/conversations/'+id]={...b,id,pinned:false,archived:false,updated_at:new Date().toISOString(),messages:[],generation:null};
+   result={id};
+  }
+  if(options.method==='POST'&&/^chat\/conversations\/chat-\d+\/messages$/.test(key)){
+   const b=JSON.parse(options.body),c=responses[key.replace('/messages','')];
+   writes.push({...b,conversation:c.id});
+   c.model=b.model;c.mode=b.mode;
+   c.messages=[{id:'q1',role:'user',content:b.content,attachments:[],model:null,status:'COMPLETE',created_at:new Date().toISOString()},{id:'a1',role:'assistant',content:'A **clear** explanation.',attachments:[],model:b.model,status:'COMPLETE',created_at:new Date().toISOString()}];
+   const historyKey='chat/conversations?archived=false&q=';
+   responses[historyKey]=[c,...responses[historyKey].filter(item=>item.id!==c.id)];
+   result={id:'generation-1',conversation_id:c.id,assistant_message_id:'a1'};
+  }
   if(options.method==='POST'&&key==='library/artifacts'){responses['library/artifacts/artifact-1']={id:'artifact-1',title:'Response',content:'Current revision',kind:'markdown',language:'',project_id:null,visibility:'PRIVATE',version:2,selected_version:2,can_edit:true,can_share:true,versions:[{version:2,created_at:new Date().toISOString(),reason:'Edited'},{version:1,created_at:new Date().toISOString(),reason:'Created'}]};result={id:'artifact-1'};}
   if(key==='library/artifacts/artifact-1?version=1')result={...responses['library/artifacts/artifact-1'],content:'Original revision',selected_version:1};
   if(options.method==='PUT'&&key==='library/artifacts/artifact-1'){const b=JSON.parse(options.body);assert.equal(b.expected_version,2);assert.equal(b.content,'Original revision');responses[key]={...responses[key],...b,version:3,selected_version:3};result={id:'artifact-1',version:3};}
@@ -120,5 +132,39 @@ test('custom workbench navigates, splits and opens every implemented module',asy
   assert.equal(document.querySelectorAll('[role="tabpanel"]').length,16);
   assert.ok(!document.body.textContent.includes('This panel could not render'));
   assert.ok(fetched.includes('/api/v1/projects')&&fetched.includes('/api/v1/integrations'));
+  const panes=()=>[...document.querySelectorAll('.group .chat-workspace')];
+  const change=(element,value)=>{element.value=value;element.dispatchEvent(new dom.window.Event('change',{bubbles:true}));};
+  const submit=panel=>panel.querySelector('form').dispatchEvent(new dom.window.Event('submit',{bubbles:true,cancelable:true}));
+  const wait=()=>new Promise(r=>setTimeout(r,35));
+  await act(async()=>{document.querySelector('.header-actions [aria-label="New chat pane"]').click();await wait();});
+  assert.equal(panes().length,2);
+  const [left,right]=panes();
+  await act(async()=>{
+   change(left.querySelector('[aria-label="Chat model"]'),'test:latest');
+   change(left.querySelector('[aria-label="Response style"]'),'research');
+   change(right.querySelector('[aria-label="Chat model"]'),'editor:latest');
+   change(right.querySelector('[aria-label="Response style"]'),'coding');
+  });
+  await act(async()=>{left.querySelector('.starter-grid button').click();right.querySelector('.starter-grid button').click();});
+  assert.match(left.querySelector('textarea').value,/evidence/i);
+  assert.match(right.querySelector('textarea').value,/code/i);
+  await act(async()=>{submit(left);submit(right);await wait();});
+  assert.deepEqual(writes.slice(-2).map(({conversation,model,mode})=>[conversation,model,mode]),[
+   ['chat-2','test:latest','research'],['chat-3','editor:latest','coding']
+  ]);
+  assert.match(left.querySelector('.user-text').textContent,/evidence/i);
+  assert.match(right.querySelector('.user-text').textContent,/code/i);
+  await act(async()=>{change(document.querySelector('[aria-label="Switch workspace"]'),'Research');await wait();});
+  assert.equal(panes().length,1);
+  assert.equal(panes()[0].querySelector('.conversation'),null);
+  await act(async()=>{change(document.querySelector('[aria-label="Switch workspace"]'),'Build');await wait();});
+  assert.equal(panes().length,2);
+  assert.equal(panes()[0].querySelector('[aria-label="Response style"]').value,'research');
+  assert.equal(panes()[1].querySelector('[aria-label="Chat model"]').value,'editor:latest');
+  await act(async()=>{dom.window.innerWidth=375;dom.window.dispatchEvent(new dom.window.Event('resize'));});
+  assert.equal(document.querySelectorAll('.groups>.group:not([hidden])').length,1);
+  await act(async()=>{change(document.querySelector('[aria-label="Switch chat pane"]'),'0');});
+  assert.match(document.querySelector('.groups>.group:not([hidden]) .user-text').textContent,/evidence/i);
+
  }finally{await act(async()=>root.unmount());global.fetch=fetchOld;delete global.IS_REACT_ACT_ENVIRONMENT;for(const k of Object.keys(old)){if(old[k])Object.defineProperty(global,k,old[k]);else delete global[k];}if(locationOld)Object.defineProperty(global,'location',locationOld);else delete global.location;dom.window.close();}
 });

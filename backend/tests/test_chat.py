@@ -71,6 +71,32 @@ def test_chat_stream_persists_and_uses_conversation_context(signed,monkeypatch):
     assert any(m['role']=='assistant' and m['content']=='First answer' for m in history)
 
 
+@pytest.mark.parametrize(('mode','guidance'), [
+    ('quick','direct answer'), ('deep','trade-offs'),
+    ('research','available sources'), ('coding','edge cases'),
+])
+def test_modes_and_models_are_independent(signed, mode, guidance):
+    first=create(signed, model='analyst:local', mode=mode)
+    second=create(signed, model='editor:local', mode='professional')
+    send(signed, first, model='analyst:local', mode=mode, content='First pane prompt')
+    send(signed, second, model='editor:local', mode='professional', content='Second pane prompt')
+
+    row=chat.claim()
+    assert row['model']=='analyst:local'
+    messages=chat.context(row)
+    assert guidance in messages[0]['content']
+    assert [message['content'] for message in messages[1:]]==['First pane prompt']
+    assert chat.claim() is None
+    chat.finish(row,'SUCCEEDED','First pane answer')
+
+    row=chat.claim()
+    assert row['model']=='editor:local'
+    messages=chat.context(row)
+    assert [message['content'] for message in messages[1:]]==['Second pane prompt']
+    assert signed.get('/api/v1/chat/conversations/'+first).json()['mode']==mode
+    assert signed.get('/api/v1/chat/conversations/'+second).json()['mode']=='professional'
+
+
 def test_stop_cannot_be_overwritten_by_late_reply(signed):
     ident=create(signed)
     send(signed,ident)

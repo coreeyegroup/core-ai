@@ -149,3 +149,9 @@ npm test --prefix ui
 CI uses PostgreSQL 18 and validates the Caddy template. The UI dev server is optional (`npm run dev --prefix ui`) and proxies `/api` to the loopback API. Set `CORE_AI_ORIGIN` to that dev server's exact origin when running a local backend; production always uses the configured HTTPS origin.
 
 See [architecture](docs/architecture.md), [migration and recovery](docs/migration.md) and [software licenses](docs/licenses.md).
+
+### Multi-chat workspaces
+
+Use **New chat pane** in the header for an independent conversation. Open up to four panes per workspace. The Explorer workspace selector switches between Build, Research, and Operations; saved layouts and open conversations reopen in the same browser for the signed-in account. Search and conversation history open in the focused pane. Unsent drafts stay in memory while the workspace is open.
+
+Each chat can select its own installed model and response mode: General, Quick, Professional, Deep analysis, Research, or Coding. Modes change answer guidance. Local generation requests share the existing inference queue.
