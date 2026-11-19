@@ -46,6 +46,46 @@ def test_messages_idempotent_and_single_reply(signed):
     assert signed.post('/api/v1/chat/conversations/'+ident+'/messages',json={**body,'request_id':str(uuid.uuid4())}).status_code==409
 
 
+def test_reply_snapshot_is_owner_scoped_and_tracks_state(signed):
+    ident=create(signed)
+    queued,_=send(signed,ident)
+    path=f'/api/v1/chat/conversations/{ident}/reply/{queued["id"]}'
+    assert signed.get(path).json()['status']=='QUEUED'
+    assert signed.get('/api/v1/chat/statuses',params=[('ids',ident)]).json()==[{'id':ident,'status':'QUEUED'}]
+
+    row=chat.claim()
+    chat.persist(row,'Partial answer')
+    assert signed.get(path).json()['content']=='Partial answer'
+    chat.finish(row,'SUCCEEDED','Final answer')
+    final=signed.get(path).json()
+    assert final['status']=='SUCCEEDED' and final['message_status']=='COMPLETE'
+
+    other=uuid.uuid4()
+    db.query('INSERT INTO users(id,username,password_hash) VALUES (%s,%s,%s)',
+             (other,'other-member',auth.password_hash('other-password-123')))
+    token,_=auth.login('other-member','other-password-123')
+    signed.cookies.clear()
+    signed.cookies.set(auth.COOKIE,token)
+    assert signed.get(path).status_code==404
+    assert signed.get('/api/v1/chat/statuses',params=[('ids',ident)]).json()==[]
+
+
+def test_history_filters_and_eight_attachment_limit(signed,work):
+    active=create(signed,title='Shared phrase',project_id=work['project_id'])
+    archived=create(signed,title='Shared phrase archived')
+    assert signed.patch('/api/v1/chat/conversations/'+archived,json={'archived':True}).status_code==200
+    def matches(**params):
+        return {row['id'] for row in signed.get('/api/v1/chat/conversations',params=params).json()}
+    assert matches(q='Shared phrase',all_statuses=True)=={active,archived}
+    assert matches(q='Shared phrase',archived=True)=={archived}
+    assert matches(q='Shared phrase',all_statuses=True,project_id=work['project_id'])=={active}
+    attachments=[{'name':f'{i}.txt','content':'notes'} for i in range(8)]
+    send(signed,active,attachments=attachments)
+    body={'model':'test:latest','content':'Too many attachments','request_id':str(uuid.uuid4()),
+          'attachments':attachments,'file_ids':[str(uuid.uuid4())]}
+    assert signed.post('/api/v1/chat/conversations/'+active+'/messages',json=body).status_code==422
+
+
 def test_chat_stream_persists_and_uses_conversation_context(signed,monkeypatch):
     ident=create(signed,mode='professional',instructions='Use concise answers.')
     result,_=send(signed,ident,mode='professional',instructions='Use concise answers.',attachments=[{'name':'notes.md','content':'Untrusted attachment'}])

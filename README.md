@@ -82,10 +82,10 @@ See [release behavior and limits](docs/release-1.2.md) and the [requirements reg
 ## Chat for general and professional work
 
 - Start a new conversation, choose an installed text-generation model and send a message. No project or agent setup is required.
-- Switch between General and Professional response styles; optionally set a project, custom response instructions, temperature and maximum reply tokens under Options.
+- Choose a model and a response style in the composer. Open Advanced for project and agent context, custom instructions, temperature, and maximum reply tokens.
 - Replies stream into durable PostgreSQL message records. The browser refreshes the active reply incrementally; closing the browser does not cancel a generation.
 - Stop keeps the partial reply. Regenerate and Edit & branch create a new conversation branch, preserving the original thread.
-- Search, rename, pin, archive/restore or delete conversations. Delete requires confirmation in the UI and is blocked while a reply is active. Export downloads the conversation as Markdown.
+- Search conversations by text, status, or project. The conversation action menu supports rename, pin, archive/restore, and delete. Delete requires confirmation in the UI and is blocked while a reply is active. Export downloads the conversation as Markdown.
 - Upload supported text/code, PDF text, DOCX or XLSX files; select up to eight processed library files for a message. Extracted excerpts are bounded to 32,000 combined characters. OCR, vision, web browsing and voice remain unavailable.
 - Recent model context is bounded to 20 messages and 24,000 characters, plus system preferences and optional project excerpts. Large attachments may be excerpted; the full original text remains saved with the message. This is bounded local inference, not an unlimited context promise.
 - Chat and professional tasks share one FIFO inference slot and a combined queue limit of 20. This protects the initial laptop deployment.
@@ -152,7 +152,7 @@ See [architecture](docs/architecture.md), [migration and recovery](docs/migratio
 
 ### Multi-chat workspaces
 
-Within **Chat**, use **+** in the Chats strip to add a conversation tab. Up to 12 conversation tabs fit in one Chat panel. Opening or closing one does not change the workbench layout; saved conversations remain in history. **New chat** opens a fresh tab when the active tab contains a saved conversation. **New chat pane** and **Split workspace** are separate layout controls for opening another workbench group. The Explorer workspace selector switches between Build, Research, and Operations. Layouts and saved conversation tabs reopen in the same browser for the signed-in account, and unsent drafts stay in memory while the workspace is open.
+Within **Chat**, use **+** in the Chats strip to add a conversation tab. Up to 12 conversation tabs fit in one Chat panel. Opening or closing one does not change the workbench layout; saved conversations remain in history. **New chat** opens a fresh tab when the active tab contains a saved conversation. **New split pane** and **Split workspace** are separate layout controls for opening another workbench group. The Explorer workspace selector switches between Build, Research, and Operations. Layouts and saved conversation tabs reopen in the same browser for the signed-in account, and unsent drafts stay in memory while the workspace is open.
 
 Each chat can select its own installed model and response mode: General, Quick, Professional, Deep analysis, Research, or Coding. Modes change answer guidance. Local generation requests share the existing inference queue.
 

@@ -1,11 +1,11 @@
 const {test}=require('node:test');const assert=require('node:assert/strict');const fs=require('node:fs');const vm=require('node:vm');const ts=require('typescript');const {JSDOM}=require('jsdom');
 test('custom workbench navigates, splits and opens every implemented module',async()=>{
  const dom=new JSDOM('<!doctype html><div id="root"></div>',{url:'http://workstation.test/',pretendToBeVisual:true});
- const old={};for(const k of ['window','document','navigator','HTMLElement','Element','Node','Event','CustomEvent','localStorage']){old[k]=Object.getOwnPropertyDescriptor(global,k);Object.defineProperty(global,k,{value:dom.window[k],configurable:true,writable:true});}
+ const old={};for(const k of ['window','document','navigator','HTMLElement','HTMLInputElement','Element','Node','Event','CustomEvent','localStorage']){old[k]=Object.getOwnPropertyDescriptor(global,k);Object.defineProperty(global,k,{value:dom.window[k],configurable:true,writable:true});}
  global.IS_REACT_ACT_ENVIRONMENT=true;dom.window.HTMLElement.prototype.scrollIntoView=function(){};
  const fetched=[];const overview={projects:1,agents:1,documents:0,runs:[],worker:{online:true},inference:{endpoint:'http://127.0.0.1:11434',model:'test:latest'},release:'test'};
  const responses={'chat/conversations?archived=false&q=':[],session:{username:'test-admin',csrf:'csrf-test'},overview,projects:[{id:'project',name:'Project one',description:'',created_at:new Date().toISOString()}],agents:[{id:'agent',name:'Analyst',instructions:'Test',version:1,enabled:true}],models:{available:true,models:[{name:'test:latest',size:1000000},{name:'editor:latest',size:1000000}],config:overview.inference},runs:[],events:[],documents:[],artifacts:[],files:[],'library/artifacts':[],'access/users':[],capabilities:{features:[]},'operations/metrics':{tasks:[],chat:[],files:[]},tools:[],integrations:{connected:[],policy:'Optional'}};
- let conversationCount=0;const writes=[];const fetchOld=global.fetch;global.fetch=async(path,options={})=>{fetched.push(path);const key=path.replace('/api/v1/','');let result=responses[key]??{};
+ let conversationCount=0;const writes=[];const fetchOld=global.fetch;global.fetch=async(path,options={})=>{fetched.push(path);const key=path.replace('/api/v1/','');let result=responses[key==='models?catalog=true'?'models':key]??{};
   if(options.method==='POST'&&key==='chat/conversations'){
    const b=JSON.parse(options.body),id='chat-'+(++conversationCount);
    responses['chat/conversations/'+id]={...b,id,pinned:false,archived:false,updated_at:new Date().toISOString(),messages:[],generation:null};
@@ -81,6 +81,15 @@ test('custom workbench navigates, splits and opens every implemented module',asy
   assert.equal(userMessage.querySelector('.message-content').hidden,false);
   assert.equal(assistantMessage.querySelector('.message-content').hidden,false);
   assert.equal(document.querySelector('[aria-label="Message CORE-AI"]').value,'');
+  const menuTrigger=document.querySelector('.history-item [aria-haspopup="menu"]');
+  await act(async()=>{menuTrigger.click();});
+  const menu=document.querySelector('[role="menu"]');
+  assert.deepEqual([...menu.querySelectorAll('[role="menuitem"]')].map(item=>item.textContent),['Rename','Pin','Archive','Delete']);
+  assert.equal(menu.closest('.history-item'),null);
+  await act(async()=>{menu.querySelector('button').dispatchEvent(new dom.window.KeyboardEvent('keydown',{key:'Escape',bubbles:true}));});
+  assert.equal(document.querySelector('[role="menu"]'),null);
+  assert.equal(document.activeElement,menuTrigger);
+
   await act(async()=>{[...document.querySelectorAll('.message-actions button')].find(b=>b.textContent==='Open as artifact').click();await new Promise(r=>setTimeout(r,25));});
   assert.ok(document.querySelector('.artifact-editor'));
   await act(async()=>{[...document.querySelectorAll('.editor-toolbar button')].find(b=>b.textContent==='Versions').click();});
@@ -156,10 +165,12 @@ test('custom workbench navigates, splits and opens every implemented module',asy
   const tabs=()=>[...document.querySelectorAll('.chat-pane-list [data-chat-tab]')];
   const tab=async index=>act(async()=>{tabs()[index].click();await wait();});
   const chat=()=>panes().find(panel=>!panel.closest('[hidden]'));
-  const setChat=async(model,mode)=>act(async()=>{
-   change(chat().querySelector('[aria-label="Chat model"]'),model);
-   change(chat().querySelector('[aria-label="Response style"]'),mode);
-  });
+  const setChat=async(model,mode)=>{
+   await act(async()=>{chat().querySelector('[aria-label="Chat model"]').click();});
+   const option=[...document.querySelectorAll('.model-popover button')].find(button=>button.textContent===model);
+   assert.ok(option);
+   await act(async()=>{option.click();change(chat().querySelector('[aria-label="Response style"]'),mode);});
+  };
   const draft=async()=>act(async()=>{chat().querySelector('.starter-grid button').click();});
   const send=async()=>act(async()=>{submit(chat());await wait();});
   const initialTabs=tabs().length;
@@ -189,7 +200,7 @@ test('custom workbench navigates, splits and opens every implemented module',asy
   assert.equal(chat().querySelector('.conversation'),null);
   await act(async()=>{change(document.querySelector('[aria-label="Switch workspace"]'),'Build');await wait();});
   assert.equal(tabs().length,initialTabs+2);
-  assert.equal(chat().querySelector('[aria-label="Chat model"]').value,'editor:latest');
+  assert.equal(chat().querySelector('[aria-label="Chat model"]').textContent,'editor:latest');
   await act(async()=>{dom.window.innerWidth=375;dom.window.dispatchEvent(new dom.window.Event('resize'));});
   await tab(initialTabs);
   assert.match(chat().querySelector('.user-text').textContent,/evidence/i);
@@ -199,6 +210,6 @@ test('custom workbench navigates, splits and opens every implemented module',asy
   assert.equal(chat().querySelector('.conversation'),null);
   await act(async()=>{document.querySelector('.chat-pane-tab[data-current="true"] .chat-tab-close').click();await wait();});
   assert.equal(tabs().length,initialTabs+2);
-  assert.equal(chat().querySelector('[aria-label="Chat model"]').value,'editor:latest');
+  assert.equal(chat().querySelector('[aria-label="Chat model"]').textContent,'editor:latest');
  }finally{await act(async()=>root.unmount());global.fetch=fetchOld;delete global.IS_REACT_ACT_ENVIRONMENT;for(const k of Object.keys(old)){if(old[k])Object.defineProperty(global,k,old[k]);else delete global[k];}if(locationOld)Object.defineProperty(global,'location',locationOld);else delete global.location;dom.window.close();}
 });

@@ -2,11 +2,12 @@ import {createContext,useCallback,useContext,useEffect,useId,useRef,useState,typ
 import Markdown from 'react-markdown';
 import {ChevronDown,ChevronRight,Ellipsis,MessageSquare,Pin,Plus,Search,X} from 'lucide-react';
 import remarkGfm from 'remark-gfm';
-import {api,newId,uploadFile} from './api';
+import {api,cachedRead,newId,uploadFile} from './api';
 import {useSession} from './Session';
 import {chatModes,defaultChat,replyTokenOptions,type ChatDefaults} from './appearance';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
+import {ChatModelPicker,ChatPopover,ConversationDialog} from './ChatPopover';
 
 type Attachment={name:string;content:string;file_id?:string;status?:string};
 type Message={id:string;role:'user'|'assistant';content:string;attachments:Attachment[];model:string|null;status:string;error:string|null;created_at:string};
@@ -37,6 +38,7 @@ type ChatStore={
  drafts:React.MutableRefObject<Record<string,Draft>>;
  selections:Record<string,Selection>;
  titles:Record<string,string>;
+ statuses:Record<string,string>;
  tabs:Record<string,ChatTabs>;
  startTab:(group:string)=>void;
  openConversation:(group:string,id:string)=>void;
@@ -76,7 +78,9 @@ const starters={
  ],
 } satisfies Partial<Record<ChatDefaults['mode'],[string,string][]>>;
 const emptyDraft={text:'',attachments:[]};
-export function ChatProvider({username,focusedPane,persist,children}:{username:string;focusedPane:string;persist:boolean;children:ReactNode}){
+const attachmentLimit=8;
+const activeReplies=['QUEUED','RUNNING','CANCEL_REQUESTED'];
+export function ChatProvider({username,focusedPane,persist,tick,children}:{username:string;focusedPane:string;persist:boolean;tick:number;children:ReactNode}){
  const storageKey='core-ai.chat-panes.'+username;
  const tabsKey='core-ai.chat-tabs.'+username;
  const [tabs,setTabs]=useState(()=>persist?restoreTabs(tabsKey):{});
@@ -101,6 +105,18 @@ export function ChatProvider({username,focusedPane,persist,children}:{username:s
  });
  const selectionRef=useRef(selections);
  const [revision,setRevision]=useState(0);
+ const [statuses,setStatuses]=useState<Record<string,string>>({});
+ const workspace=focusedPane.split(':')[0]+':';
+ const tracked=Object.entries(selections).filter(([pane,selection])=>pane.startsWith(workspace)&&selection.id).map(([,selection])=>selection.id);
+ const statusQuery=new URLSearchParams([...new Set(tracked)].slice(0,48).map(id=>['ids',id])).toString();
+ useEffect(()=>{
+  if(!statusQuery)return;
+  let alive=true;
+  api('chat/statuses?'+statusQuery).then(rows=>{
+   if(alive&&Array.isArray(rows))setStatuses(Object.fromEntries(rows.map(row=>[row.id,row.status])));
+  }).catch(()=>{});
+  return()=>{alive=false;};
+ },[statusQuery,tick,revision]);
  const [titles,setTitles]=useState<Record<string,string>>({});
  const rememberTitle=useCallback((id:string,title:string)=>setTitles(current=>current[id]===title?current:{...current,[id]:title}),[]);
  const choose=useCallback((pane:string,id:string,newChat?:{projectId:string|null},expected?:Selection)=>{
@@ -166,7 +182,7 @@ export function ChatProvider({username,focusedPane,persist,children}:{username:s
    window.removeEventListener('core-ai-project-chat',project);
   };
  },[focusedPane,choose,startTab,openConversation]);
- return <ChatContext.Provider value={{focusedPane,selections,selectionRef,choose,revision,changed,drafts,titles,rememberTitle,tabs,startTab,selectTab,closeTab,openConversation}}>{children}</ChatContext.Provider>;
+ return <ChatContext.Provider value={{focusedPane,selections,selectionRef,choose,revision,changed,drafts,titles,statuses,rememberTitle,tabs,startTab,selectTab,closeTab,openConversation}}>{children}</ChatContext.Provider>;
 }
 export function ChatPane({name,enabled,children}:{name:string;enabled:boolean;children:ReactNode}){
  const store=useContext(ChatContext);
@@ -187,9 +203,11 @@ export function ChatPane({name,enabled,children}:{name:string;enabled:boolean;ch
     {tabs.ids.map((id,order)=>{
      const conversation=store.selections[id]?.id;
      const label=conversation&&store.titles[conversation]||'Chat '+(order+1);
+     const status=conversation?store.statuses[conversation]:'';
+     const badge=({QUEUED:'Queued',RUNNING:'Generating',CANCEL_REQUESTED:'Stopping',FAILED:'Failed',CANCELLED:'Stopped'} as Record<string,string>)[status||''];
      return <div key={id} className="chat-pane-tab" data-current={id===tabs.active}>
       <button type="button" data-chat-tab aria-current={id===tabs.active?'true':undefined} title={label} onClick={()=>store.selectTab(name,id)}>
-       <MessageSquare size={13} aria-hidden="true"/><span>{label}</span>
+       <MessageSquare size={13} aria-hidden="true"/><span>{label}</span>{badge&&<small className="chat-tab-status">{badge}</small>}
       </button>
       {tabs.ids.length>1&&<button className="chat-tab-close" type="button" aria-label={'Close '+label} title={'Close '+label} onClick={()=>store.closeTab(name,id)}><X size={13}/></button>}
      </div>;
@@ -216,12 +234,50 @@ function Icon({kind}:{kind:'sidebar'|'new'|'send'|'stop'|'attach'|'chat'}){
 export function SidebarToggle({open,toggle}:{open:boolean;toggle:()=>void}){return <button id="core-ai-explorer-toggle" className="icon-button sidebar-toggle" aria-label={open?'Hide sidebar':'Show sidebar'} title={(open?'Hide':'Show')+' sidebar · Ctrl B'} aria-expanded={open} aria-controls={open?'core-ai-explorer':undefined} onClick={toggle}><Icon kind="sidebar"/></button>;}
 export function NewChatButton({open}:{open:()=>void}){return <button className="new-chat" onClick={()=>{window.dispatchEvent(new Event('core-ai-new-chat'));open();}}><Icon kind="new"/>New chat</button>;}
 export function ChatHistory({tick,open,navigation}:{tick:number;open:()=>void;navigation:ReactNode}){
- const {id,select,revision,changed,openConversation}=useChat();
- const [items,setItems]=useState<Conversation[]>([]),[query,setQuery]=useState(''),[archived,setArchived]=useState(false),[error,setError]=useState(''),[search,setSearch]=useState('');
+ const {id,select,revision,changed,openConversation,rememberTitle}=useChat();
+ const [items,setItems]=useState<Conversation[]>([]),[query,setQuery]=useState(''),[scope,setScope]=useState('active'),[project,setProject]=useState(''),[projects,setProjects]=useState<{id:string;name:string}[]>([]),[filters,setFilters]=useState(false),[error,setError]=useState(''),[search,setSearch]=useState('');
  useEffect(()=>{const t=setTimeout(()=>setSearch(query),250);return()=>clearTimeout(t);},[query]);
- useEffect(()=>{let alive=true;api('chat/conversations?archived='+archived+'&q='+encodeURIComponent(search)).then(x=>{if(alive){setItems(x);setError('');}}).catch(e=>{if(alive)setError(e.message);});return()=>{alive=false;};},[tick,revision,search,archived]);
+ const [dialog,setDialog]=useState<{type:'rename'|'delete';conversation:Conversation}|null>(null);
+ const archived=scope==='archived';
+ useEffect(()=>{
+  if(!filters)return;
+  let alive=true;
+  cachedRead('projects').then(value=>{if(alive)setProjects(value);}).catch(e=>{if(alive)setError(e.message);});
+  return()=>{alive=false;};
+ },[filters,tick]);
+ useEffect(()=>{
+  let alive=true;
+  const query='chat/conversations?archived='+archived+'&q='+encodeURIComponent(search)+(scope==='all'?'&all_statuses=true':'')+(project?'&project_id='+encodeURIComponent(project):'');
+  api(query).then((rows:Conversation[])=>{if(alive){setItems(rows);setError('');rows.forEach(row=>rememberTitle(row.id,row.title));}}).catch(e=>{if(alive)setError(e.message);});
+  return()=>{alive=false;};
+ },[tick,revision,search,scope,archived,project,rememberTitle]);
  async function update(c:Conversation,patch:Record<string,unknown>){try{await api('chat/conversations/'+c.id,'PATCH',patch);changed();}catch(e){setError((e as Error).message);}}
- return <div className="chat-history"><div className="history-actions"><NewChatButton open={open}/><div className="history-search"><Search size={16} aria-hidden="true"/><input aria-label="Search conversations" placeholder="Search conversations…" value={query} onChange={e=>setQuery(e.target.value)}/></div></div><div className="explorer-scroll">{navigation}<div className="history-heading"><span>{archived?'ARCHIVE':'CONVERSATIONS'}</span><button aria-pressed={archived} onClick={()=>setArchived(x=>!x)}>{archived?'Back':'Archive'}</button></div>{error&&<div className="inline-error" role="alert">{error}</div>}<div className="history-scroll">{items.map(c=><div className={'history-item '+(id===c.id?'selected':'')} key={c.id}><button className="history-title" aria-current={id===c.id?'true':undefined} title={c.title} onClick={()=>{openConversation(c.id);open();}}>{c.pinned?<Pin size={16} aria-label="Pinned"/>:<MessageSquare size={16} aria-hidden="true"/>}<span className="history-name">{c.title}</span><small>{new Date(c.updated_at).toLocaleDateString(undefined,{month:'short',day:'numeric'})}</small></button><details className="history-menu"><summary aria-label={'Actions for '+c.title}><Ellipsis size={16} aria-hidden="true"/></summary><div><button onClick={()=>{const title=prompt('Conversation title',c.title);if(title?.trim())void update(c,{title:title.trim()});}}>Rename</button><button onClick={()=>void update(c,{pinned:!c.pinned})}>{c.pinned?'Unpin':'Pin'}</button><button onClick={()=>void update(c,{archived:!c.archived})}>{c.archived?'Restore':'Archive'}</button><button onClick={async()=>{if(!confirm('Delete this conversation and all its messages?'))return;try{await api('chat/conversations/'+c.id,'DELETE');if(id===c.id)select('');changed();}catch(e){setError((e as Error).message);}}}>Delete</button></div></details></div>)}{!items.length&&!error&&<div className="history-empty">{search?'No matching conversations.':archived?'No archived conversations.':'Your saved conversations appear here.'}</div>}</div></div><div className="history-foot">Private to your CORE-AI account · latest 200</div></div>;
+ return <div className="chat-history"><div className="history-actions"><NewChatButton open={open}/><div className="history-search"><Search size={16} aria-hidden="true"/><input aria-label="Search conversations" placeholder="Search conversations…" value={query} onChange={e=>setQuery(e.target.value)}/></div>
+  <button className="history-filter-toggle" type="button" aria-expanded={filters} onClick={()=>setFilters(x=>!x)}>Filter conversations</button>
+  {filters&&<div className="history-filters">
+   <select aria-label="Conversation scope" value={scope} onChange={e=>setScope(e.target.value)}><option value="all">All conversations</option><option value="active">Active</option><option value="archived">Archived</option></select>
+   <select aria-label="Filter by project" value={project} onChange={e=>setProject(e.target.value)}><option value="">All projects</option>{projects.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select>
+  </div>}
+ </div><div className="explorer-scroll">{navigation}<div className="history-heading"><span>{archived?'ARCHIVE':'CONVERSATIONS'}</span><button aria-pressed={archived} onClick={()=>setScope(archived?'active':'archived')}>{archived?'Back':'Archive'}</button></div>{error&&<div className="inline-error" role="alert">{error}</div>}<div className="history-scroll">{items.map(c=><div className={'history-item '+(id===c.id?'selected':'')} key={c.id}><button className="history-title" aria-current={id===c.id?'true':undefined} title={c.title} onClick={()=>{openConversation(c.id);open();}}>{c.pinned?<Pin size={16} aria-label="Pinned"/>:<MessageSquare size={16} aria-hidden="true"/>}<span className="history-name">{c.title}{scope==='all'&&c.archived&&<small> · Archived</small>}</span><small>{new Date(c.updated_at).toLocaleDateString(undefined,{month:'short',day:'numeric'})}</small></button><ChatPopover label={'Actions for '+c.title} kind="menu" align="end" buttonClass="history-menu-trigger" trigger={<Ellipsis size={16} aria-hidden="true"/>}>
+  {dismiss=><>
+   <button type="button" role="menuitem" onClick={()=>{dismiss();setDialog({type:'rename',conversation:c});}}>Rename</button>
+   <button type="button" role="menuitem" onClick={()=>{dismiss();void update(c,{pinned:!c.pinned});}}>{c.pinned?'Unpin':'Pin'}</button>
+   <button type="button" role="menuitem" onClick={()=>{dismiss();void update(c,{archived:!c.archived});}}>{c.archived?'Restore':'Archive'}</button>
+   <button type="button" role="menuitem" className="chat-menu-danger" onClick={()=>{dismiss();setDialog({type:'delete',conversation:c});}}>Delete</button>
+  </>}
+ </ChatPopover></div>)}{!items.length&&!error&&<div className="history-empty">{search?'No matching conversations.':archived?'No archived conversations.':'Your saved conversations appear here.'}</div>}</div></div><div className="history-foot">Private to your CORE-AI account · latest 200</div>
+ {dialog&&<ConversationDialog action={dialog.type} title={dialog.conversation.title} dismiss={()=>setDialog(null)} confirm={async title=>{
+  const conversation=dialog.conversation;
+  if(dialog.type==='rename'){
+   await api('chat/conversations/'+conversation.id,'PATCH',{title});
+   rememberTitle(conversation.id,title);
+  }else{
+   await api('chat/conversations/'+conversation.id,'DELETE');
+   if(id===conversation.id)select('');
+  }
+  changed();
+ }}/>}
+ </div>;
 }
 function CodeBlock({children}:{children?:ReactNode}){const ref=useRef<HTMLPreElement>(null),[copied,setCopied]=useState(false);return <div className="code-block"><header><span>Code</span><button onClick={async()=>{try{await navigator.clipboard.writeText(ref.current?.textContent||'');setCopied(true);setTimeout(()=>setCopied(false),1800);}catch{setCopied(false);}}}>{copied?'Copied':'Copy code'}</button></header><pre ref={ref}>{children}</pre></div>;}
 export function MessageMarkdown({text}:{text:string}){return <div className="message-markdown"><Markdown remarkPlugins={[remarkGfm,remarkMath]} rehypePlugins={[[rehypeKatex,{trust:false,maxExpand:1000,maxSize:10}]]} skipHtml urlTransform={url=>/^(https?:\/\/|mailto:|#)/i.test(url)?url:''} components={{pre:({children})=><CodeBlock>{children}</CodeBlock>,a:({children,href})=><a href={href} target={href?.startsWith('#source:')?undefined:'_blank'} rel="noopener noreferrer" onClick={e=>{if(href?.startsWith('#source:')){e.preventDefault();window.dispatchEvent(new CustomEvent('core-ai-source',{detail:{id:href.slice(8)}}));}}}>{children}</a>,img:({alt})=><span className="attachment-reference">[Image reference: {alt||'image'}]</span>}}>{text.replace(/\[([0-9a-f]{8}-[0-9a-f-]{27})\](?!\()/gi,(_,id)=>'[Source '+id.slice(0,8)+'](#source:'+id+')')}</Markdown></div>;}
@@ -246,8 +302,8 @@ export default function Chat({tick,visible=true,sendKey='Enter',chatDefaults=def
  const generation=thread?.id===id?thread.generation:null;
  const generating=!!generation;
  const patch=(p:Partial<Preferences>)=>setPrefs(x=>({...x,...p}));
- const refreshModels=useCallback(async()=>{setModelsBusy(true);try{const m=await api('models');if(!alive.current)return;setModelState(m);defaultModel.current=m.config.model;setPrefs(current=>current.model?current:{...current,model:m.config.model});}catch(e){if(alive.current)setError((e as Error).message);}finally{if(alive.current)setModelsBusy(false);}},[]);
- useEffect(()=>{alive.current=true;void refreshModels();api('projects').then(p=>{if(alive.current)setProjects(p);}).catch(()=>{});return()=>{alive.current=false;sequence.current++;};},[refreshModels]);
+ const refreshModels=useCallback(async(force=false)=>{setModelsBusy(true);try{const m=await cachedRead('models?catalog=true',force);if(!alive.current)return;setModelState(m);defaultModel.current=m.config.model;setPrefs(current=>current.model?current:{...current,model:m.config.model});}catch(e){if(alive.current)setError((e as Error).message);}finally{if(alive.current)setModelsBusy(false);}},[]);
+ useEffect(()=>{alive.current=true;if(visible)void refreshModels();return()=>{alive.current=false;sequence.current++;};},[refreshModels,visible]);
  const load=useCallback(async()=>{if(!id)return;const seq=++sequence.current;try{const c=await api('chat/conversations/'+id);if(alive.current&&seq===sequence.current){setThread(c);rememberTitle(c.id,c.title);if(hydrated.current!==id){hydrated.current=id;setPrefs(drafts.current[draftSlot]?.preferences??{model:c.model,mode:c.mode,instructions:c.instructions,project_id:c.project_id,temperature:c.temperature,max_tokens:c.max_tokens,agent_id:c.agent_id});}setError('');}}catch(e){if(alive.current&&seq===sequence.current){setError((e as Error).message);if((e as any).status===404){select('',selection);changed();}}}finally{if(alive.current&&seq===sequence.current)setLoading(false);}},[id,select,changed,drafts,draftSlot,selection,rememberTitle]);
  useEffect(()=>{
   sequence.current++;
@@ -257,8 +313,7 @@ export default function Chat({tick,visible=true,sendKey='Enter',chatDefaults=def
   setDraft(saved.text);setAttachments(saved.attachments);
   hydrated.current='';
   setLoading(!!id);
-  if(id)void load();
-  else setPrefs(saved.preferences??{...defaultsRef.current,model:defaultModel.current,instructions:'',project_id:newChat?.projectId??null});
+  if(!id)setPrefs(saved.preferences??{...defaultsRef.current,model:defaultModel.current,instructions:'',project_id:newChat?.projectId??null});
  },[id,load,newChat,drafts,draftSlot]);
  useEffect(()=>{if(draftKey.current===draftSlot&&(!id||hydrated.current===id))drafts.current[draftSlot]={text:draft,attachments,preferences:prefs};},[draft,attachments,prefs,drafts,draftSlot,id]);
  useEffect(()=>{draftKey.current=draftSlot;},[draftSlot]);
@@ -270,20 +325,44 @@ export default function Chat({tick,visible=true,sendKey='Enter',chatDefaults=def
   });
   return()=>window.cancelAnimationFrame(frame);
  },[visible,newChat,viewer]);
- useEffect(()=>{if(visible){api('agents').then(setAgents).catch(()=>{});api('projects').then(setProjects).catch(()=>{});}},[tick,visible]);
+ useEffect(()=>{if(visible){cachedRead('agents').then(value=>{if(alive.current)setAgents(value);}).catch(()=>{});cachedRead('projects').then(value=>{if(alive.current)setProjects(value);}).catch(()=>{});}},[tick,visible]);
  useEffect(()=>{if(!attachments.some(a=>a.file_id&&a.status!=='READY'&&a.status!=='FAILED'))return;const timer=setInterval(async()=>{const pending=attachments.filter(a=>a.file_id&&a.status!=='READY'&&a.status!=='FAILED');const done=await Promise.all(pending.map(a=>api('files/'+a.file_id).catch(()=>null)));if(alive.current&&isCurrent())setAttachments(old=>old.map(a=>{const f=done.find(x=>x?.id===a.file_id);return f?{...a,status:f.status}:a;}));},1500);return()=>clearInterval(timer);},[attachments,selection]);
- useEffect(()=>{if(id&&visible)void load();},[tick,revision,id,visible,load]);
- useEffect(()=>{if(!generating||!visible)return;const timer=setInterval(()=>{if(document.visibilityState!=='hidden')void load();},900);return()=>clearInterval(timer);},[generating,visible,load]);
+ useEffect(()=>{if(id&&visible&&!generating)void load();},[tick,revision,id,visible,load,generating]);
+ const replyId=generation?.id;
+ useEffect(()=>{
+  if(!id||!replyId||!visible)return;
+  let cancelled=false,timer:number;
+  const poll=async()=>{
+   try{
+    if(document.visibilityState!=='hidden'){
+     const reply=await api('chat/conversations/'+id+'/reply/'+replyId);
+     if(cancelled)return;
+     if(!activeReplies.includes(reply.status))await load();
+     else setThread(current=>current?.id===id&&current.generation?.id===replyId?{
+      ...current,generation:{...current.generation,status:reply.status},
+      messages:current.messages.map(message=>message.id===reply.message_id?{...message,content:reply.content,status:reply.message_status,error:reply.error}:message)
+     }:current);
+    }
+   }catch{
+    if(!cancelled)await load();
+   }
+   if(!cancelled)timer=window.setTimeout(poll,900);
+  };
+  timer=window.setTimeout(poll,900);
+  return()=>{cancelled=true;window.clearTimeout(timer);};
+ },[id,replyId,visible,load]);
  useEffect(()=>{if(!generating)setStopping(false);},[generating]);
  const messages=thread?.id===id?thread.messages:[];
  const lastMessage=messages[messages.length-1];
  const allFolded=messages.length>0&&messages.every(message=>folded.has(message.id));
  useEffect(()=>{if(atBottom.current&&scroll.current)scroll.current.scrollTop=scroll.current.scrollHeight;},[id,lastMessage?.content,messages.length]);
  useEffect(()=>{if(composer.current){composer.current.style.height='auto';composer.current.style.height=Math.min(180,Math.max(46,composer.current.scrollHeight))+'px';}},[draft]);
- const textModels=(modelState?.models||[]).filter((m:any)=>!/(embed|bge-m3|nomic-embed)/i.test(m.name));
+ const textModels: {name:string;capabilities?:string[]}[]=(modelState?.models||[]).filter((model:{name:string;capabilities?:string[]})=>Array.isArray(model.capabilities)?model.capabilities.includes('completion'):!/(embed|bge-m3|nomic-embed)/i.test(model.name));
+ const modelReady=!!modelState?.available&&textModels.some(model=>model.name===prefs.model);
+ const modelNotice=!modelState?'Checking models…':!modelState.available?'Model host offline':!textModels.length?'No chat models available':!modelReady?(prefs.model?'Selected model unavailable':'Choose a chat model'):'Local inference';
  async function send(e?:FormEvent){
   e?.preventDefault();
-  if(sending.current||generating||loading||(id&&thread?.id!==id)||!draft.trim()||!prefs.model||!modelState?.available||thread?.archived||viewer||uploading!==null||attachments.some(a=>a.file_id&&a.status!=='READY'))return;
+  if(sending.current||generating||loading||(id&&thread?.id!==id)||!draft.trim()||!modelReady||thread?.archived||viewer||uploading!==null||attachments.some(a=>a.file_id&&a.status!=='READY'))return;
   sending.current=true;setBusy(true);setError('');
   let conversationId=id;
   try{
@@ -314,13 +393,28 @@ export default function Chat({tick,visible=true,sendKey='Enter',chatDefaults=def
   }finally{sending.current=false;if(alive.current)setBusy(false);}
  }
  async function stop(){if(!id||stopping)return;setStopping(true);try{await api('chat/conversations/'+id+'/stop','POST',{});await load();changed();}catch(e){setError((e as Error).message);setStopping(false);}}
- async function regenerate(){const question=[...messages].reverse().find(m=>m.role==='user');if(!question)return;setBusy(true);setError('');try{const r=await api('chat/conversations/'+id+'/fork','POST',{...prefs,content:question.content,attachments:question.attachments,message_id:question.id,request_id:newId()});select(r.conversation_id,selection);changed();}catch(e){setError((e as Error).message);}finally{setBusy(false);}}
- async function attach(files:FileList|null){if(!files||viewer)return;try{if(attachments.length+files.length>4)throw new Error('Attach up to four files.');for(const f of Array.from(files)){if(!isCurrent())break;setUploading(0);const result=await uploadFile(f,prefs.project_id,setUploading);if(alive.current&&isCurrent())setAttachments(old=>[...old,{name:result.name,content:'',file_id:result.id,status:result.status}]);}if(isCurrent())setError('');}catch(e){if(isCurrent())setError((e as Error).message);}finally{setUploading(null);if(fileInput.current)fileInput.current.value='';}}
+ async function regenerate(){const question=[...messages].reverse().find(m=>m.role==='user');if(!question||!modelReady)return;setBusy(true);setError('');try{const r=await api('chat/conversations/'+id+'/fork','POST',{...prefs,content:question.content,attachments:question.attachments,message_id:question.id,request_id:newId()});select(r.conversation_id,selection);changed();}catch(e){setError((e as Error).message);}finally{setBusy(false);}}
+ async function attach(files:FileList|null){if(!files||viewer)return;try{if(attachments.length+files.length>attachmentLimit)throw new Error('Attach up to eight files.');for(const f of Array.from(files)){if(!isCurrent())break;setUploading(0);const result=await uploadFile(f,prefs.project_id,setUploading);if(alive.current&&isCurrent())setAttachments(old=>[...old,{name:result.name,content:'',file_id:result.id,status:result.status}]);}if(isCurrent())setError('');}catch(e){if(isCurrent())setError((e as Error).message);}finally{setUploading(null);if(fileInput.current)fileInput.current.value='';}}
  async function openPicker(){try{const files=await api('files');if(isCurrent()){setLibrary(files);setPicker(x=>!x);}}catch(e){setError((e as Error).message);}}
- async function saveArtifact(m:Message){try{const result=await api('library/artifacts','POST',{title:thread?.title||'Chat document',kind:'markdown',content:m.content,source_message_id:m.id,project_id:prefs.project_id});window.dispatchEvent(new CustomEvent('core-ai-artifact',{detail:{id:result.id}}));setNotice('Saved as a versioned artifact.');}catch(e){setError((e as Error).message);}}
+ const openingArtifacts=useRef(new Set<string>());
+ async function saveArtifact(m:Message){
+  if(openingArtifacts.current.has(m.id))return;
+  openingArtifacts.current.add(m.id);
+  try{
+   const artifacts=await api('library/artifacts?source_message_id='+encodeURIComponent(m.id));
+   if(!isCurrent())return;
+   const existing=Array.isArray(artifacts)?artifacts.find(a=>a.project_id===prefs.project_id):null;
+   const result=existing??await api('library/artifacts','POST',{title:thread?.title||'Chat document',kind:'markdown',content:m.content,source_message_id:m.id,project_id:prefs.project_id});
+   if(!alive.current||!isCurrent())return;
+   window.dispatchEvent(new CustomEvent('core-ai-artifact',{detail:{id:result.id}}));
+   setNotice(existing?'Opened the saved artifact.':'Saved as a versioned artifact.');
+  }catch(e){if(isCurrent())setError((e as Error).message);}
+  finally{openingArtifacts.current.delete(m.id);}
+ }
+
 
  async function copy(m:Message){try{await navigator.clipboard.writeText(m.content);setCopied(m.id);setTimeout(()=>setCopied(''),1800);}catch{setError('Clipboard access was denied. Select the reply text to copy it.');}}
- return <section className="chat-workspace" aria-label="Chat workspace"><header className="chat-top"><div className="chat-model"><select aria-label="Chat model" value={prefs.model} onChange={e=>patch({model:e.target.value})}><option value="">Choose a model</option>{prefs.model&&!textModels.some((m:any)=>m.name===prefs.model)&&<option value={prefs.model}>{prefs.model}</option>}{textModels.map((m:any)=><option key={m.name}>{m.name}</option>)}</select><span className={'model-connection '+(modelState?.available?'online':'offline')}>{modelState?modelState.available?'Local inference':'Model host offline':'Checking models…'}</span></div><div className="chat-top-actions"><select aria-label="Response style" value={prefs.mode} title={chatModes.find(mode=>mode.value===prefs.mode)?.description} onChange={e=>patch({mode:e.target.value as Preferences['mode']})}>{chatModes.map(({value,label})=><option key={value} value={value}>{label}</option>)}</select><button aria-expanded={settings} aria-controls={optionsId} onClick={()=>setSettings(x=>!x)}>Options</button>{thread&&<button onClick={()=>exportChat(thread)}>Export</button>}<button aria-label="Refresh chat models" disabled={modelsBusy} onClick={()=>void refreshModels()}>↻</button></div></header>
+ return <section className="chat-workspace" aria-label="Chat workspace"><header className="chat-top"><div className="chat-model"><span className={'model-connection '+(modelReady?'online':'offline')} aria-live="polite">{modelNotice}</span></div><div className="chat-top-actions"><button aria-expanded={settings} aria-controls={optionsId} onClick={()=>setSettings(x=>!x)}>Advanced</button>{thread&&<button onClick={()=>exportChat(thread)}>Export</button>}<button aria-label="Refresh chat models" disabled={modelsBusy} onClick={()=>void refreshModels(true)}>↻</button></div></header>
  {settings&&<div className="chat-options" id={optionsId}><label>Project context<select value={prefs.project_id||''} onChange={e=>patch({project_id:e.target.value||null})}><option value="">None · general conversation</option>{projects.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select></label><label>Temperature <span>{prefs.temperature.toFixed(1)}</span><input type="range" min="0" max="1.5" step="0.1" value={prefs.temperature} onChange={e=>patch({temperature:+e.target.value})}/></label><label>Agent profile · instructions<select aria-label="Chat agent profile" value={prefs.agent_id||''} onChange={e=>patch({agent_id:e.target.value||null})}><option value="">Default assistant</option>{agents.filter(a=>a.enabled).map(a=><option key={a.id} value={a.id}>{a.name}</option>)}</select></label><label>Maximum reply tokens<select value={prefs.max_tokens} onChange={e=>patch({max_tokens:+e.target.value})}>{replyTokenOptions.map(n=><option key={n} value={n}>{n}</option>)}</select></label><label className="instructions-field">Response instructions<textarea aria-label="Chat response instructions" maxLength={4000} rows={2} value={prefs.instructions} onChange={e=>patch({instructions:e.target.value})} placeholder="Preferred tone, format, expertise or constraints…"/></label><small>{chatModes.find(mode=>mode.value===prefs.mode)?.description}. Changes apply to your next message.</small></div>}
  <div className="chat-scroll" ref={scroll} onScroll={e=>{const el=e.currentTarget;atBottom.current=el.scrollHeight-el.scrollTop-el.clientHeight<100;setJump(!atBottom.current);}}>
  {loading&&!messages.length?<div className="chat-loading" role="status">Loading conversation…</div>:!messages.length?<div className="chat-welcome"><div className="welcome-mark">◈</div><h1>How can I help?</h1><p>A clear space for everyday questions and professional work.</p><div className="starter-grid">{(prefs.mode==='quick'?starters.general:starters[prefs.mode]).map(([label,text])=><button key={label} disabled={viewer} onClick={()=>{setDraft(current=>current.trim()?(current+'\n\n'+text).slice(0,16000):text);composer.current?.focus();}}><b>{label}</b><span>{text}</span></button>)}</div></div>:<div className="conversation" role="log" aria-label="Conversation messages" aria-live="off">
@@ -349,7 +443,7 @@ export default function Chat({tick,visible=true,sendKey='Enter',chatDefaults=def
       {m.content&&<button onClick={()=>void copy(m)}>{copied===m.id?'Copied':'Copy'}</button>}
       {user&&!generating&&!busy&&!viewer&&<button onClick={()=>{setEdit(m);setDraft(m.content);setAttachments(m.attachments);composer.current?.focus();}}>Edit & branch</button>}
       {!user&&m.content&&!viewer&&<button onClick={()=>void saveArtifact(m)}>Open as artifact</button>}
-      {!user&&index===messages.length-1&&!generating&&!viewer&&<button disabled={busy} onClick={()=>void regenerate()}>{m.status==='FAILED'?'Retry':'Regenerate'}</button>}
+      {!user&&index===messages.length-1&&!generating&&!viewer&&<button disabled={busy||!modelReady} onClick={()=>void regenerate()}>{m.status==='FAILED'?'Retry reply':'Regenerate'}</button>}
      </div>
     </div>
     {['QUEUED','RUNNING','CANCEL_REQUESTED'].includes(m.status)&&<div className="reply-state" role="status"><i/>{m.status==='QUEUED'?'Queued · waiting for the inference slot':m.status==='CANCEL_REQUESTED'?'Stopping…':'Generating…'}</div>}
@@ -357,5 +451,5 @@ export default function Chat({tick,visible=true,sendKey='Enter',chatDefaults=def
     {m.status==='CANCELLED'&&<small className="reply-note">Stopped · partial reply retained</small>}
    </article>;
   })}</div>}
- </div><div className="composer-area">{jump&&<button className="jump-latest" onClick={()=>{if(scroll.current)scroll.current.scrollTop=scroll.current.scrollHeight;atBottom.current=true;setJump(false);}}>↓ Jump to latest</button>}{uploading!==null&&<div className="upload-progress" role="status">Uploading {uploading}%<progress max={100} value={uploading}/></div>}{viewer&&<div className="connection-note">Read-only account. An editor role is required to send messages.</div>}{error&&<div className="inline-error" role="alert">{error}</div>}{notice&&<div role="status">{notice}</div>}{modelState&&!modelState.available&&<div className="connection-note">The model host is offline. Start the laptop and Ollama, then refresh models.</div>}{edit&&<div className="edit-banner">Editing an earlier message creates a new branch and preserves the original conversation.<button onClick={()=>{setEdit(null);setDraft('');setAttachments([]);}}>Cancel edit</button></div>}<form className={'chat-composer '+(generating?'is-generating':'')} onSubmit={send}><label className="sr-only" htmlFor={messageId}>Message CORE-AI</label><textarea id={messageId} ref={composer} aria-label="Message CORE-AI" value={draft} maxLength={16000} disabled={viewer} placeholder={generating?'You can draft your next message while CORE-AI replies…':'Message CORE-AI…'} onChange={e=>setDraft(e.target.value)} onKeyDown={e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.nativeEvent.isComposing&&(sendKey==='Enter'||e.ctrlKey||e.metaKey)){e.preventDefault();if(!generating)void send();}}}/>{attachments.length>0&&<div className="composer-files">{attachments.map((a,i)=><span key={i}>▧ {a.name}{a.file_id&&<small> · {a.status?.toLowerCase()}</small>}<button type="button" aria-label={'Remove '+a.name} onClick={()=>setAttachments(x=>x.filter((_,j)=>i!==j))}>×</button></span>)}</div>}<div className="composer-controls"><input type="file" ref={fileInput} className="sr-only" multiple accept=".txt,.md,.csv,.json,.pdf,.docx,.xlsx,.py,.js,.ts,.tsx,.jsx,.sql,.yaml,.yml,.log,.html,.css,.xml,.toml,.ini,.sh,.ps1" onChange={e=>void attach(e.target.files)}/><button className="attach-button" type="button" aria-label="Upload supported files" title="Upload text, code, PDF, DOCX or XLSX" disabled={viewer||uploading!==null} onClick={()=>fileInput.current?.click()}><Icon kind="attach"/></button><button type="button" className="library-picker-button" disabled={viewer} aria-pressed={picker} onClick={()=>void openPicker()}>Library</button><button type="button" className="composer-context" aria-label="Conversation context" aria-expanded={settings} aria-controls={optionsId} title={[prefs.project_id?projects.find(p=>p.id===prefs.project_id)?.name||'Project context':'Private conversation',agents.find(a=>a.id===prefs.agent_id)?.name].filter(Boolean).join(' · ')} onClick={()=>setSettings(x=>!x)}>{prefs.project_id?projects.find(p=>p.id===prefs.project_id)?.name||'Project context':'Private conversation'}</button><span className="composer-hint">{sendKey==='Enter'?'Enter':'Ctrl Enter'} to send · Shift Enter for a new line</span>{generating?<button type="button" className="send-button stop-button" aria-label="Stop reply" disabled={stopping} onClick={()=>void stop()}><Icon kind="stop"/></button>:<button type="submit" className="send-button" aria-label="Send message" disabled={viewer||busy||loading||(!!id&&thread?.id!==id)||uploading!==null||attachments.some(a=>a.file_id&&a.status!=='READY')||!draft.trim()||!prefs.model||!modelState?.available||thread?.archived}><Icon kind="send"/></button>}</div>{picker&&<div className="composer-library"><b>Choose a processed file</b><button type="button" aria-label="Close file picker" onClick={()=>setPicker(false)}>×</button>{library.filter(f=>f.status==='READY').map(f=><button key={f.id} type="button" disabled={attachments.some(a=>a.file_id===f.id)||attachments.length>=4} onClick={()=>{setAttachments(a=>[...a,{name:f.name,content:'',file_id:f.id,status:f.status}]);setPicker(false);}}>▧ {f.name}</button>)}{library.filter(f=>f.status==='READY').length===0&&<p>No ready files. Upload a file or check its processing status in Files.</p>}</div>}</form><div className="composer-footnote"><span>CORE-AI can make mistakes. Check important information.</span><span>Self-hosted · {chatModes.find(mode=>mode.value===prefs.mode)?.label} · Text, PDF & Office files</span></div></div></section>;
+ </div><div className="composer-area">{jump&&<button className="jump-latest" onClick={()=>{if(scroll.current)scroll.current.scrollTop=scroll.current.scrollHeight;atBottom.current=true;setJump(false);}}>↓ Jump to latest</button>}{uploading!==null&&<div className="upload-progress" role="status">Uploading {uploading}%<progress max={100} value={uploading}/></div>}{viewer&&<div className="connection-note">Read-only account. An editor role is required to send messages.</div>}{error&&<div className="inline-error" role="alert">{error}</div>}{notice&&<div role="status">{notice}</div>}{modelState&&!modelState.available&&<div className="connection-note">The model host is offline. Start the laptop and Ollama, then refresh models.</div>}{edit&&<div className="edit-banner">Editing an earlier message creates a new branch and preserves the original conversation.<button onClick={()=>{setEdit(null);setDraft('');setAttachments([]);}}>Cancel edit</button></div>}<form className={'chat-composer '+(generating?'is-generating':'')} onSubmit={send}><label className="sr-only" htmlFor={messageId}>Message CORE-AI</label><textarea id={messageId} ref={composer} aria-label="Message CORE-AI" value={draft} maxLength={16000} disabled={viewer} placeholder={generating?'You can draft your next message while CORE-AI replies…':'Message CORE-AI…'} onChange={e=>setDraft(e.target.value)} onKeyDown={e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.nativeEvent.isComposing&&(sendKey==='Enter'||e.ctrlKey||e.metaKey)){e.preventDefault();if(!generating)void send();}}}/>{attachments.length>0&&<div className="composer-files">{attachments.map((a,i)=><span key={i}>▧ {a.name}{a.file_id&&<small> · {a.status?.toLowerCase()}</small>}<button type="button" aria-label={'Remove '+a.name} onClick={()=>setAttachments(x=>x.filter((_,j)=>i!==j))}>×</button></span>)}</div>}<div className="composer-controls"><div className="composer-preferences"><ChatModelPicker value={prefs.model} models={textModels} available={!!modelState?.available} onChange={model=>patch({model})}/><select aria-label="Response style" value={prefs.mode} title={chatModes.find(mode=>mode.value===prefs.mode)?.description} onChange={e=>patch({mode:e.target.value as Preferences['mode']})}>{chatModes.map(({value,label})=><option key={value} value={value}>{label}</option>)}</select></div><input type="file" ref={fileInput} className="sr-only" multiple accept=".txt,.md,.csv,.json,.pdf,.docx,.xlsx,.py,.js,.ts,.tsx,.jsx,.sql,.yaml,.yml,.log,.html,.css,.xml,.toml,.ini,.sh,.ps1" onChange={e=>void attach(e.target.files)}/><button className="attach-button" type="button" aria-label="Upload supported files" title="Upload text, code, PDF, DOCX or XLSX" disabled={viewer||uploading!==null} onClick={()=>fileInput.current?.click()}><Icon kind="attach"/></button><button type="button" className="library-picker-button" disabled={viewer} aria-pressed={picker} onClick={()=>void openPicker()}>Library</button><button type="button" className="composer-context" aria-label="Conversation context" aria-expanded={settings} aria-controls={optionsId} title={[prefs.project_id?projects.find(p=>p.id===prefs.project_id)?.name||'Project context':'Private conversation',agents.find(a=>a.id===prefs.agent_id)?.name].filter(Boolean).join(' · ')} onClick={()=>setSettings(x=>!x)}>{prefs.project_id?projects.find(p=>p.id===prefs.project_id)?.name||'Project context':'Private conversation'}</button><span className="composer-hint">{sendKey==='Enter'?'Enter':'Ctrl Enter'} to send · Shift Enter for a new line</span>{generating?<button type="button" className="send-button stop-button" aria-label="Stop reply" disabled={stopping} onClick={()=>void stop()}><Icon kind="stop"/></button>:<button type="submit" className="send-button" aria-label="Send message" disabled={viewer||busy||loading||(!!id&&thread?.id!==id)||uploading!==null||attachments.some(a=>a.file_id&&a.status!=='READY')||!draft.trim()||!modelReady||thread?.archived}><Icon kind="send"/></button>}</div>{picker&&<div className="composer-library"><b>Choose a processed file</b><button type="button" aria-label="Close file picker" onClick={()=>setPicker(false)}>×</button>{library.filter(f=>f.status==='READY').map(f=><button key={f.id} type="button" disabled={attachments.some(a=>a.file_id===f.id)||attachments.length>=attachmentLimit} onClick={()=>{setAttachments(a=>[...a,{name:f.name,content:'',file_id:f.id,status:f.status}]);setPicker(false);}}>▧ {f.name}</button>)}{library.filter(f=>f.status==='READY').length===0&&<p>No ready files. Upload a file or check its processing status in Files.</p>}</div>}</form><div className="composer-footnote"><span>CORE-AI can make mistakes. Check important information.</span><span>Self-hosted · {chatModes.find(mode=>mode.value===prefs.mode)?.label} · Text, PDF & Office files</span></div></div></section>;
 }

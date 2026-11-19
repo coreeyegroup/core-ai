@@ -5,7 +5,7 @@ import time
 import uuid
 from typing import Literal
 import httpx
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field, field_validator, model_validator
 from psycopg.types.json import Jsonb
 from . import auth, db, models, access
@@ -57,7 +57,7 @@ class Metadata(BaseModel):
 
 class Send(Preferences):
     content: str = Field(min_length=1,max_length=16000)
-    attachments: list[Attachment] = Field(default_factory=list,max_length=4)
+    attachments: list[Attachment] = Field(default_factory=list,max_length=8)
     request_id: uuid.UUID
     file_ids: list[uuid.UUID] = Field(default_factory=list,max_length=8)
 
@@ -65,6 +65,8 @@ class Send(Preferences):
     def validate_text(self):
         if not self.content.strip() or '\0' in self.content:
             raise ValueError('Enter a text message without null characters.')
+        if len(self.attachments)+len(self.file_ids)>8:
+            raise ValueError('Attach up to eight files per message.')
         if sum(len(a.content) for a in self.attachments)>32000:
             raise ValueError('Attachment text must total no more than 32,000 characters.')
         return self
@@ -122,7 +124,10 @@ def enqueue(conn,ident,user,body):
         f=own_file(conn,user,file_id)
         if f['status']!='READY':raise HTTPException(409,'Wait for the attached file to finish processing.')
         excerpt=f['text_content'][:min(budget,12000)]
-        if len(excerpt)<len(f['text_content']):excerpt+='\n[File excerpt shortened to fit context.]'
+        if len(excerpt)<len(f['text_content']):
+            marker='\n[File excerpt shortened to fit context.]'
+            if len(excerpt)>=len(marker):
+                excerpt=excerpt[:len(excerpt)-len(marker)]+marker
         attachments.append({'name':f['name'],'content':excerpt,'file_id':str(file_id),'sha256':f['sha256']})
         budget=max(0,budget-len(excerpt))
     conn.execute("INSERT INTO chat_messages(id,conversation_id,role,content,attachments) VALUES (%s,%s,'user',%s,%s)",(question,ident,body.content,Jsonb(attachments)))
@@ -139,12 +144,18 @@ def enqueue(conn,ident,user,body):
     return {'id':generation,'conversation_id':ident,'assistant_message_id':answer}
 
 @router.get('/conversations')
-def conversations(q: str = '', archived: bool = False, project_id:uuid.UUID|None=None,user=Depends(auth.session)):
+def conversations(q: str = '', archived: bool = False, project_id:uuid.UUID|None=None, all_statuses:bool=False,user=Depends(auth.session)):
     q=q[:200]
     return db.query('''SELECT c.*, (SELECT count(*) FROM chat_messages m WHERE m.conversation_id=c.id) AS message_count
-        FROM conversations c WHERE c.user_id=%s AND c.archived=%s AND (%s::uuid IS NULL OR c.project_id=%s) AND
+        FROM conversations c WHERE c.user_id=%s AND (%s OR c.archived=%s) AND (%s::uuid IS NULL OR c.project_id=%s) AND
         (%s='' OR c.title ILIKE %s OR EXISTS(SELECT 1 FROM chat_messages m WHERE m.conversation_id=c.id AND m.content ILIKE %s))
-        ORDER BY c.pinned DESC,c.updated_at DESC LIMIT 200''',(user['id'],archived,project_id,project_id,q,'%'+q+'%','%'+q+'%'))
+        ORDER BY c.pinned DESC,c.updated_at DESC LIMIT 200''',(user['id'],all_statuses,archived,project_id,project_id,q,'%'+q+'%','%'+q+'%'))
+
+@router.get('/statuses')
+def statuses(ids: list[uuid.UUID] = Query(max_length=48), user=Depends(auth.session)):
+    return db.query('''SELECT c.id, g.status FROM conversations c
+        LEFT JOIN LATERAL (SELECT status FROM chat_messages WHERE conversation_id=c.id AND role='assistant' ORDER BY sequence DESC LIMIT 1) g ON true
+        WHERE c.user_id=%s AND c.id=ANY(%s)''',(user['id'],ids))
 
 @router.post('/conversations',status_code=201)
 def new_conversation(body:NewConversation,user=Depends(auth.session)):
@@ -159,6 +170,15 @@ def conversation(ident:uuid.UUID,user=Depends(auth.session)):
         row=owned(conn,ident,user['id'])
         row['messages']=conn.execute('SELECT * FROM chat_messages WHERE conversation_id=%s ORDER BY sequence',(ident,)).fetchall()
         row['generation']=conn.execute("SELECT id,status,model,created_at FROM chat_generations WHERE conversation_id=%s AND status IN ('QUEUED','RUNNING','CANCEL_REQUESTED')",(ident,)).fetchone()
+    return row
+
+@router.get('/conversations/{ident}/reply/{generation}')
+def reply(ident:uuid.UUID,generation:uuid.UUID,user=Depends(auth.session)):
+    row=db.query('''SELECT g.id,g.status,m.id AS message_id,m.content,m.error,m.status AS message_status
+        FROM chat_generations g JOIN chat_messages m ON m.id=g.assistant_message_id
+        JOIN conversations c ON c.id=g.conversation_id
+        WHERE c.id=%s AND c.user_id=%s AND g.id=%s''',(ident,user['id'],generation),one=True)
+    if not row:raise HTTPException(404,'Reply not found.')
     return row
 
 @router.patch('/conversations/{ident}')

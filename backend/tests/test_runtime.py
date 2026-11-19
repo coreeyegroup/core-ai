@@ -63,3 +63,18 @@ def test_unreachable_provider_is_reported_not_faked(signed,monkeypatch):
     monkeypatch.setattr(models,'list_models',fail)
     r=signed.get('/api/v1/models').json()
     assert not r['available'] and r['models']==[]
+
+
+def test_catalog_uses_reported_capabilities_without_hiding_unknown_models(signed,monkeypatch):
+    monkeypatch.setattr(models,'list_models',lambda:{
+        'available':True, 'config':{'model':'local:chat','endpoint':'http://127.0.0.1:11434'},
+        'models':[{'name':'local:chat','digest':'a'},{'name':'local:vector','digest':'b'},{'name':'local:unknown'}],
+    })
+    def capabilities(endpoint,name,digest,window):
+        return {'local:chat':['completion'],'local:vector':['embedding'],'local:unknown':None}[name]
+    monkeypatch.setattr(models,'_catalog_capabilities',capabilities)
+    result=signed.get('/api/v1/models?catalog=true').json()
+    assert result['available'] is True
+    assert {m['name']:m['capabilities'] for m in result['models']}=={
+        'local:chat':['completion'],'local:vector':['embedding'],'local:unknown':None,
+    }

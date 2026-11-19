@@ -140,10 +140,11 @@ def new_artifact(conn,user,body):
     return ident
 
 @router.get('/library/artifacts')
-def artifact_list(user=Depends(auth.session)):
+def artifact_list(source_message_id:uuid.UUID|None=None,user=Depends(auth.session)):
     return db.query('''SELECT a.*,u.username AS owner FROM workspace_artifacts a JOIN users u ON u.id=a.owner_id
-        WHERE a.owner_id=%s OR %s='ADMIN' OR (a.visibility='PROJECT' AND EXISTS(SELECT 1 FROM project_members m WHERE m.project_id=a.project_id AND m.user_id=%s))
-        ORDER BY a.updated_at DESC LIMIT 200''',(user['id'],user['role'],user['id']))
+        WHERE (a.owner_id=%s OR %s='ADMIN' OR (a.visibility='PROJECT' AND EXISTS(SELECT 1 FROM project_members m WHERE m.project_id=a.project_id AND m.user_id=%s)))
+        AND (%s::uuid IS NULL OR (a.owner_id=%s AND a.source_message_id=%s))
+        ORDER BY a.updated_at DESC LIMIT 200''',(user['id'],user['role'],user['id'],source_message_id,user['id'],source_message_id))
 
 @router.post('/library/artifacts',status_code=201)
 def artifact_create(body:Artifact,user=Depends(auth.session)):

@@ -1,4 +1,4 @@
-import {useEffect,useState, type FormEvent} from 'react';
+import {useEffect,useRef,useState, type FormEvent} from 'react';
 import {api} from './api';
 import Chat,{MessageMarkdown} from './Chat';
 import ProjectWorkspace from './Projects';
@@ -19,6 +19,9 @@ export function ErrorNote({error}:{error:string}){return error?<div className="e
 function Empty({children}:{children:React.ReactNode}){return <div className="empty">{children}</div>;}
 function Status({value}:{value:string}){return <span className={'state '+value.toLowerCase()}>{value.replaceAll('_',' ')}</span>;}
 export function Module({view,tick,refresh,go,appearance,changeAppearance,visible}:{view:View;visible?:boolean;tick:number;refresh:()=>void;go:(v:View)=>void;appearance:Appearance;changeAppearance:(p:Partial<Appearance>)=>void}){
+ const lastVisibleTick=useRef(tick);
+ if(visible!==false)lastVisibleTick.current=tick;
+ tick=lastVisibleTick.current;
  switch(view){
   case 'Chat':return <Chat tick={tick} visible={visible} sendKey={appearance.sendKey} chatDefaults={appearance.chatDefaults}/>;
   case 'Overview':return <Overview tick={tick} go={go}/>;
@@ -30,7 +33,7 @@ export function Module({view,tick,refresh,go,appearance,changeAppearance,visible
   case 'Files':return <FilesPanel tick={tick} refresh={refresh}/>;
   case 'Access':return <AccessPanel tick={tick} refresh={refresh}/>;
   case 'Capabilities':return <CapabilitiesPanel tick={tick}/>;
-  case 'Workflows':return <CapabilitiesPanel tick={tick}/>;
+  case 'Workflows':return <CapabilitiesPanel tick={tick} feature="workflows"/>;
   case 'Models':return <Models tick={tick} refresh={refresh}/>;
   case 'Tools':return <Tools tick={tick}/>;
   case 'Integrations':return <Integrations tick={tick}/>;

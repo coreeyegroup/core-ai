@@ -140,9 +140,10 @@ def update_agent(ident: uuid.UUID, body: Agent, user: User):
     return row
 
 @app.get('/api/v1/models')
-def model_list(user: User):
+def model_list(user: User, catalog: bool = False):
     try:
         result=models.list_models()
+        if catalog:result=models.with_capabilities(result)
         if user['role']!='ADMIN':result['config']={**result['config'],'endpoint':'Private local provider'}
         return result
     except Exception:

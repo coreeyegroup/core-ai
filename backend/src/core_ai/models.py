@@ -1,6 +1,9 @@
 """Private Ollama adapter. Endpoints are administrator configured, never supplied by prompts."""
+from concurrent.futures import ThreadPoolExecutor
+from functools import lru_cache
 import ipaddress
 import os
+import time
 from urllib.parse import urlsplit
 import httpx
 from psycopg.types.json import Jsonb
@@ -36,6 +39,29 @@ def list_models():
         response.raise_for_status()
         items = response.json().get('models', [])
     return {'available': True, 'models': items, 'config': cfg}
+
+
+@lru_cache(maxsize=256)
+def _catalog_capabilities(endpoint, name, digest, window):
+    with httpx.Client(timeout=1.0, trust_env=False, follow_redirects=False) as client:
+        result = client.post(endpoint + '/api/show', json={'model': name})
+        result.raise_for_status()
+        capabilities = result.json().get('capabilities')
+    return capabilities if isinstance(capabilities, list) else None
+
+def with_capabilities(catalog):
+    endpoint = catalog['config']['endpoint']
+    window = int(time.monotonic() // 60)
+    def enrich(item):
+        try:
+            capabilities = _catalog_capabilities(endpoint, item['name'], item.get('digest', ''), window)
+        except (httpx.HTTPError, ValueError, KeyError):
+            capabilities = None
+        return {**item, 'capabilities': capabilities}
+    items = catalog['models']
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        checked = list(pool.map(enrich, items[:32]))
+    return {**catalog, 'models': checked + items[32:]}
 
 
 def inspect_model(name):

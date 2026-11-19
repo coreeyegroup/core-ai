@@ -8,11 +8,21 @@ export function newId(){
 }
 
 let csrf='';
-export function setCsrf(value:string){csrf=value;}
+const sharedReads=new Map<string,{until:number;promise:Promise<any>}>();
+export function setCsrf(value:string){if(csrf!==value)sharedReads.clear();csrf=value;}
+export function cachedRead(path:string,force=false){
+ const now=Date.now(),current=sharedReads.get(path);
+ if(!force&&current&&current.until>now)return current.promise;
+ const promise=api(path);
+ sharedReads.set(path,{until:now+15000,promise});
+ promise.catch(()=>{if(sharedReads.get(path)?.promise===promise)sharedReads.delete(path);});
+ return promise;
+}
 export async function api(path:string,method='GET',body?:unknown){
   const res=await fetch('/api/v1/'+path,{method,credentials:'same-origin',cache:'no-store',headers:{'Content-Type':'application/json','x-core-ai-csrf':csrf},body:body===undefined?undefined:JSON.stringify(body),signal:AbortSignal.timeout(15000)});
   const value=await res.json().catch(()=>({detail:'Invalid server response.'}));
   if(!res.ok){const error=new Error(typeof value.detail==='string'?value.detail:'Request rejected. Check the fields.');Object.assign(error,{status:res.status});throw error;}
+  if(method!=='GET'&&/^(projects|agents|models)(\/|$)/.test(path))sharedReads.clear();
   return value;
 }
 
