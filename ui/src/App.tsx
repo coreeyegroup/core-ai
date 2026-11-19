@@ -1,4 +1,4 @@
-import {Component,useEffect,useRef,useState,type KeyboardEvent as ReactKeyboardEvent,type ReactNode} from 'react';
+import {Component,useEffect,useRef,useState,type CSSProperties,type KeyboardEvent as ReactKeyboardEvent,type ReactNode} from 'react';
 import {MessageSquare,Folder,Files,FileText,Bot,ListTodo,BookOpen,Wrench,Activity,Shield,Settings as SettingsIcon,LayoutDashboard,Plug,Search,Command as CommandIcon,LogOut,PanelRight,Columns2,X,Maximize2,ExternalLink,ChevronDown,Workflow,SlidersHorizontal} from 'lucide-react';
 import {api,setCsrf} from './api';
 import {views,defaults,restore,closeTab,key,type Layout,type View} from './layout';
@@ -26,6 +26,9 @@ export default function App(){
  const patch=(p:Partial<Layout>)=>setLayout(x=>({...x,...p}));const refresh=()=>setTick(t=>t+1);const appearancePatch=(p:Partial<Appearance>)=>setAppearance(x=>({...x,...p}));
  const sidebarVisible=!layout.maximized&&(mobile?mobileOpen:layout.left);
  const drawerOpen=mobile&&sidebarVisible;
+ const dockedExplorer=sidebarVisible&&!mobile;
+ const ribbonVisible=appearance.activity&&!mobile&&!layout.maximized;
+ const leftChrome={'--explorer-width':`${layout.leftWidth}px`} as CSSProperties;
  function closeExplorer(){if(mobile)setMobileOpen(false);else patch({left:false});}
  function trapDrawerFocus(event:ReactKeyboardEvent<HTMLElement>){
   if(!drawerOpen||event.key!=='Tab')return;
@@ -39,7 +42,11 @@ export default function App(){
  function closeRight(){setRight(null);patch({right:false});}
  function toggleRight(){if(layout.right){if(guardInspector())closeRight();}else patch({right:true});}
  function open(view:View,group=layout.focus){if(drawerOpen)focusMainOnClose.current=true;setLayout(x=>{const groups=x.groups.map(g=>[...g]),active=[...x.active];if(!groups[group])group=0;if(!groups[group].includes(view))groups[group].push(view);active[group]=view;return {...x,groups,active,focus:group};});setPalette(false);setMobileOpen(false);}
- function go(v:View){const at=layout.groups[layout.focus].includes(v)?layout.focus:layout.groups.findIndex(g=>g.includes(v));open(v,at<0?layout.focus:at);}
+ function revealNavigation(view:View){
+  const group=navGroups.find(group=>group.items.includes(view));
+  if(group)setGroupsOpen(current=>current[group.label]?current:{...current,[group.label]:true});
+ }
+ function go(v:View){revealNavigation(v);const at=layout.groups[layout.focus].includes(v)?layout.focus:layout.groups.findIndex(g=>g.includes(v));open(v,at<0?layout.focus:at);}
  function preset(workbench:boolean){setLayout(x=>({...x,groups:[workbench?['Overview','Chat']:['Chat']],active:[workbench?'Overview':'Chat'],focus:0,bottom:workbench,maximized:false}));}
  function alone(v:View){patch({groups:[[v]],active:[v],focus:0,maximized:false});}
  function split(axis:Layout['axis']='row'){setLayout(x=>x.groups.length>=4?{...x,axis}:{...x,axis,groups:[...x.groups,[x.active[x.focus]]],active:[...x.active,x.active[x.focus]],focus:x.groups.length,maximized:false});}
@@ -49,10 +56,7 @@ export default function App(){
  function workspace(w:Layout['workspace']){try{localStorage.setItem(key+'.'+layout.workspace,JSON.stringify(layout));}catch{setError('Workspace could not be saved.');}setLayout({...restore(safeGet(key+'.'+w)),workspace:w});}
  useEffect(()=>{api('session').then(s=>{setCsrf(s.csrf);setSession({...s,role:s.role||'ADMIN'});}).catch(()=>setSession(null)).finally(()=>setChecking(false));},[]);
  useEffect(()=>{const resize=()=>setMobile(window.innerWidth<760);window.addEventListener('resize',resize);return()=>window.removeEventListener('resize',resize);},[]);
- useEffect(()=>{
-  const group=navGroups.find(group=>group.items.includes(active));
-  if(group)setGroupsOpen(current=>current[group.label]?current:{...current,[group.label]:true});
- },[active]);
+ useEffect(()=>{revealNavigation(active);},[active]);
  useEffect(()=>{
   if(drawerOpen)explorer.current?.querySelector('button')?.focus();
   else if(drawerWasOpen.current&&mobile){
@@ -108,18 +112,18 @@ export default function App(){
    </section>;
   })}
  </nav>;
- return <SessionProvider session={session}><ChatProvider key={session.username} username={session.username}><div className={'app '+(chatFocus?'chat-focused ':'')+(appearance.wrapTabs?'wrap-tabs ':'')+(appearance.status?'':'without-status')}>
-  <header className="top"><SidebarToggle open={sidebarVisible} toggle={toggleSidebar}/><div className="brand"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="1.4"/><circle cx="12" cy="12" r="5" stroke="currentColor" strokeWidth="1.4"/><circle cx="12" cy="12" r="1.6" fill="currentColor"/></svg><b>CORE-AI</b><span>WORKSPACE</span></div><span className="header-context">{title(active)}</span><button className="command" onClick={()=>setPalette(true)}><Search size={13}/><span>Search or run a command</span><kbd>Ctrl K</kbd></button><div className="header-health"><i className={'dot '+(worker?'ready':'')}/><span>{worker?'Worker online':'Worker unavailable'}</span></div><div className="header-actions"><button aria-label="Toggle inspector" title="Inspector" onClick={toggleRight}><PanelRight size={15}/></button><details className="layout-menu"><summary aria-label="Layout controls"><Columns2 size={15}/></summary><div><button onClick={()=>preset(false)}>Chat</button><button onClick={()=>preset(true)}>Workbench</button><button onClick={()=>split()}>Split workspace</button><button onClick={()=>patch({groups:[[...views]],active:['Chat'],focus:0,maximized:false})}>Open all panels</button><button onClick={()=>patch({bottom:!layout.bottom})}>Output panel</button><button onClick={()=>setLayout(defaults())}>Reset layout</button></div></details><button className="profile-button" title={session.username+' · '+session.role} onClick={()=>go('Settings')}>{session.username.slice(0,1).toUpperCase()}</button><button aria-label="Sign out" title="Sign out" onClick={async()=>{if(!guardInspector())return;try{await api('session','DELETE');setSession(null);setCsrf('');setHealth(null);}catch(e){setError((e as Error).message);}}}><LogOut size={15}/></button></div></header>
+ return <SessionProvider session={session}><ChatProvider key={session.username} username={session.username}><div className={'app '+(chatFocus?'chat-focused ':'')+(appearance.wrapTabs?'wrap-tabs ':'')+(appearance.status?'':'without-status')} data-explorer={dockedExplorer} data-ribbon={ribbonVisible} style={leftChrome}>
+  <header className="top"><div className="top-leading"><SidebarToggle open={sidebarVisible} toggle={toggleSidebar}/><div className="brand"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="1.4"/><circle cx="12" cy="12" r="5" stroke="currentColor" strokeWidth="1.4"/><circle cx="12" cy="12" r="1.6" fill="currentColor"/></svg><b>CORE-AI</b><span>WORKSPACE</span></div></div><span className="header-context">{title(active)}</span><button className="command" onClick={()=>setPalette(true)}><Search size={13}/><span>Search or run a command</span><kbd>Ctrl K</kbd></button><div className="header-health"><i className={'dot '+(worker?'ready':'')}/><span>{worker?'Worker online':'Worker unavailable'}</span></div><div className="header-actions"><button aria-label="Toggle inspector" title="Inspector" onClick={toggleRight}><PanelRight size={15}/></button><details className="layout-menu"><summary aria-label="Layout controls"><Columns2 size={15}/></summary><div><button onClick={()=>preset(false)}>Chat</button><button onClick={()=>preset(true)}>Workbench</button><button onClick={()=>split()}>Split workspace</button><button onClick={()=>patch({groups:[[...views]],active:['Chat'],focus:0,maximized:false})}>Open all panels</button><button onClick={()=>patch({bottom:!layout.bottom})}>Output panel</button><button onClick={()=>setLayout(defaults())}>Reset layout</button></div></details><button className="profile-button" title={session.username+' · '+session.role} onClick={()=>go('Settings')}>{session.username.slice(0,1).toUpperCase()}</button><button aria-label="Sign out" title="Sign out" onClick={async()=>{if(!guardInspector())return;try{await api('session','DELETE');setSession(null);setCsrf('');setHealth(null);}catch(e){setError((e as Error).message);}}}><LogOut size={15}/></button></div></header>
   <ErrorNote error={error}/>
   <div className="shell">
-   {appearance.activity&&!mobile&&!layout.maximized&&<nav className="activity" aria-label="Activity ribbon">
+   {ribbonVisible&&<nav className="activity" aria-label="Activity ribbon">
     {navGroups.map(group=><div className="activity-group" key={group.label} role="group" aria-label={group.label}>
      {group.items.map(v=>{const Icon=icons[v];return <button key={v} title={title(v)} aria-label={title(v)} aria-current={active===v?'page':undefined} onClick={()=>go(v)}><Icon size={18} aria-hidden="true"/></button>;})}
     </div>)}
    </nav>}
    {sidebarVisible&&<>
     {mobile&&<button className="sidebar-backdrop" tabIndex={-1} aria-label="Close sidebar" onClick={closeExplorer}/>}
-    <aside className="explorer sidebar" id="core-ai-explorer" ref={explorer} style={{width:layout.leftWidth}} role={mobile?'dialog':undefined} aria-modal={mobile||undefined} aria-labelledby="core-ai-explorer-title" onKeyDown={trapDrawerFocus}>
+    <aside className="explorer sidebar" id="core-ai-explorer" ref={explorer} role={mobile?'dialog':undefined} aria-modal={mobile||undefined} aria-labelledby="core-ai-explorer-title" onKeyDown={trapDrawerFocus}>
      <div className="sidebar-heading"><span id="core-ai-explorer-title">Explorer</span><button aria-label="Hide explorer" onClick={closeExplorer}><X size={14}/></button></div>
      <ChatHistory tick={tick} open={()=>go('Chat')} navigation={navigation}/>
      <div className="sidebar-account"><span className="avatar">{session.username.slice(0,1).toUpperCase()}</span><div><b>{session.username}</b><small>{session.role.toLowerCase()} · Private workspace</small></div><button aria-label="Open settings" onClick={()=>go('Settings')}><SettingsIcon size={15}/></button></div>

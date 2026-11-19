@@ -2,6 +2,12 @@
 
 CORE-AI remains an independent product. No other CORE product, third-party dashboard, hosted VPN control plane or paid model account is required. Existing accounts, chats, project records, model endpoint and WireGuard enrollment are preserved by the forward migration.
 
+## 1.2.3 Explorer alignment
+
+- The header follows the Explorer width on desktop. The Explorer and workspace meet at one divider with a wider pointer target for resizing.
+- Shared spacing aligns navigation, conversation rows and quick actions. Ribbon icons stay centered even when the ribbon scrolls.
+- Opening the current module again reopens its navigation group if you collapsed it.
+
 ## 1.2.2 Explorer and navigation
 
 - The optional desktop Activity ribbon is available in Chat and Workbench. Its sections follow the same order as Explorer.

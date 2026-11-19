@@ -29,6 +29,16 @@ test('custom workbench navigates, splits and opens every implemented module',asy
   assert.ok(document.querySelector('.explorer-scroll .history-scroll'));
   await act(async()=>{ribbon.querySelector('[aria-label="Models"]').click();});
   assert.equal(document.querySelector('.workspace-navigation [aria-current="page"]').textContent,'Models');
+  const manage=[...document.querySelectorAll('.nav-group')].find(button=>button.textContent.includes('Manage'));
+  await act(async()=>{manage.click();});
+  assert.equal(manage.getAttribute('aria-expanded'),'false');
+  await act(async()=>{ribbon.querySelector('[aria-label="Models"]').click();});
+  assert.equal(manage.getAttribute('aria-expanded'),'true');
+  assert.equal(document.querySelector('.workspace-navigation [aria-current="page"]').textContent,'Models');
+  assert.equal(document.querySelector('.app').dataset.explorer,'true');
+  const resize=document.querySelector('[aria-label="Explorer width"]');
+  await act(async()=>{resize.dispatchEvent(new dom.window.KeyboardEvent('keydown',{key:'End',bubbles:true}));});
+  assert.equal(document.querySelector('.app').style.getPropertyValue('--explorer-width'),'380px');
   await act(async()=>{ribbon.querySelector('[aria-label="Chat"]').click();});
 
   const toggle=document.querySelector('[aria-label="Hide sidebar"]');
