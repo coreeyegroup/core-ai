@@ -4,7 +4,7 @@ test('custom workbench navigates, splits and opens every implemented module',asy
  const old={};for(const k of ['window','document','navigator','HTMLElement','HTMLInputElement','Element','Node','Event','CustomEvent','localStorage']){old[k]=Object.getOwnPropertyDescriptor(global,k);Object.defineProperty(global,k,{value:dom.window[k],configurable:true,writable:true});}
  global.IS_REACT_ACT_ENVIRONMENT=true;dom.window.HTMLElement.prototype.scrollIntoView=function(){};
  const fetched=[];const overview={projects:1,agents:1,documents:0,runs:[],worker:{online:true},inference:{endpoint:'http://127.0.0.1:11434',model:'test:latest'},release:'test'};
- const responses={'chat/conversations?archived=false&q=':[],session:{username:'test-admin',csrf:'csrf-test'},overview,projects:[{id:'project',name:'Project one',description:'',created_at:new Date().toISOString()}],agents:[{id:'agent',name:'Analyst',instructions:'Test',version:1,enabled:true}],models:{available:true,models:[{name:'test:latest',size:1000000},{name:'editor:latest',size:1000000}],config:overview.inference},runs:[],events:[],documents:[],artifacts:[],files:[],'library/artifacts':[],'access/users':[],capabilities:{features:[]},'operations/metrics':{tasks:[],chat:[],files:[]},tools:[],integrations:{connected:[],policy:'Optional'}};
+ const responses={'chat/conversations?archived=false&q=':[],session:{username:'test-admin',role:'ADMIN',csrf:'csrf-test'},overview,projects:[{id:'project',name:'Project one',description:'',created_at:new Date().toISOString()}],agents:[{id:'agent',name:'Analyst',instructions:'Test',version:1,enabled:true}],models:{available:true,models:[{name:'test:latest',size:1000000},{name:'editor:latest',size:1000000}],config:overview.inference},runs:[],events:[],documents:[],artifacts:[],files:[],'library/artifacts':[],'access/users':[],capabilities:{features:[]},'operations/metrics':{tasks:[],chat:[],files:[]},tools:[],connections:[]};
  let conversationCount=0;const writes=[];const fetchOld=global.fetch;global.fetch=async(path,options={})=>{fetched.push(path);const key=path.replace('/api/v1/','');let result=responses[key==='models?catalog=true'?'models':key]??{};
   if(options.method==='POST'&&key==='chat/conversations'){
    const b=JSON.parse(options.body),id='chat-'+(++conversationCount);
@@ -34,6 +34,12 @@ test('custom workbench navigates, splits and opens every implemented module',asy
   await act(async()=>{root.render(React.createElement(App));await new Promise(r=>setTimeout(r,25));});
   assert.match(document.body.textContent,/CORE-AI/);assert.match(document.body.textContent,/test-admin/);assert.match(document.body.textContent,/Worker online/);
   assert.match(document.body.textContent,/How can I help/);
+  const surface=document.querySelector('.composer-input-surface');
+  const model=document.querySelector('.model-picker-trigger');
+  assert.ok(surface.contains(document.querySelector('[aria-label="Message CORE-AI"]')));
+  assert.ok(!surface.contains(document.querySelector('[aria-label="Response style"]')));
+  assert.ok(!surface.contains(document.querySelector('.library-picker-button')));
+  assert.equal(model.nextElementSibling.getAttribute('aria-label'),'Send message');
   const ribbon=document.querySelector('[aria-label="Activity ribbon"]');
   assert.equal(ribbon.querySelectorAll('button').length,16);
   assert.equal(ribbon.querySelector('[aria-current="page"]').getAttribute('aria-label'),'Chat');
@@ -157,7 +163,7 @@ test('custom workbench navigates, splits and opens every implemented module',asy
   assert.equal(document.querySelectorAll('[role="tab"]').length,16);
   assert.equal(document.querySelectorAll('[role="tabpanel"]').length,16);
   assert.ok(!document.body.textContent.includes('This panel could not render'));
-  assert.ok(fetched.includes('/api/v1/projects')&&fetched.includes('/api/v1/integrations'));
+  assert.ok(fetched.includes('/api/v1/projects')&&fetched.includes('/api/v1/connections'));
   const panes=()=>[...document.querySelectorAll('.group .chat-workspace')];
   const change=(element,value)=>{element.value=value;element.dispatchEvent(new dom.window.Event('change',{bubbles:true}));};
   const submit=panel=>panel.querySelector('form').dispatchEvent(new dom.window.Event('submit',{bubbles:true,cancelable:true}));

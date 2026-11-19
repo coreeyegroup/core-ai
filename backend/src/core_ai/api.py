@@ -6,7 +6,7 @@ from typing import Annotated
 from fastapi import FastAPI, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
-from . import __version__, auth, db, models, access
+from . import __version__, auth, db, models, access, runs as run_queue
 
 @asynccontextmanager
 async def lifespan(app):
@@ -180,20 +180,13 @@ def runs(user: User):
 
 @app.post('/api/v1/runs', status_code=201)
 def submit_run(body: Run, user: User):
-    ident = uuid.uuid4()
     with db.connect() as conn:
-        conn.execute('SELECT pg_advisory_xact_lock(187875435)')
-        if conn.execute("SELECT (SELECT count(*) FROM runs WHERE status IN ('QUEUED','RUNNING','CANCEL_REQUESTED'))+(SELECT count(*) FROM chat_generations WHERE status IN ('QUEUED','RUNNING','CANCEL_REQUESTED')) AS n").fetchone()['n'] >= 20:
-            raise HTTPException(409, 'The queue is full. Wait or cancel an existing task.')
         access.project(conn,user,body.project_id,True)
         agent = access.agent(conn,user,body.agent_id)
-        if not agent or not agent['enabled'] or not conn.execute('SELECT id FROM projects WHERE id=%s', (body.project_id,)).fetchone():
+        if not agent['enabled']:
             raise HTTPException(422, 'Choose an existing project and enabled agent.')
-        from psycopg.types.json import Jsonb
-        conn.execute('''INSERT INTO runs(id,project_id,agent_id,agent_version,instructions,prompt,model,status,requested_by,runtime_mode,tools)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,'QUEUED',%s,%s,%s)''',
-            (ident,body.project_id,body.agent_id,agent['version'],agent['instructions'],body.prompt,body.model,user['id'],agent['runtime_mode'],Jsonb(agent['tools'])))
-        db.event('run.queued', user['id'], {'agent_version': agent['version']}, ident, conn)
+        ident = run_queue.enqueue(conn, project_id=body.project_id, agent=agent, prompt=body.prompt,
+                                  model=body.model, user_id=user['id'])
     return {'id': ident}
 
 @app.get('/api/v1/runs/{ident}')
@@ -275,6 +268,9 @@ def integrations(user: User):
 # Chat is an independent product module, sharing only local identity and inference.
 from .chat import router as chat_router
 app.include_router(chat_router)
+
+from .connections import router as connections_router
+app.include_router(connections_router)
 
 from .workspace import router as workspace_router
 from .files import router as files_router

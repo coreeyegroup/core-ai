@@ -1,6 +1,6 @@
 # CORE-AI Workstation
 
-An independent, self-hosted AI product with a custom workbench, API and durable task worker. CORE-AI operates without COREI-OS-MINI, Core Aura or any other product. Future connections are optional versioned interfaces; each product keeps its own accounts, data, services, releases and recovery.
+An independent, self-hosted AI product with a custom workbench, API and durable task worker. CORE-AI operates without COREI-OS-MINI, Core Aura or any other product. Connections are optional versioned interfaces; each product keeps its own accounts, data, services, releases and recovery.
 
 ## Install on Ubuntu
 
@@ -82,7 +82,7 @@ See [release behavior and limits](docs/release-1.2.md) and the [requirements reg
 ## Chat for general and professional work
 
 - Start a new conversation, choose an installed text-generation model and send a message. No project or agent setup is required.
-- Choose a model and a response style in the composer. Open Advanced for project and agent context, custom instructions, temperature, and maximum reply tokens.
+- Choose the model beside Send. Choose the response style, attachments and context in the toolbar below the prompt. Open Advanced for project and agent context, custom instructions, temperature, and maximum reply tokens.
 - Replies stream into durable PostgreSQL message records. The browser refreshes the active reply incrementally; closing the browser does not cancel a generation.
 - Stop keeps the partial reply. Regenerate and Edit & branch create a new conversation branch, preserving the original thread.
 - Search conversations by text, status, or project. The conversation action menu supports rename, pin, archive/restore, and delete. Delete requires confirmation in the UI and is blocked while a reply is active. Export downloads the conversation as Markdown.
@@ -90,6 +90,16 @@ See [release behavior and limits](docs/release-1.2.md) and the [requirements reg
 - Recent model context is bounded to 20 messages and 24,000 characters, plus system preferences and optional project excerpts. Large attachments may be excerpted; the full original text remains saved with the message. This is bounded local inference, not an unlimited context promise.
 - Chat and professional tasks share one FIFO inference slot and a combined queue limit of 20. This protects the initial laptop deployment.
 - Conversation history is private to its owning CORE-AI user. The UI keeps the selected conversation ID and layout preferences in browser storage; unsent drafts are held in session memory; messages and files remain in the product database.
+
+## Connect n8n or another service
+
+In CORE-AI, open **Manage → Connections** as an administrator. Choose a project, an enabled Analysis agent and a local text-generation model. Create a key and save it in your service’s credential store. The key is shown once. CORE-AI stores its hash.
+
+Each key can submit analysis jobs against the selected project and retrieve the results of its own jobs. The model can use the project's instructions and matching sources, so choose a project whose contents the receiving service may process. Analysis jobs run through the same durable queue as workspace tasks and appear in Tasks. Revoke a key in Connections to block new requests and result access immediately. Previously accepted jobs can still finish.
+
+1. Configure an n8n [HTTP Request](https://docs.n8n.io/integrations/builtin/core-nodes/n8n-nodes-base.httprequest/) node with **Generic Credential Type → Header Auth**. Set the name to `Authorization` and value to `Bearer YOUR_KEY`.
+2. Send a `POST` to `https://ai.coreeye.in/api/v1/automation/jobs` with a JSON body such as `{"request_id":"summary-123","prompt":"Summarize the supplied notes."}`. The API returns HTTP `202` and a job `id`. Use a stable request ID for a retry of the same prompt. Reusing the ID for a different prompt returns `409`.
+3. Use another HTTP Request node with the same credential to `GET https://ai.coreeye.in/api/v1/automation/jobs/{id}`. Use a Wait node between polls with a bounded retry count. Read `output` on `SUCCEEDED`. Stop polling on `FAILED` or `CANCELLED` and inspect `error` or CORE-AI Tasks.
 
 ## Security and independence
 

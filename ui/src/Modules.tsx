@@ -1,6 +1,7 @@
 import {useEffect,useRef,useState, type FormEvent} from 'react';
 import {api} from './api';
 import Chat,{MessageMarkdown} from './Chat';
+import {isTextModel} from './ChatPopover';
 import ProjectWorkspace from './Projects';
 import Sources from './Sources';
 import Settings from './Settings';
@@ -36,7 +37,7 @@ export function Module({view,tick,refresh,go,appearance,changeAppearance,visible
   case 'Workflows':return <CapabilitiesPanel tick={tick} feature="workflows"/>;
   case 'Models':return <Models tick={tick} refresh={refresh}/>;
   case 'Tools':return <Tools tick={tick}/>;
-  case 'Integrations':return <Integrations tick={tick}/>;
+  case 'Integrations':return <Connections tick={tick}/>;
   case 'Operations':return <Operations tick={tick}/>;
   case 'Settings':return <Settings appearance={appearance} change={changeAppearance}/>;
  }
@@ -71,7 +72,106 @@ function Models({tick,refresh}:{tick:number;refresh:()=>void}){
  return <section className="page"><PageHead title="Models" subtitle="Ollama inference · laptop now, private VPS endpoint later"><button onClick={refresh}>Refresh</button></PageHead><ErrorNote error={error||err||data?.error||''}/>{data&&<form className="box form" key={JSON.stringify(data.config)} onSubmit={submit}><header>Inference connection <Status value={data.available?'ONLINE':'OFFLINE'}/></header><div className="fields"><label>Private Ollama endpoint<input name="endpoint" required defaultValue={data.config.endpoint}/></label><label>Default model<input name="model" required defaultValue={data.config.model}/></label></div><p>Only private or loopback IPv4 endpoints are accepted. Changing the endpoint does not move model files.</p><button className="primary" disabled={busy||session.role!=='ADMIN'}>Save connection</button>{session.role!=='ADMIN'&&<small>Administrator access is required to change inference configuration.</small>}</form>}<section className="box"><header>Installed models <span>{data?.models.length??'—'}</span></header><table><thead><tr><th>Name</th><th>Size</th><th>Family</th><th>Quantization</th><th>Capabilities</th></tr></thead><tbody>{data?.models.map((m:Row)=><tr key={m.name}><td>{m.name}</td><td>{(m.size/1e9).toFixed(2)} GB</td><td>{m.details?.family??'—'}</td><td>{m.details?.quantization_level??'—'}</td><td><button onClick={async()=>{try{setInspection(await api('models/inspect?model='+encodeURIComponent(m.name)));setErr('');}catch(e){setErr((e as Error).message);}}}>Inspect</button></td></tr>)}</tbody></table><p>Installed models are not certified for every task. Embedding models should not be selected for text generation; model errors are recorded against the task.</p></section>{inspection&&<section className="box"><header>{inspection.model} · Provider-reported capabilities</header><div className="settings-content"><p>{inspection.capabilities.length?inspection.capabilities.join(', '):'Provider did not report capabilities.'}</p><pre>{JSON.stringify(inspection.context_windows,null,2)}</pre><details><summary>Model parameters and license</summary><pre>{inspection.parameters}{'\n'}{inspection.license}</pre></details></div></section>}</section>;
 }
 function Tools({tick}:{tick:number}){const {data,error}=useData('tools',tick);return <section className="page"><PageHead title="Tools" subtitle="Backend-enforced capabilities · no unrestricted host execution"/><ErrorNote error={error}/><section className="box"><header>Available tools</header>{data?.map((r:Row)=><div className="document-row" key={r.id}><div><b>{r.id}</b><p>{r.description}</p></div><Status value={r.enabled?'ENABLED':'DISABLED'}/></div>)}</section><p>Analysis mode retrieves and answers. Tools mode performs bounded, recorded calls to the agent’s permitted tools using a tools-capable model. Host shell, coding sandboxes and external actions remain unavailable.</p></section>;}
-function Integrations({tick}:{tick:number}){const {data,error}=useData('integrations',tick);return <section className="page"><PageHead title="Integrations" subtitle="Optional interfaces between independently operated products"/><ErrorNote error={error}/><section className="box"><header>Connected products <span>{data?.connected.length??'—'}</span></header><Empty>{data?.policy??'Loading…'}</Empty></section><section className="box"><header>Connection contract</header><p>Each future connector uses a versioned API, scoped credentials, timeouts and an explicit enable/disable control. Each product owns its users, database, releases and recovery. CORE-AI availability never determines whether another product can operate.</p><p>No COREI-OS-MINI, Core Aura or other product connector is configured in this release.</p></section></section>;}
+function Connections({tick}:{tick:number}){
+ const {role}=useSession();
+ return <section className="page">
+  <PageHead title="Connections" subtitle="Run CORE-AI analysis jobs from n8n and other services."/>
+  {role==='ADMIN'?<ConnectionManager tick={tick}/>:<div className="notice">An administrator can create and revoke connection keys.</div>}
+ </section>;
+}
+
+type AutomationConnection={
+ id:string;name:string;project:string;agent:string;model:string;revoked_at:string|null;scope_available:boolean;
+};
+
+function ConnectionManager({tick}:{tick:number}){
+ const [revision,setRevision]=useState(0),[busy,setBusy]=useState(false);
+ const [token,setToken]=useState<{id:string;token:string}|null>(null),[copied,setCopied]=useState(false);
+ const [error,setError]=useState(''),[revokeId,setRevokeId]=useState<string|null>(null);
+ const {data:connections,error:listError}=useData('connections',tick+revision);
+ const {data:projects,error:projectError}=useData('projects',tick);
+ const {data:agents,error:agentError}=useData('agents',tick);
+ const {data:catalog,error:modelError}=useData('models?catalog=true',tick);
+ const analysisAgents=(agents??[]).filter((a:Row)=>a.enabled&&a.runtime_mode==='analysis');
+ const models=(catalog?.models??[]).filter(isTextModel);
+ const endpoint=window.location.origin+'/api/v1/automation/jobs';
+
+ async function create(event:FormEvent<HTMLFormElement>){
+  event.preventDefault();
+  const form=event.currentTarget;
+  const body=Object.fromEntries(new FormData(form));
+  setBusy(true);setError('');setCopied(false);
+  try{
+   setToken(await api('connections','POST',body));
+   form.reset();
+   setRevision(value=>value+1);
+  }catch(e){setError((e as Error).message);}
+  finally{setBusy(false);}
+ }
+
+ async function revoke(id:string){
+  setBusy(true);setError('');
+  try{
+   await api('connections/'+id+'/revoke','POST');
+   setToken(current=>current?.id===id?null:current);
+   setRevokeId(null);
+   setRevision(value=>value+1);
+  }catch(e){setError((e as Error).message);}
+  finally{setBusy(false);}
+ }
+
+ async function copyKey(){
+  if(!token)return;
+  try{await navigator.clipboard.writeText(token.token);setCopied(true);}
+  catch{setError('Clipboard access is unavailable. Select and copy the key manually.');}
+ }
+
+ return <>
+  <ErrorNote error={error||listError||projectError||agentError||modelError}/>
+  {token&&<section className="box" aria-label="New connection key">
+   <header>New connection key</header>
+   <div className="settings-content">
+    <p role="status">Copy this key to your service’s credentials. CORE-AI shows it once.</p>
+    <label className="connection-key">Connection key<input readOnly value={token.token} onFocus={event=>event.currentTarget.select()}/></label>
+    <div className="actions"><button type="button" onClick={()=>void copyKey()}>{copied?'Copied':'Copy key'}</button><button type="button" onClick={()=>setToken(null)}>Done</button></div>
+   </div>
+  </section>}
+  <section className="box">
+   <header>Create a connection</header>
+   <form className="settings-content" onSubmit={create}>
+    <p className="panel-note">Choose the project whose instructions and matching sources this workflow may use.</p>
+    <div className="fields">
+     <label>Name<input name="name" placeholder="n8n daily summary" required maxLength={120}/></label>
+     <label>Project<select name="project_id" required defaultValue=""><option value="" disabled>Select project</option>{(projects??[]).map((p:Row)=><option value={p.id} key={p.id}>{p.name}</option>)}</select></label>
+     <label>Analysis agent<select name="agent_id" required defaultValue=""><option value="" disabled>Select agent</option>{analysisAgents.map((a:Row)=><option value={a.id} key={a.id}>{a.name}</option>)}</select></label>
+     <label>Model<select name="model" required defaultValue=""><option value="" disabled>Select model</option>{models.map((m:Row)=><option value={m.name} key={m.name}>{m.name}</option>)}</select></label>
+    </div>
+    {projects&&agents&&catalog&&(!projects.length||!analysisAgents.length||!models.length)&&<p className="panel-note">{!projects.length?'Create a project to set the connection scope.':!analysisAgents.length?'Create or enable an agent in Analysis mode.':'Start Ollama and make a text-generation model available.'}</p>}
+    <button className="primary" disabled={busy||!!token||!projects?.length||!analysisAgents.length||!models.length}>Create key</button>
+   </form>
+  </section>
+  <section className="box">
+   <header>Connection keys</header>
+   {connections?.length?<div className="table-scroll"><table>
+    <thead><tr><th scope="col">Name</th><th scope="col">Project</th><th scope="col">Agent</th><th scope="col">Model</th><th scope="col">Status</th><th scope="col">Actions</th></tr></thead>
+    <tbody>{connections.map((connection:AutomationConnection)=><tr key={connection.id}>
+     <td>{connection.name}</td><td>{connection.project}</td><td>{connection.agent}</td><td>{connection.model}</td>
+     <td><Status value={connection.revoked_at?'REVOKED':connection.scope_available?'ENABLED':'UNAVAILABLE'}/></td>
+     <td>{!connection.revoked_at&&(revokeId===connection.id?<div className="actions">
+      <button type="button" disabled={busy} onClick={()=>void revoke(connection.id)}>Confirm revoke</button>
+      <button type="button" disabled={busy} onClick={()=>setRevokeId(null)}>Cancel</button>
+     </div>:<button type="button" disabled={busy} aria-label={'Revoke '+connection.name} onClick={()=>setRevokeId(connection.id)}>Revoke</button>)}</td>
+    </tr>)}</tbody>
+   </table></div>:<Empty>{listError?'Connection keys are unavailable.':connections?'No keys created yet.':'Loading connection keys…'}</Empty>}
+  </section>
+  <section className="box connection-guide">
+   <header>Connect n8n</header>
+   <p>Use an HTTP Request node with Header Auth and the credential <code>Authorization: Bearer YOUR_KEY</code>.</p>
+   <p>POST to <code>{endpoint}</code> with JSON fields <code>request_id</code> and <code>prompt</code>. Keep the same request ID when retrying.</p>
+   <p>GET <code>{endpoint}/{'{id}'}</code> using the returned job ID and the same key. Read <code>output</code> when the status is <code>SUCCEEDED</code>.</p>
+  </section>
+ </>;
+}
 export function Operations({tick}:{tick:number}){const {data,error}=useData('events',tick),{data:metrics}=useResource('operations/metrics',tick);return <section className="page"><PageHead title="Operations" subtitle="Persisted audit events · latest 200 · local service logs through ./core-ai logs"/><ErrorNote error={error}/><section className="box"><header>Observed inference metrics · latest requests</header><table><thead><tr><th>Model</th><th>Status</th><th>Duration</th><th>Tokens/s</th></tr></thead><tbody>{[...(metrics?.chats||[]),...(metrics?.tasks||[])].slice(0,30).map((r:Row)=><tr key={r.id}><td>{r.model}</td><td>{r.status}</td><td>{r.metrics.duration_ms!==undefined?(r.metrics.duration_ms/1000).toFixed(2)+' s':'—'}</td><td>{r.metrics.tokens_per_second??'Not reported'}</td></tr>)}</tbody></table></section><section className="box"><header>Audit timeline</header>{data?.map((e:Row)=><div className="log-line" key={e.id}><time>{when(e.created_at)}</time><b>{e.action}</b><code>{JSON.stringify(e.detail)}</code></div>)}{data?.length===0&&<Empty>No events recorded.</Empty>}</section></section>;}
 export function Inspector({view,tick}:{view:View;tick:number}){const {data}=useData('overview',tick);return <><div className="panel-heading">CONTEXT</div><div className="inspector-body"><span className="eyebrow">ACTIVE PANEL</span><h2>{view}</h2><dl><dt>Product</dt><dd>CORE-AI</dd><dt>Release</dt><dd>{data?.release??'—'}</dd><dt>Worker</dt><dd>{data?.worker?.online?'Online':'Unavailable'}</dd><dt>Provider</dt><dd>{data?.inference.endpoint??'—'}</dd><dt>Execution</dt><dd>Read project sources + local inference</dd></dl><p>No mandatory product connections. No host commands enabled.</p></div></>;}
 export function Activity({tick}:{tick:number}){const {data,error}=useData('events',tick);return <div className="activity-log"><ErrorNote error={error}/>{data?.slice(0,30).map((e:Row)=><div key={e.id}><time>{when(e.created_at)}</time><b>{e.action}</b><span>{JSON.stringify(e.detail)}</span></div>)}{data?.length===0&&<span>No activity yet.</span>}</div>;}

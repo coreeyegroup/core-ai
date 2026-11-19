@@ -53,10 +53,14 @@ export function ChatPopover({label,children,trigger,kind,align='start',className
  </>;
 }
 
+export function isTextModel(model:{name:string;capabilities?:string[]|null}){
+ return Array.isArray(model.capabilities)?model.capabilities.includes('completion'):!/(embed|bge-m3|nomic-embed)/i.test(model.name);
+}
+
 export function ChatModelPicker({value,models,available,onChange}:{value:string;models:{name:string;capabilities?:string[]}[];available:boolean;onChange:(model:string)=>void}){
  const [query,setQuery]=useState('');
  const choices=models.filter(model=>model.name.toLowerCase().includes(query.trim().toLowerCase()));
- return <ChatPopover label="Chat model" kind="dialog" className="model-popover" buttonClass="model-picker-trigger" trigger={<><span>{value||'Choose a model'}</span><ChevronDown size={14}/></>}>
+ return <ChatPopover label="Chat model" kind="dialog" align="end" className="model-popover" buttonClass="model-picker-trigger" trigger={<><span>{value||'Choose a model'}</span><ChevronDown size={14}/></>}>
   {dismiss=><>
    <input type="search" aria-label="Search models" placeholder="Search models…" value={query} onChange={e=>setQuery(e.target.value)}/>
    {!available?<p>Model host is unavailable.</p>:choices.length===0?<p>No matching chat models.</p>:choices.map(model=><button key={model.name} type="button" aria-pressed={model.name===value} onClick={()=>{onChange(model.name);setQuery('');dismiss();}}>
