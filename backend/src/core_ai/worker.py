@@ -4,18 +4,21 @@ import math
 import signal
 import threading
 import time
+import uuid
 import httpx
 from psycopg.types.json import Jsonb
-from . import db, models, chat, files, access, agent_runtime, webhooks
+from . import db, models, chat, files, access, agent_runtime, webhooks, research
 
 stopping = threading.Event()
 
 def recover_tasks():
     with db.connect() as conn:
+        research.recover(conn)
         # An interrupted task is explicit, never silently repeated.
         expired = conn.execute("""UPDATE runs SET status=CASE WHEN status='CANCEL_REQUESTED' THEN 'CANCELLED' ELSE 'FAILED' END,
             error='Worker lease expired. Review the task and submit again if needed.',finished_at=now(),lease_until=NULL
-            WHERE status IN ('RUNNING','CANCEL_REQUESTED') AND lease_until<now() RETURNING id""").fetchall()
+            WHERE status IN ('RUNNING','CANCEL_REQUESTED') AND lease_until<now()
+              AND NOT EXISTS (SELECT 1 FROM research_workflows w WHERE w.run_id=runs.id) RETURNING id""").fetchall()
         for row in expired:
             db.event('run.interrupted', run_id=row['id'], conn=conn)
 
@@ -28,11 +31,15 @@ def claim(automation=None):
             return None
         if conn.execute("SELECT id FROM chat_generations WHERE status IN ('RUNNING','CANCEL_REQUESTED') LIMIT 1").fetchone():
             return None
-        row = conn.execute("""SELECT * FROM runs WHERE status='QUEUED'
+        row = conn.execute("""SELECT r.*, EXISTS (SELECT 1 FROM research_workflows w WHERE w.run_id=r.id) AS research
+            FROM runs r WHERE status='QUEUED'
             AND (%s::boolean IS NULL OR (connection_id IS NOT NULL)=%s)
             ORDER BY created_at,id FOR UPDATE SKIP LOCKED LIMIT 1""", (automation, automation)).fetchone()
         if row:
-            conn.execute("UPDATE runs SET status='RUNNING',started_at=now(),lease_until=now()+interval '30 seconds' WHERE id=%s", (row['id'],))
+            row['claim_token'] = uuid.uuid4() if row['research'] else None
+            conn.execute("""UPDATE runs SET status='RUNNING',started_at=coalesce(started_at,now()),
+                            lease_until=now()+interval '30 seconds',claim_token=%s WHERE id=%s""",
+                         (row['claim_token'],row['id']))
             db.event('run.started', run_id=row['id'], conn=conn)
         return row
 
@@ -46,14 +53,16 @@ def retrieve(run):
         'source_versions':{str(d['id']):d['version'] for d in docs}}, run_id=run['id'])
     return docs
 
-def finish(ident, status, output=None, error=None):
+def finish(ident, status, output=None, error=None, claim_token=None):
     with db.connect() as conn:
-        row = conn.execute('SELECT status FROM runs WHERE id=%s FOR UPDATE', (ident,)).fetchone()
-        if row['status'] not in ('RUNNING','CANCEL_REQUESTED'):
+        row = conn.execute('SELECT status,claim_token,lease_until>now() AS lease_valid FROM runs WHERE id=%s FOR UPDATE', (ident,)).fetchone()
+        if not row or row['claim_token']!=claim_token or row['status'] not in ('RUNNING','CANCEL_REQUESTED'):
+            return
+        if claim_token is not None and not row['lease_valid']:
             return
         if row['status'] == 'CANCEL_REQUESTED':
             status, output, error = 'CANCELLED', None, None
-        conn.execute('UPDATE runs SET status=%s,output=%s,error=%s,finished_at=now(),lease_until=NULL WHERE id=%s',
+        conn.execute('UPDATE runs SET status=%s,output=%s,error=%s,finished_at=now(),lease_until=NULL,claim_token=NULL WHERE id=%s',
                      (status,output,error,ident))
         db.event('run.'+status.lower(), detail={'error':error} if error else {}, run_id=ident, conn=conn)
 
@@ -88,6 +97,9 @@ def execute_embedding(run):
 
 
 def execute(run):
+    if run.get('research'):
+        research.execute(run, stopping)
+        return
     actor=agent_runtime.actor(run)
     if run['operation']=='embedding':
         execute_embedding(run)
@@ -150,7 +162,7 @@ def heartbeat():
             db.query("INSERT INTO worker_status(id) VALUES ('main') ON CONFLICT(id) DO UPDATE SET heartbeat=now()")
             # Single installed worker; only renew a lease while this process executes it.
             if current[0]:
-                db.query("UPDATE runs SET lease_until=now()+interval '30 seconds' WHERE id=%s AND status IN ('RUNNING','CANCEL_REQUESTED')", (current[0],))
+                db.query("UPDATE runs SET lease_until=now()+interval '30 seconds' WHERE id=%s AND claim_token IS NOT DISTINCT FROM %s AND lease_until>now() AND status IN ('RUNNING','CANCEL_REQUESTED')", current[0])
             if current_file[0]:
                 db.query("UPDATE workspace_files SET lease_until=now()+interval '30 seconds' WHERE id=%s AND status='PROCESSING'",(current_file[0],))
             if current_chat[0]:
@@ -165,6 +177,8 @@ current_file = [None]
 
 def claim_work(last_automation=None):
     recover_tasks()
+    with db.connect() as conn:
+        research.promote_scheduled(conn)
     chat.recover()
     oldest = db.query("""
         SELECT kind FROM (
@@ -222,7 +236,7 @@ def main():
                     if kind=='chat':
                         current_chat[0]=run['id']
                     else:
-                        current[0] = run['id']
+                        current[0] = (run['id'], run['claim_token'])
                     try:
                         chat.execute(run,stopping) if kind=='chat' else execute(run)
                     except Exception as exc:
@@ -239,7 +253,8 @@ def main():
                                 message = 'Agent stopped: ' + str(exc)[:350]
                             else:
                                 message = 'Inference failed (' + type(exc).__name__ + '). Check model availability and connectivity.'
-                            finish(run['id'], 'FAILED', error=message)
+                            if not (run.get('research') and stopping.is_set()):
+                                finish(run['id'], 'FAILED', error=message, claim_token=run['claim_token'])
                     finally:
                         current[0] = None
                         current_chat[0] = None

@@ -154,3 +154,11 @@
 .connection-key-dialog h2{margin-top:0}
 .connection-key-dialog label:not(.checkbox-label){display:grid;gap:5px}
 .connection-key-dialog .actions{justify-content:flex-end;margin-top:12px}
+
+.research-options,.research-calculation,.research-review{border:1px solid var(--line);border-radius:8px;padding:12px;min-width:0}
+.research-options>summary{cursor:pointer;font-weight:600}
+.research-options[open]>summary,.research-calculation{margin-bottom:10px}
+.research-details{display:grid;gap:10px;overflow-wrap:anywhere}
+.research-details dl{display:grid;grid-template-columns:auto minmax(0,1fr);gap:6px 14px;margin:0}
+.research-details dd{margin:0}
+.research-details blockquote{margin:6px 0 14px;padding-inline-start:12px;border-inline-start:2px solid var(--line)}

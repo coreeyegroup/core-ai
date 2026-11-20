@@ -166,6 +166,11 @@ class SaveArtifact(Artifact):
 def artifact_access(conn,user,ident,write=False):
     row=conn.execute('SELECT * FROM workspace_artifacts WHERE id=%s'+(' FOR UPDATE' if write else ''),(ident,)).fetchone()
     if not row:raise HTTPException(404,'Artifact not found.')
+    if row['source_run_id']:
+        source = conn.execute("""SELECT r.project_id FROM runs r JOIN research_workflows w ON w.run_id=r.id
+                                 WHERE r.id=%s""", (row['source_run_id'],)).fetchone()
+        if source:
+            access.project(conn,user,source['project_id'])
     if user['role']=='ADMIN' or row['owner_id']==user['id']:
         if write:access.writer(user)
         return row
@@ -280,7 +285,8 @@ def capabilities(user=Depends(auth.session)):
         {'id':'artifacts','label':'Artifact editor','status':'implemented','reason':'Versioned Markdown, text, code and JSON with private/project access.'},
         {'id':'agent-tools','label':'Bounded agent tools','status':'implemented','reason':'Project inspection, knowledge retrieval and artifact creation. Requires a tools-capable model.'},
         {'id':'code-execution','label':'Repository execution','status':'planned','reason':'No qualified coding sandbox is configured. Host shell access is unavailable.'},
-        {'id':'workflows','label':'Scheduled workflows','status':'planned','reason':'Scheduling and event-trigger adapters are not implemented.'},
+        {'id':'workflows','label':'Durable project research','status':'implemented','reason':'Checkpointed research runs, source revisions and private report review.'},
+        {'id':'scheduled-workflows','label':'Scheduled workflows','status':'planned','reason':'Scheduling and event-trigger adapters need separate configuration.'},
         {'id':'web','label':'Web research connectors','status':'planned','reason':'No external search connector is configured. Local source analysis is available.'},
         {'id':'vision','label':'Vision, OCR and voice','status':'unavailable','reason':'No qualified multimodal processing pipeline is configured.'},
         {'id':'sso','label':'SSO and service tokens','status':'planned','reason':'Local revocable sessions and roles are implemented; external identity/token interfaces are not.'}]}

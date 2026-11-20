@@ -192,3 +192,20 @@ Within **Chat**, use **+** in the Chats strip to add a conversation tab. Up to 1
 Each chat can select its own installed model and response mode: General, Quick, Professional, Deep analysis, Research, or Coding. Modes change answer guidance. Local generation requests share the existing inference queue.
 
 AI replies are left-aligned and your messages appear on the right. Use the arrow beside a message to collapse or expand it, or use **Collapse all** and **Expand all** above the conversation.
+
+## Durable project research
+
+Open **Workflows → New research run**. Select a project, agent and local model, enter the goal and success criteria, and supply queries if you want to control retrieval directly. **Limits and calculations** provides one-time scheduling, per-run deadline, output tokens per model call, and decimal arithmetic on explicitly entered values.
+
+A run checkpoints its plan, scoped source revisions, and draft. The worker can recover a checkpoint after an expired lease while the attempt and execution budgets remain available. Pause prevents new checkpoints or artifact writes from the existing claim. A model provider can finish an in-flight request after a pause or cancellation. Source excerpts are pinned to stored revisions and exact quotes are validated. Whether an excerpt supports a conclusion remains a review decision.
+
+Review is enabled by default. Approving saves the exact displayed draft as a private versioned artifact. The requester or an authorized administrator can approve, reject, or cancel. Approval expires in 24 hours. A cancelled or failed run can start a fresh linked attempt. Reports are attached to the research run and appear in the artifact library.
+
+For session clients, use `POST /api/v1/runs` with the existing `project_id`, `agent_id`, `model`, and `prompt` plus a `research` object. Supply `success_criteria` and optionally `queries`, `calculations`, `require_review`, `scheduled_for` as an offset-aware timestamp, `timeout_seconds`, or `max_output_tokens`. Inspect `GET /api/v1/runs/{id}`. Research actions use `POST /api/v1/runs/{id}/pause`, `/resume`, `/cancel`, `/retry`, and `/review`. Review accepts the displayed SHA-256 `digest` and the `decision` `approve` or `reject`.
+
+### Operations
+
+- Migration `011_research_workflows.sql` adds workflow checkpoints and new run states. Update the API and worker together through the normal deployment process. Before restoring a pre-1.11 application release, stop accepting new research runs and finish or cancel outstanding research jobs. The older worker cannot interpret research checkpoints.
+- One-time schedules support a start time within 30 days. Queued work can delay execution, and the deadline still applies. Run deadlines include time spent queued or paused. Review has its own expiry. A job that never gets an eligible worker before its deadline fails explicitly.
+- Model metering displays provider-reported tokens accepted before each checkpoint. A call interrupted before receipt may still consume provider resources. A separate four-call attempt budget counts calls before contacting the provider.
+- The initial workflow uses project sources and private Ollama structured outputs. This release does not configure independent multi-agent hosts, remote model routing, recurring/event schedules, or external write tools. Verify the exact Ollama model and deployment for structured output support before relying on it operationally.

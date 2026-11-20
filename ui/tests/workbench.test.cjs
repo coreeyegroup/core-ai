@@ -5,7 +5,21 @@ test('custom workbench navigates, splits and opens every implemented module',asy
  global.IS_REACT_ACT_ENVIRONMENT=true;dom.window.HTMLElement.prototype.scrollIntoView=function(){};
  const fetched=[];const overview={projects:1,agents:1,documents:0,runs:[],worker:{online:true},inference:{endpoint:'http://127.0.0.1:11434',model:'test:latest'},release:'test'};
  const responses={'chat/conversations?archived=false&q=':[],session:{username:'test-admin',role:'ADMIN',csrf:'csrf-test'},overview,projects:[{id:'project',name:'Project one',description:'',created_at:new Date().toISOString()}],agents:[{id:'agent',name:'Analyst',instructions:'Test',version:1,enabled:true}],models:{available:true,models:[{name:'test:latest',size:1000000},{name:'editor:latest',size:1000000}],config:overview.inference},runs:[],events:[],documents:[],artifacts:[],files:[],'library/artifacts':[],'access/users':[],capabilities:{features:[]},'operations/metrics':{tasks:[],chat:[],files:[]},tools:[],connections:[],'connections/webhook-destinations':[],'connections/key-storage':{available:true}};
- let conversationCount=0;const writes=[],connectionWrites=[];const fetchOld=global.fetch;global.fetch=async(path,options={})=>{fetched.push(path);const key=path.replace('/api/v1/','');let result=responses[key==='models?catalog=true'?'models':key]??{};
+ let conversationCount=0;const writes=[],connectionWrites=[],researchWrites=[];const fetchOld=global.fetch;global.fetch=async(path,options={})=>{fetched.push(path);const key=path.replace('/api/v1/','');let result=responses[key==='models?catalog=true'?'models':key]??{};
+  if(options.method==='POST'&&key==='runs'){
+   const body=JSON.parse(options.body),id='research-1';
+   researchWrites.push(body);
+   const draft='# Evidence report';
+   responses['runs/'+id]={...body,id,status:'WAITING_REVIEW',research_phase:'COMPLETE',agent_version:1,events:[],research:{specification:body.research,phase:'COMPLETE',draft,review_digest:'a'.repeat(64),plan:{queries:body.research.queries}}};
+   responses.runs=[responses['runs/'+id]];
+   result={id};
+  }
+  if(options.method==='POST'&&key==='runs/research-1/review'){
+   assert.deepEqual(JSON.parse(options.body),{digest:'a'.repeat(64),decision:'approve'});
+   const run=responses['runs/research-1'];
+   run.status='SUCCEEDED';run.output=run.research.draft;run.research.artifact_id='artifact-1';
+   result={status:run.status};
+  }
   if(options.method==='POST'&&key==='connections'){
    connectionWrites.push(JSON.parse(options.body));
    result={id:'fixture-connection',token:'fixture-only'};
@@ -245,5 +259,18 @@ test('custom workbench navigates, splits and opens every implemented module',asy
   assert.equal(connectionWrites[0].model_access,'all');
   assert.equal(connectionWrites[0].can_embed,true);
   assert.deepEqual(connectionWrites[0].model_policies,{'test:latest':{enabled:false}});
+  await act(async()=>{window.dispatchEvent(new CustomEvent('core-ai-goto',{detail:{view:'Workflows'}}));await wait();});
+  const workflow=()=>document.querySelector('.view:not([hidden])');
+  const researchForm=workflow().querySelector('.research-form');
+  for(const [name,value] of Object.entries({project_id:'project',agent_id:'agent',model:'test:latest',prompt:'Explain liquidity',criteria:'Use source citations',queries:'liquidity'})){
+   researchForm.elements.namedItem(name).value=value;
+  }
+  await act(async()=>{submit(workflow());await wait();});
+  assert.equal(researchWrites.length,1);
+  assert.deepEqual(researchWrites[0].research.queries,['liquidity']);
+  assert.equal(researchWrites[0].research.require_review,true);
+  assert.match(workflow().querySelector('.research-review').textContent,/Evidence report/);
+  await act(async()=>{[...workflow().querySelectorAll('button')].find(button=>button.textContent==='Approve and save').click();await wait();});
+  assert.ok([...workflow().querySelectorAll('button')].some(button=>button.textContent==='Open saved artifact'));
  }finally{await act(async()=>root.unmount());global.fetch=fetchOld;delete global.IS_REACT_ACT_ENVIRONMENT;for(const k of Object.keys(old)){if(old[k])Object.defineProperty(global,k,old[k]);else delete global[k];}if(locationOld)Object.defineProperty(global,'location',locationOld);else delete global.location;dom.window.close();}
 });

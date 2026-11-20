@@ -9,7 +9,7 @@ from fastapi import FastAPI, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel, Field
-from . import __version__, auth, db, models, access, runs as run_queue
+from . import __version__, auth, db, models, access, runs as run_queue, research as research_workflow
 
 @asynccontextmanager
 async def lifespan(app):
@@ -193,6 +193,7 @@ def inference(body: Inference, user: User):
     return {'ok': True}
 
 class Run(BaseModel):
+    research: research_workflow.Specification | None = None
     project_id: uuid.UUID
     agent_id: uuid.UUID
     prompt: str = Field(min_length=1, max_length=20000)
@@ -201,10 +202,12 @@ class Run(BaseModel):
 @app.get('/api/v1/runs')
 def runs(user: User):
     return db.query('''SELECT r.id,r.project_id,p.name AS project,r.agent_id,a.name AS agent,r.model,r.status,
-        r.created_at,r.started_at,r.finished_at,left(r.prompt,200) AS prompt
+        r.created_at,r.started_at,r.finished_at,left(r.prompt,200) AS prompt,w.phase AS research_phase
         FROM runs r JOIN projects p ON p.id=r.project_id JOIN agents a ON a.id=r.agent_id
-        WHERE %s='ADMIN' OR EXISTS(SELECT 1 FROM project_members m WHERE m.project_id=r.project_id AND m.user_id=%s)
-        ORDER BY r.created_at DESC LIMIT 100''',(user['role'],user['id']))
+        LEFT JOIN research_workflows w ON w.run_id=r.id
+        WHERE %s='ADMIN' OR (EXISTS(SELECT 1 FROM project_members m WHERE m.project_id=r.project_id AND m.user_id=%s)
+                             AND (w.run_id IS NULL OR r.requested_by=%s))
+        ORDER BY r.created_at DESC LIMIT 100''',(user['role'],user['id'],user['id']))
 
 @app.post('/api/v1/runs', status_code=201)
 def submit_run(body: Run, user: User):
@@ -214,18 +217,52 @@ def submit_run(body: Run, user: User):
         if not agent['enabled']:
             raise HTTPException(422, 'Choose an existing project and enabled agent.')
         ident = run_queue.enqueue(conn, project_id=body.project_id, agent=agent, prompt=body.prompt,
-                                  model=body.model, user_id=user['id'])
+                                  model=body.model, user_id=user['id'], scheduled=bool(body.research and body.research.scheduled_for))
+        if body.research:
+            if not body.prompt.strip() or '\x00' in body.prompt:
+                raise HTTPException(422,'Enter a nonempty research goal.')
+            research_workflow.create(conn, ident, body.research)
     return {'id': ident}
 
 @app.get('/api/v1/runs/{ident}')
 def run_detail(ident: uuid.UUID, user: User):
-    row = db.query('SELECT * FROM runs WHERE id=%s', (ident,), one=True)
-    if not row or row['project_id'] is None or row['agent_id'] is None:
-        raise HTTPException(404, 'Task not found.')
-    with db.connect() as conn:access.project(conn,user,row['project_id'])
-    row['steps']=db.query('SELECT * FROM agent_steps WHERE run_id=%s ORDER BY id',(ident,))
-    row['events'] = db.query('SELECT * FROM events WHERE run_id=%s ORDER BY id', (ident,))
+    with db.connect() as conn:
+        row = conn.execute('SELECT * FROM runs WHERE id=%s', (ident,)).fetchone()
+        if not row or row['project_id'] is None or row['agent_id'] is None:
+            raise HTTPException(404, 'Task not found.')
+        access.project(conn,user,row['project_id'])
+        row.pop('claim_token', None)
+        row['research'] = conn.execute("SELECT * FROM research_workflows WHERE run_id=%s", (ident,)).fetchone()
+        if row['research'] and row['requested_by'] != user['id'] and user['role'] != 'ADMIN':
+            raise HTTPException(404, 'Task not found.')
+        row['steps'] = conn.execute('SELECT * FROM agent_steps WHERE run_id=%s ORDER BY id',(ident,)).fetchall()
+        row['events'] = conn.execute('SELECT * FROM events WHERE run_id=%s ORDER BY id',(ident,)).fetchall()
     return row
+
+
+@app.post('/api/v1/runs/{ident}/pause')
+def pause_research(ident: uuid.UUID, user: User):
+    with db.connect() as conn:
+        return research_workflow.control(conn, ident, user, 'pause')
+
+
+@app.post('/api/v1/runs/{ident}/resume')
+def resume_research(ident: uuid.UUID, user: User):
+    with db.connect() as conn:
+        return research_workflow.control(conn, ident, user, 'resume')
+
+
+@app.post('/api/v1/runs/{ident}/retry', status_code=201)
+def retry_research(ident: uuid.UUID, user: User):
+    with db.connect() as conn:
+        return research_workflow.retry(conn, ident, user)
+
+
+@app.post('/api/v1/runs/{ident}/review')
+def review_research(ident: uuid.UUID, body: research_workflow.Review, user: User):
+    with db.connect() as conn:
+        return research_workflow.review(conn, ident, user, body)
+
 
 @app.post('/api/v1/runs/{ident}/cancel')
 def cancel(ident: uuid.UUID, user: User):
@@ -233,9 +270,11 @@ def cancel(ident: uuid.UUID, user: User):
         task=conn.execute('SELECT project_id,agent_id FROM runs WHERE id=%s',(ident,)).fetchone()
         if not task or task['project_id'] is None or task['agent_id'] is None:raise HTTPException(404,'Task not found.')
         access.project(conn,user,task['project_id'],True)
-        row = conn.execute("""UPDATE runs SET status=CASE WHEN status='QUEUED' THEN 'CANCELLED' ELSE 'CANCEL_REQUESTED' END,
-            finished_at=CASE WHEN status='QUEUED' THEN now() ELSE finished_at END
-            WHERE id=%s AND status IN ('QUEUED','RUNNING') RETURNING status""", (ident,)).fetchone()
+        if conn.execute('SELECT run_id FROM research_workflows WHERE run_id=%s', (ident,)).fetchone():
+            research_workflow.authorize(conn, ident, user, True)
+        row = conn.execute("""UPDATE runs SET status=CASE WHEN status='RUNNING' THEN 'CANCEL_REQUESTED' ELSE 'CANCELLED' END,
+            finished_at=CASE WHEN status='RUNNING' THEN finished_at ELSE now() END
+            WHERE id=%s AND status IN ('QUEUED','RUNNING','PAUSED','WAITING_REVIEW','SCHEDULED') RETURNING status""", (ident,)).fetchone()
         if not row:
             raise HTTPException(409, 'Task is terminal or cancellation was already requested.')
         db.event('run.cancel_requested', user['id'], run_id=ident, conn=conn)
@@ -282,7 +321,7 @@ def events(user: User):
 
 @app.get('/api/v1/artifacts')
 def artifacts(user: User):
-    return db.query("SELECT id,project_id,model,output,finished_at FROM runs r WHERE status='SUCCEEDED' AND r.project_id IS NOT NULL AND r.agent_id IS NOT NULL AND (%s='ADMIN' OR EXISTS(SELECT 1 FROM project_members m WHERE m.project_id=r.project_id AND m.user_id=%s)) ORDER BY finished_at DESC LIMIT 100",(user['role'],user['id']))
+    return db.query("SELECT id,project_id,model,output,finished_at FROM runs r WHERE status='SUCCEEDED' AND NOT EXISTS (SELECT 1 FROM research_workflows w WHERE w.run_id=r.id) AND r.project_id IS NOT NULL AND r.agent_id IS NOT NULL AND (%s='ADMIN' OR EXISTS(SELECT 1 FROM project_members m WHERE m.project_id=r.project_id AND m.user_id=%s)) ORDER BY finished_at DESC LIMIT 100",(user['role'],user['id']))
 
 @app.get('/api/v1/tools')
 def tools(user: User):
