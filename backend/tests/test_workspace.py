@@ -155,3 +155,22 @@ def test_project_workspace_filters_chat_movement_and_archive(signed, work):
     assert signed.put(path, json={'project_id': project}).status_code == 409
     assert signed.put(f'/api/v1/projects/{project}/archive', json={'archived': False}).status_code == 200
     assert signed.put(path, json={'project_id': project}).status_code == 200
+
+
+def test_document_creation_rolls_back_when_audit_insert_fails(signed, work, monkeypatch):
+    from core_ai import db
+
+    event = db.event
+
+    def fail_created(action, *args, **kwargs):
+        if action == 'document.created':
+            raise RuntimeError('simulated audit error')
+        return event(action, *args, **kwargs)
+
+    monkeypatch.setattr(db, 'event', fail_created)
+    response = signed.post('/api/v1/documents', json={
+        'project_id': work['project_id'], 'title': 'Atomic source', 'content': 'Rollback probe',
+    })
+    assert response.status_code == 500
+    assert not db.query("SELECT id FROM documents WHERE title='Atomic source'")
+    assert not db.query("SELECT document_id FROM document_versions WHERE title='Atomic source'")

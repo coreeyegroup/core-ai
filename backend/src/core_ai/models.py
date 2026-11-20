@@ -3,6 +3,7 @@ from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
 import ipaddress
 import os
+import re
 import time
 from urllib.parse import urlsplit
 import httpx
@@ -64,8 +65,21 @@ def with_capabilities(catalog):
     return {**catalog, 'models': checked + items[32:]}
 
 
+def supports_generation(item):
+    capabilities = item.get('capabilities')
+    if isinstance(capabilities, list):
+        return 'completion' in capabilities
+    return not re.search(r'embed|bge-m3', item['name'], re.IGNORECASE)
+
+
+def supports_embedding(item):
+    capabilities = item.get('capabilities')
+    if isinstance(capabilities, list):
+        return 'embedding' in capabilities
+    return bool(re.search(r'embed|bge-m3', item['name'], re.IGNORECASE))
+
+
 def inspect_model(name):
-    import re
     if not re.fullmatch(r'[A-Za-z0-9_.:/-]{1,120}',name):raise ValueError('Invalid model name.')
     with httpx.Client(timeout=12,trust_env=False,follow_redirects=False) as client:
         r=client.post(config()['endpoint']+'/api/show',json={'model':name})

@@ -49,6 +49,9 @@ def dispatch(run,name,args,step):
             p=access.project(conn,user,run['project_id'])
             result={'id':p['id'],'name':p['name'],'description':p['description'],'sources':conn.execute('SELECT id,title,version FROM documents WHERE project_id=%s AND enabled ORDER BY created_at LIMIT 50',(run['project_id'],)).fetchall()}
         else:
+            state = conn.execute('SELECT status FROM runs WHERE id=%s FOR UPDATE', (run['id'],)).fetchone()
+            if not state or state['status'] != 'RUNNING':
+                raise InterruptedError('Execution stopped before artifact creation.')
             artifact=new_artifact(conn,user,Artifact(title=body.title,content=body.content,project_id=run['project_id'],source_run_id=run['id']))
             result={'artifact_id':str(artifact),'title':body.title,'visibility':'PRIVATE'}
         safe=json.loads(json.dumps(result,default=str))

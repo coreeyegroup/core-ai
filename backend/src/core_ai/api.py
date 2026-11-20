@@ -1,6 +1,8 @@
 """Versioned CORE-AI API; this product does not depend on any other CORE product."""
 import os
 import uuid
+
+import httpx
 from contextlib import asynccontextmanager
 from typing import Annotated
 from fastapi import FastAPI, Depends, HTTPException, Request, Response
@@ -60,6 +62,25 @@ def health(response: Response):
     if not result['database_connected']:
         response.status_code = 503
     return result
+
+@app.get('/api/v1/readiness')
+def readiness(response: Response, user: User):
+    access.admin(user)
+    worker = db.query("""SELECT heartbeat>now()-interval '20 seconds' AS online
+        FROM worker_status WHERE id='main'""", one=True)
+    try:
+        with httpx.Client(timeout=2, trust_env=False, follow_redirects=False) as client:
+            client.get(models.config()['endpoint'] + '/api/tags').raise_for_status()
+        provider_online = True
+    except httpx.HTTPError:
+        provider_online = False
+    worker_online = bool(worker and worker['online'])
+    ready = worker_online and provider_online
+    if not ready:
+        response.status_code = 503
+    return {'ready': ready, 'database_connected': True, 'worker_online': worker_online,
+            'provider_online': provider_online}
+
 
 class Credentials(BaseModel):
     username: str = Field(min_length=1, max_length=64)
@@ -234,12 +255,14 @@ def documents(user: User, project_id: uuid.UUID | None = None):
 
 @app.post('/api/v1/documents', status_code=201)
 def add_document(body: Document, user: User):
-    with db.connect() as conn:access.project(conn,user,body.project_id,True)
     ident = uuid.uuid4()
-    db.query('INSERT INTO documents(id,project_id,title,content) VALUES (%s,%s,%s,%s)',
-             (ident,body.project_id,body.title,body.content))
-    db.query('INSERT INTO document_versions(document_id,project_id,version,title,content) VALUES (%s,%s,1,%s,%s)',(ident,body.project_id,body.title,body.content))
-    db.event('document.created', user['id'], {'id': str(ident)})
+    with db.connect() as conn:
+        access.project(conn, user, body.project_id, True)
+        conn.execute('INSERT INTO documents(id,project_id,title,content) VALUES (%s,%s,%s,%s)',
+                     (ident, body.project_id, body.title, body.content))
+        conn.execute('INSERT INTO document_versions(document_id,project_id,version,title,content) VALUES (%s,%s,1,%s,%s)',
+                     (ident, body.project_id, body.title, body.content))
+        db.event('document.created', user['id'], {'id': str(ident)}, conn=conn)
     return {'id': ident}
 
 @app.delete('/api/v1/documents/{ident}')
@@ -250,7 +273,7 @@ def remove_document(ident: uuid.UUID, user: User):
         access.project(conn,user,source['project_id'],True)
         conn.execute('DELETE FROM document_versions WHERE document_id=%s',(ident,))
         conn.execute('DELETE FROM documents WHERE id=%s',(ident,))
-    db.event('document.deleted', user['id'], {'id': str(ident)})
+        db.event('document.deleted', user['id'], {'id': str(ident)}, conn=conn)
     return {'ok': True}
 
 @app.get('/api/v1/events')
@@ -270,7 +293,16 @@ def tools(user: User):
 
 @app.get('/api/v1/integrations')
 def integrations(user: User):
-    return {'connected': [], 'policy':'Optional versioned API connectors. No other product is required or configured.'}
+    connected = []
+    if user['role'] == 'ADMIN':
+        connected = db.query("""
+            SELECT c.id,c.name,c.client_type,c.model_access,c.webhook_destination IS NOT NULL AS has_webhook
+            FROM automation_connections c JOIN users u ON u.id=c.created_by
+            WHERE c.revoked_at IS NULL AND NOT c.paused
+              AND (c.expires_at IS NULL OR c.expires_at>now()) AND u.enabled AND u.role='ADMIN'
+            ORDER BY c.created_at DESC LIMIT 200
+        """)
+    return {'connected': connected, 'policy':'Optional versioned API connections. No other product is required.'}
 
 # Chat is an independent product module, sharing only local identity and inference.
 from .chat import router as chat_router

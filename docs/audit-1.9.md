@@ -19,3 +19,18 @@ This audit covers the repository’s workstation UI, Python API, PostgreSQL migr
 | Roadmap | Responsive and release quality | CI covers unit, database, dependency and native installer checks. It does not run the manually exercised Chromium breakpoint flows. The build also emits a large-chunk warning. [CI workflow](../.github/workflows/checks.yml) | Add browser checks for mobile and keyboard navigation, and measure route-level bundle splitting. |
 
 The encrypted-recovery design uses the host OpenSSL package, RSA-OAEP with SHA-256, a private key held in the workstation environment, password confirmation using the account lockout policy, and an audit event for each successful reveal. The normal list returns only recoverability status. A host or backup that exposes both ciphertext and private configuration can reveal the stored credential. See the [OWASP Secrets Management Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Secrets_Management_Cheat_Sheet.html) and [OpenSSL pkeyutl documentation](https://docs.openssl.org/3.0/man1/openssl-pkeyutl/).
+
+
+## Implementation status in 1.10.0
+
+| Audit area | Delivered | Still open |
+|---|---|---|
+| Shared capacity | Configurable workspace reserve, alternating queue dispatch, independent bounded file extraction | Production throughput baseline and multi-worker/provider capacity |
+| API operations | Dynamic all-model access, per-model policies, separate text embedding permission, usage, scoped cancellation and retry, automation OpenAPI | Additional specialty operations and provider adapters |
+| Key operations | Optional rotation overlap and early expiry | Service identities, ownership transfer, independent recovery-key rotation |
+| Webhooks | Audited replay with the original event ID | Test delivery, sanitized failure categories and operator alerts |
+| Source integrity | Atomic creation/deletion and audit events, ranked lexical chat retrieval, source version IDs in use events | Citation and version visibility in the UI, tunable retrieval and semantic indexing |
+| Runtime operations | Authenticated database/worker/provider readiness and configured integration summary | Alerting thresholds, retention and independent audit export, off-host restore verification |
+| Workbench | Responsive model access and usage controls | Cursor pagination across library modules, broader OCR/multimodal support, browser CI, route splitting and opt-in capabilities |
+
+Migration `010_model_usage_controls.sql` preserves 1.9 key scope, defaults and permissions. The new worker should be live before enabling embedding jobs. Before an intentional rollback to 1.9 after using the new controls, pause affected connections and drain or cancel queued embedding jobs. Review each connection’s effective policy before enabling it on an older release. A 1.9 runtime does not enforce the 1.10 model policy fields or process the embedding operation.

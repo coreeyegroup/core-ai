@@ -29,3 +29,11 @@ def test_image_only_pdf_reports_ocr_unavailable():
     from pypdf import PdfWriter
     b=io.BytesIO();writer=PdfWriter();writer.add_blank_page(width=100,height=100);writer.write(b)
     with pytest.raises(ValueError,match='OCR'):extract('scanned.pdf',b.getvalue())
+
+
+def test_isolated_parser_returns_the_same_bounded_content():
+    from core_ai.files import extract_isolated
+
+    assert extract_isolated('notes.txt', b'Isolated text.') == ('Isolated text.', False)
+    with pytest.raises(ValueError, match='UTF-8'):
+        extract_isolated('notes.txt', b'\xff')

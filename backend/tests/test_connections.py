@@ -295,3 +295,151 @@ def test_unavailable_webhook_does_not_close_other_edit_controls(signed, monkeypa
     assert updated.status_code==200
     row=signed.get('/api/v1/connections').json()[0]
     assert (row['name'],row['requests_per_minute'],row['webhook_destination'])==('Renamed',9,'EVENTS')
+
+
+def test_dynamic_model_scope_and_policies_follow_the_catalog(signed, monkeypatch):
+    from core_ai import connections
+
+    catalog = ['one:latest', 'two:latest', 'blocked:latest']
+    monkeypatch.setattr(connections, 'installed_models', lambda operation: catalog)
+    body = {'name': 'Dynamic', 'model_access': 'all', 'allow_model_choice': True, 'context_tokens': 4096,
+            'model_policies': {'blocked:latest': {'enabled': False}, 'one:latest': {
+                'requests_per_minute': 1, 'timeout_seconds': 30, 'max_output_tokens': 512, 'context_tokens': 2048}}}
+    created = signed.post('/api/v1/connections', json=body)
+    assert created.status_code == 201
+    key = created.json()
+    headers = {'Authorization': 'Bearer ' + key['token']}
+    assert signed.get('/api/v1/automation/models', headers=headers).json() == {
+        'models': ['one:latest', 'two:latest'], 'default': None}
+    policies = signed.get('/api/v1/automation/model-policies', headers=headers).json()['limits']
+    assert policies['one:latest']['context_tokens'] == 2048
+    assert policies['two:latest']['context_tokens'] == 4096
+
+    def submit(ident, model):
+        return signed.post(JOBS, headers=headers, json={'request_id': ident, 'prompt': 'Check', 'model': model})
+
+    assert submit('blocked', 'blocked:latest').status_code == 403
+    first = submit('first', 'one:latest')
+    assert first.status_code == 202
+    assert submit('first', 'one:latest').json() == first.json()
+    assert submit('second', 'one:latest').status_code == 429
+    assert submit('other', 'two:latest').status_code == 202
+    catalog.append('new:latest')
+    assert submit('new', 'new:latest').status_code == 202
+    catalog.remove('two:latest')
+    assert submit('removed', 'two:latest').status_code == 403
+    effective = db.query('SELECT timeout_seconds,max_output_tokens,context_tokens FROM runs WHERE id=%s',
+                         (first.json()['id'],), one=True)
+    assert effective == {'timeout_seconds': 30, 'max_output_tokens': 512, 'context_tokens': 2048}
+    usage = signed.get('/api/v1/automation/usage', headers=headers)
+    assert usage.status_code == 200
+    assert {row['model']: row['pending'] for row in usage.json()['models']} == {
+        'one:latest': 1, 'two:latest': 1, 'new:latest': 1}
+
+    update = signed.put('/api/v1/connections/' + key['id'], json={'name': 'Legacy editor', 'allow_model_choice': True})
+    assert update.status_code == 200
+    selected = signed.get('/api/v1/connections').json()[0]
+    assert selected['model_access'] == 'all' and selected['context_tokens'] == 4096
+    assert selected['model_policies'] == body['model_policies']
+
+
+def test_job_cancel_retry_admin_webhook_replay_and_schema(signed, monkeypatch):
+    monkeypatch.setenv('CORE_AI_WEBHOOK_EVENTS_URL', 'https://receiver.example/webhook')
+    monkeypatch.setenv('CORE_AI_WEBHOOK_EVENTS_SECRET', 'x' * 32)
+    response = signed.post('/api/v1/connections', json={'name': 'Cancellation', 'model': 'test',
+        'can_cancel': True, 'webhook_destination': 'EVENTS'})
+    assert response.status_code == 201
+    connection = response.json()
+    headers = {'Authorization': 'Bearer ' + connection['token']}
+    result = signed.post(JOBS, headers=headers, json={'request_id': 'cancelled', 'prompt': 'Hello'})
+    ident = result.json()['id']
+    uri = f'{JOBS}/{ident}'
+    assert signed.post(uri+'/cancel', headers=headers).json() == {'status': 'CANCELLED'}
+    assert signed.post(uri+'/cancel', headers=headers).json() == {'status': 'CANCELLED'}
+    assert signed.post(uri+'/retry', headers=headers, json={'request_id': 'cancelled'}).status_code == 409
+    retry = signed.post(uri+'/retry', headers=headers, json={'request_id': 'retry'})
+    assert retry.status_code == 202 and retry.json()['id'] != ident
+    assert signed.post(uri+'/retry', headers=headers, json={'request_id': 'retry'}).json() == retry.json()
+    scoped = '/api/v1/connections/' + connection['id'] + '/jobs/' + ident
+    db.query("UPDATE automation_webhook_deliveries SET status='FAILED',attempts=3 WHERE run_id=%s", (ident,))
+    assert signed.post(scoped+'/webhook/replay').status_code == 202
+    assert signed.post(scoped+'/webhook/replay').status_code == 409
+    assert db.query("SELECT attempts FROM automation_webhook_deliveries WHERE run_id=%s", (ident,), one=True)['attempts'] == 0
+    schema = signed.get('/api/v1/automation/openapi.json')
+    assert schema.status_code == 200
+    assert set(schema.json()['paths']) >= {JOBS, JOBS+'/{ident}/cancel', '/api/v1/automation/usage'}
+    assert all(path.startswith('/api/v1/automation/') for path in schema.json()['paths'])
+
+
+def test_workspace_capacity_reservation_and_alternating_claim(signed, work, monkeypatch):
+    monkeypatch.setenv('CORE_AI_QUEUE_CAPACITY', '3')
+    monkeypatch.setenv('CORE_AI_WORKSPACE_QUEUE_RESERVE', '1')
+    _, headers = create_connection(signed, work)
+    for i in range(2):
+        assert signed.post(JOBS, headers=headers, json={'request_id': str(i), 'prompt': 'Queue'}).status_code == 202
+    assert signed.post(JOBS, headers=headers, json={'request_id': 'limit', 'prompt': 'Queue'}).status_code == 409
+    interactive = signed.post('/api/v1/runs', json=work)
+    assert interactive.status_code == 201
+    kind, job = worker.claim_work()
+    assert kind == 'automation'
+    worker.finish(job['id'], 'FAILED')
+    kind, job = worker.claim_work(last_automation=True)
+    assert kind == 'task' and str(job['id']) == interactive.json()['id']
+
+
+def test_connection_cancel_permission_and_ownership(signed, work):
+    _, headers = create_connection(signed, work)
+    response = signed.post(JOBS, headers=headers, json={'request_id': 'own', 'prompt': 'Queue'})
+    uri = JOBS + '/' + response.json()['id'] + '/cancel'
+    assert signed.post(uri, headers=headers).status_code == 403
+    response = signed.post('/api/v1/connections', json={'name': 'Other key', 'model': 'test', 'can_cancel': True})
+    other = {'Authorization': 'Bearer ' + response.json()['token']}
+    assert signed.post(uri, headers=other).status_code == 404
+
+
+def test_embeddings_are_separately_scoped_metered_and_retry_safe(signed, monkeypatch):
+    from core_ai import connections
+
+    monkeypatch.setattr(connections, 'installed_models', lambda op: ['embed:latest'] if op == 'embedding' else ['chat:latest'])
+    create = signed.post('/api/v1/connections', json={'name': 'Embeddings', 'model_access': 'all',
+        'allow_model_choice': True, 'can_embed': True, 'can_submit': False})
+    assert create.status_code == 201
+    headers = {'Authorization': 'Bearer ' + create.json()['token']}
+    assert signed.get('/api/v1/automation/models?operation=embedding', headers=headers).json()['models'] == ['embed:latest']
+    body = {'request_id': 'embedding', 'model': 'embed:latest', 'input': 'search query'}
+    endpoint = '/api/v1/automation/embeddings'
+    assert signed.post(endpoint, headers=headers, json={**body, 'model': 'chat:latest'}).status_code == 403
+    assert signed.post(JOBS, headers=headers, json={'request_id': 'chat', 'model': 'chat:latest', 'prompt': 'Test'}).status_code == 403
+    first = signed.post(endpoint, headers=headers, json=body)
+    assert first.status_code == 202
+    assert signed.post(endpoint, headers=headers, json=body).json() == first.json()
+    real_client = httpx.Client
+
+    def provider(request):
+        assert request.url.path == '/api/embed'
+        params = json.loads(request.content)
+        assert params['input'] == 'search query' and params['model'] == 'embed:latest' and not params['truncate']
+        return httpx.Response(200, json={'embeddings': [[0.5, -0.25, 0.125]], 'prompt_eval_count': 3})
+
+    monkeypatch.setattr(worker.httpx, 'Client', lambda **kwargs: real_client(transport=httpx.MockTransport(provider)))
+    run = worker.claim()
+    assert run['operation'] == 'embedding'
+    worker.execute(run)
+    result = signed.get(f"{JOBS}/{first.json()['id']}", headers=headers).json()
+    assert result['status'] == 'SUCCEEDED' and result['embeddings'] == [[0.5, -0.25, 0.125]]
+    usage = signed.get('/api/v1/automation/usage', headers=headers).json()['models'][0]
+    assert usage['measured_input_tokens'] == 3 and usage['measured_output_tokens'] == 0
+
+
+def test_key_rotation_overlap_can_be_ended_before_expiry(signed, work):
+    connection, original = create_connection(signed, work)
+    path = '/api/v1/connections/' + connection['id']
+    rotated = signed.post(path+'/rotate', json={'overlap_minutes': 15})
+    assert rotated.status_code == 200 and rotated.json()['overlap_until']
+    current = {'Authorization': 'Bearer ' + rotated.json()['token']}
+    models_url = '/api/v1/automation/models'
+    assert signed.get(models_url, headers=original).status_code == 200
+    assert signed.get(models_url, headers=current).status_code == 200
+    assert signed.post(path+'/end-overlap').status_code == 200
+    assert signed.get(models_url, headers=original).status_code == 401
+    assert signed.get(models_url, headers=current).status_code == 200

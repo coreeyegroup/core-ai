@@ -1,7 +1,10 @@
 """Validated file ingestion. Parsing is performed by the bounded worker, not the API."""
+import json
+import os
+import subprocess
+import sys
 import hashlib
 import io
-import json
 from pathlib import PurePath
 import uuid
 import zipfile
@@ -140,9 +143,26 @@ def claim():
         if row:conn.execute("UPDATE workspace_files SET status='PROCESSING',lease_until=now()+interval '30 seconds' WHERE id=%s",(row['id'],))
         return row
 
-def process(row):
+def extract_isolated(name, data):
     try:
-        text,truncated=extract(row['name'],bytes(row['raw']))
+        result = subprocess.run(
+            [sys.executable, '-m', 'core_ai.files', name], input=data,
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=20, check=True,
+            env={'LANG': 'C.UTF-8', 'PYTHONPATH': os.pathsep.join(sys.path)},
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise ValueError('File extraction exceeded 20 seconds.') from exc
+    except subprocess.CalledProcessError as exc:
+        raise ValueError('File extraction failed. Check the file format.') from exc
+    payload = json.loads(result.stdout)
+    if 'error' in payload:
+        raise ValueError(payload['error'])
+    return payload['text'], payload['truncated']
+
+
+def process(row, *, parse=extract):
+    try:
+        text,truncated=parse(row['name'],bytes(row['raw']))
         if not text.strip():raise ValueError('No readable text was found in this file.')
         with db.connect() as conn:
             user=conn.execute('SELECT id,role FROM users WHERE id=%s AND enabled',(row['owner_id'],)).fetchone()
@@ -159,3 +179,14 @@ def process(row):
     except Exception as exc:
         message=str(exc) if isinstance(exc,ValueError) else 'File processing failed. Check the format and access permissions.'
         db.query("UPDATE workspace_files SET status='FAILED',error=%s,lease_until=NULL,processed_at=now() WHERE id=%s",(message[:500],row['id']))
+
+if __name__ == '__main__':
+    import resource
+
+    resource.setrlimit(resource.RLIMIT_AS, (512 * 1024**2, 512 * 1024**2))
+    resource.setrlimit(resource.RLIMIT_CPU, (15, 16))
+    try:
+        text, truncated = extract(sys.argv[1], sys.stdin.buffer.read())
+        print(json.dumps({'text': text, 'truncated': truncated}))
+    except ValueError as exc:
+        print(json.dumps({'error': str(exc)[:500]}))

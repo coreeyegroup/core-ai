@@ -1,11 +1,15 @@
 const {test}=require('node:test');const assert=require('node:assert/strict');const fs=require('node:fs');const vm=require('node:vm');const ts=require('typescript');const {JSDOM}=require('jsdom');
 test('custom workbench navigates, splits and opens every implemented module',async()=>{
  const dom=new JSDOM('<!doctype html><div id="root"></div>',{url:'http://workstation.test/',pretendToBeVisual:true});
- const old={};for(const k of ['window','document','navigator','HTMLElement','HTMLInputElement','Element','Node','Event','CustomEvent','localStorage']){old[k]=Object.getOwnPropertyDescriptor(global,k);Object.defineProperty(global,k,{value:dom.window[k],configurable:true,writable:true});}
+ const old={};for(const k of ['window','document','navigator','HTMLElement','HTMLInputElement','Element','Node','Event','CustomEvent','FormData','localStorage']){old[k]=Object.getOwnPropertyDescriptor(global,k);Object.defineProperty(global,k,{value:dom.window[k],configurable:true,writable:true});}
  global.IS_REACT_ACT_ENVIRONMENT=true;dom.window.HTMLElement.prototype.scrollIntoView=function(){};
  const fetched=[];const overview={projects:1,agents:1,documents:0,runs:[],worker:{online:true},inference:{endpoint:'http://127.0.0.1:11434',model:'test:latest'},release:'test'};
- const responses={'chat/conversations?archived=false&q=':[],session:{username:'test-admin',role:'ADMIN',csrf:'csrf-test'},overview,projects:[{id:'project',name:'Project one',description:'',created_at:new Date().toISOString()}],agents:[{id:'agent',name:'Analyst',instructions:'Test',version:1,enabled:true}],models:{available:true,models:[{name:'test:latest',size:1000000},{name:'editor:latest',size:1000000}],config:overview.inference},runs:[],events:[],documents:[],artifacts:[],files:[],'library/artifacts':[],'access/users':[],capabilities:{features:[]},'operations/metrics':{tasks:[],chat:[],files:[]},tools:[],connections:[]};
- let conversationCount=0;const writes=[];const fetchOld=global.fetch;global.fetch=async(path,options={})=>{fetched.push(path);const key=path.replace('/api/v1/','');let result=responses[key==='models?catalog=true'?'models':key]??{};
+ const responses={'chat/conversations?archived=false&q=':[],session:{username:'test-admin',role:'ADMIN',csrf:'csrf-test'},overview,projects:[{id:'project',name:'Project one',description:'',created_at:new Date().toISOString()}],agents:[{id:'agent',name:'Analyst',instructions:'Test',version:1,enabled:true}],models:{available:true,models:[{name:'test:latest',size:1000000},{name:'editor:latest',size:1000000}],config:overview.inference},runs:[],events:[],documents:[],artifacts:[],files:[],'library/artifacts':[],'access/users':[],capabilities:{features:[]},'operations/metrics':{tasks:[],chat:[],files:[]},tools:[],connections:[],'connections/webhook-destinations':[],'connections/key-storage':{available:true}};
+ let conversationCount=0;const writes=[],connectionWrites=[];const fetchOld=global.fetch;global.fetch=async(path,options={})=>{fetched.push(path);const key=path.replace('/api/v1/','');let result=responses[key==='models?catalog=true'?'models':key]??{};
+  if(options.method==='POST'&&key==='connections'){
+   connectionWrites.push(JSON.parse(options.body));
+   result={id:'fixture-connection',token:'fixture-only'};
+  }
   if(options.method==='POST'&&key==='chat/conversations'){
    const b=JSON.parse(options.body),id='chat-'+(++conversationCount);
    responses['chat/conversations/'+id]={...b,id,pinned:false,archived:false,updated_at:new Date().toISOString(),messages:[],generation:null};
@@ -225,5 +229,21 @@ test('custom workbench navigates, splits and opens every implemented module',asy
   assert.equal(document.querySelector('.view:not([hidden]) .project-title h1').textContent,'Project one');
   await act(async()=>{projectsNav.querySelector('[aria-label="New project"]').click();});
   assert.ok(document.querySelector('.view:not([hidden]) .project-create'));
+  await act(async()=>{window.dispatchEvent(new CustomEvent('core-ai-goto',{detail:{view:'Integrations'}}));await wait();});
+  const connections=()=>document.querySelector('.view:not([hidden]) .connections-page');
+  await act(async()=>{[...connections().querySelectorAll('button')].find(button=>button.textContent==='New connection').click();await wait();});
+  const editor=connections().querySelector('.connection-editor');
+  const scope=[...editor.querySelectorAll('select')].find(select=>[...select.options].some(option=>option.value==='all'));
+  await act(async()=>{change(scope,'all');});
+  const blocked=editor.querySelector('[aria-label="test:latest"]');
+  assert.ok(blocked.checked);
+  await act(async()=>{blocked.click();editor.querySelector('[name=can_embed]').click();});
+  assert.ok(!blocked.checked);
+  editor.querySelector('[name=name]').value='Usage test';
+  await act(async()=>{submit(connections());await wait();});
+  assert.equal(connectionWrites.length,1);
+  assert.equal(connectionWrites[0].model_access,'all');
+  assert.equal(connectionWrites[0].can_embed,true);
+  assert.deepEqual(connectionWrites[0].model_policies,{'test:latest':{enabled:false}});
  }finally{await act(async()=>root.unmount());global.fetch=fetchOld;delete global.IS_REACT_ACT_ENVIRONMENT;for(const k of Object.keys(old)){if(old[k])Object.defineProperty(global,k,old[k]);else delete global[k];}if(locationOld)Object.defineProperty(global,'location',locationOld);else delete global.location;dom.window.close();}
 });

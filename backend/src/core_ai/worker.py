@@ -1,9 +1,11 @@
 """Single-slot durable worker. No shell, host administration or cross-product actions."""
 import json
+import math
 import signal
 import threading
 import time
 import httpx
+from psycopg.types.json import Jsonb
 from . import db, models, chat, files, access, agent_runtime, webhooks
 
 stopping = threading.Event()
@@ -17,7 +19,7 @@ def recover_tasks():
         for row in expired:
             db.event('run.interrupted', run_id=row['id'], conn=conn)
 
-def claim():
+def claim(automation=None):
     recover_tasks()
     with db.connect() as conn:
         # Also exclude a live run if a second worker is accidentally started.
@@ -26,7 +28,9 @@ def claim():
             return None
         if conn.execute("SELECT id FROM chat_generations WHERE status IN ('RUNNING','CANCEL_REQUESTED') LIMIT 1").fetchone():
             return None
-        row = conn.execute("SELECT * FROM runs WHERE status='QUEUED' ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1").fetchone()
+        row = conn.execute("""SELECT * FROM runs WHERE status='QUEUED'
+            AND (%s::boolean IS NULL OR (connection_id IS NOT NULL)=%s)
+            ORDER BY created_at,id FOR UPDATE SKIP LOCKED LIMIT 1""", (automation, automation)).fetchone()
         if row:
             conn.execute("UPDATE runs SET status='RUNNING',started_at=now(),lease_until=now()+interval '30 seconds' WHERE id=%s", (row['id'],))
             db.event('run.started', run_id=row['id'], conn=conn)
@@ -34,11 +38,12 @@ def claim():
 
 def retrieve(run):
     # Exact full-text retrieval only from the selected project, bounded context.
-    docs = db.query('''SELECT id,title,left(content,4000) AS content FROM documents
+    docs = db.query('''SELECT id,title,version,left(content,4000) AS content FROM documents
         WHERE project_id=%s AND enabled AND to_tsvector('simple',title||' '||content) @@ plainto_tsquery('simple',%s)
-        ORDER BY ts_rank(to_tsvector('simple',title||' '||content),plainto_tsquery('simple',%s)) DESC LIMIT 5''',
+        ORDER BY ts_rank(to_tsvector('simple',title||' '||content),plainto_tsquery('simple',%s)) DESC,id LIMIT 5''',
         (run['project_id'],run['prompt'],run['prompt']))
-    db.event('tool.completed', detail={'tool':'knowledge.search','sources':[str(d['id']) for d in docs]}, run_id=run['id'])
+    db.event('tool.completed', detail={'tool':'knowledge.search','sources':[str(d['id']) for d in docs],
+        'source_versions':{str(d['id']):d['version'] for d in docs}}, run_id=run['id'])
     return docs
 
 def finish(ident, status, output=None, error=None):
@@ -52,8 +57,41 @@ def finish(ident, status, output=None, error=None):
                      (status,output,error,ident))
         db.event('run.'+status.lower(), detail={'error':error} if error else {}, run_id=ident, conn=conn)
 
+def execute_embedding(run):
+    started = time.monotonic()
+    endpoint = models.config()['endpoint']
+    with httpx.Client(timeout=httpx.Timeout(min(30, run['timeout_seconds']), connect=8),
+                      trust_env=False, follow_redirects=False) as client:
+        with client.stream('POST', endpoint+'/api/embed', json={
+            'model': run['model'], 'input': run['prompt'], 'truncate': False,
+            'options': {'num_ctx': run['context_tokens']},
+        }) as response:
+            response.raise_for_status()
+            payload = bytearray()
+            for chunk in response.iter_bytes():
+                state = db.query('SELECT status FROM runs WHERE id=%s', (run['id'],), one=True)
+                if stopping.is_set() or state['status'] != 'RUNNING':
+                    raise InterruptedError('Execution stopped.')
+                if time.monotonic()-started > run['timeout_seconds']:
+                    raise TimeoutError('Embedding exceeded the configured timeout.')
+                if len(payload)+len(chunk) > 512*1024:
+                    raise ValueError('Embedding response too large.')
+                payload.extend(chunk)
+    data = json.loads(payload)
+    vectors = data.get('embeddings')
+    if (not isinstance(vectors, list) or len(vectors) != 1 or not isinstance(vectors[0], list)
+            or not 1 <= len(vectors[0]) <= 16384
+            or any(type(value) not in (int, float) or not math.isfinite(value) for value in vectors[0])):
+        raise ValueError('Provider returned an invalid embedding.')
+    db.query('UPDATE runs SET metrics=%s WHERE id=%s', (Jsonb(models.metrics(data, started)), run['id']))
+    finish(run['id'], 'SUCCEEDED', output=json.dumps(vectors, separators=(',', ':')))
+
+
 def execute(run):
     actor=agent_runtime.actor(run)
+    if run['operation']=='embedding':
+        execute_embedding(run)
+        return
     if run.get('runtime_mode')=='tools':
         result=agent_runtime.execute(run,stopping)
         finish(run['id'],'SUCCEEDED',output=result)
@@ -77,7 +115,7 @@ If the supplied sources do not support a claim, state that limitation. Do not cl
     with httpx.Client(timeout=httpx.Timeout(min(30, run['timeout_seconds']), connect=8), trust_env=False, follow_redirects=False) as client:
         with client.stream('POST', cfg['endpoint']+'/api/chat', json={
             'model':run['model'], 'messages':[{'role':'system','content':system},{'role':'user','content':run['prompt']}],
-            'stream':True, 'options':{'num_predict':run['max_output_tokens'],'num_ctx':8192}, 'keep_alive':'5m'
+            'stream':True, 'options':{'num_predict':run['max_output_tokens'],'num_ctx':run['context_tokens']}, 'keep_alive':'5m'
         }) as response:
             response.raise_for_status()
             for line in response.iter_lines():
@@ -99,7 +137,6 @@ If the supplied sources do not support a claim, state that limitation. Do not cl
                     raise ValueError('response too large')
                 if data.get('done'):
                     break
-    from psycopg.types.json import Jsonb
     db.query('UPDATE runs SET metrics=%s WHERE id=%s',(Jsonb(models.metrics(data,started)),run['id']))
     answer = ''.join(output).strip()
     if not answer:
@@ -126,13 +163,38 @@ current = [None]
 current_chat = [None]
 current_file = [None]
 
-def claim_work():
+def claim_work(last_automation=None):
     recover_tasks()
     chat.recover()
-    oldest=db.query("SELECT kind FROM (SELECT 'task' AS kind,created_at FROM runs WHERE status='QUEUED' UNION ALL SELECT 'chat' AS kind,created_at FROM chat_generations WHERE status='QUEUED') q ORDER BY created_at LIMIT 1",one=True)
-    if not oldest: return None,None
-    kind=oldest['kind']
-    return kind,chat.claim() if kind=='chat' else claim()
+    oldest = db.query("""
+        SELECT kind FROM (
+            SELECT CASE WHEN connection_id IS NULL THEN 'task' ELSE 'automation' END AS kind,
+                created_at,id FROM runs WHERE status='QUEUED'
+            UNION ALL
+            SELECT 'chat',created_at,id FROM chat_generations WHERE status='QUEUED'
+        ) q ORDER BY ((kind='automation')=%s) NULLS LAST, created_at,id LIMIT 1
+    """, (last_automation,), one=True)
+    if not oldest:
+        return None, None
+    kind = oldest['kind']
+    return kind, chat.claim() if kind == 'chat' else claim(automation=kind == 'automation')
+
+
+def process_files():
+    while not stopping.is_set():
+        try:
+            file = files.claim()
+            if file:
+                current_file[0] = file['id']
+                try:
+                    files.process(file, parse=files.extract_isolated)
+                finally:
+                    current_file[0] = None
+            else:
+                stopping.wait(1)
+        except Exception:
+            stopping.wait(3)
+
 
 def main():
     for sig in (signal.SIGTERM, signal.SIGINT):
@@ -146,19 +208,17 @@ def main():
         thread.start()
         webhook_thread = threading.Thread(target=webhooks.run, args=(stopping,), daemon=True)
         webhook_thread.start()
+        file_thread = threading.Thread(target=process_files, daemon=True)
+        file_thread.start()
+        last_automation = None
         try:
             while not stopping.is_set():
                 try:
-                    file=files.claim()
-                    if file:
-                        current_file[0]=file['id']
-                        try:files.process(file)
-                        finally:current_file[0]=None
-                        continue
-                    kind,run = claim_work()
+                    kind,run = claim_work(last_automation)
                     if not run:
                         stopping.wait(1)
                         continue
+                    last_automation = kind == 'automation'
                     if kind=='chat':
                         current_chat[0]=run['id']
                     else:
@@ -189,6 +249,7 @@ def main():
             stopping.set()
             thread.join(timeout=6)
             webhook_thread.join(timeout=6)
+            file_thread.join(timeout=22)
 
 if __name__ == '__main__':
     main()

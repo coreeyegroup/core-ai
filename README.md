@@ -88,14 +88,14 @@ See [release behavior and limits](docs/release-1.2.md) and the [requirements reg
 - Search conversations by text, status, or project. The conversation action menu supports rename, pin, archive/restore, and delete. Delete requires confirmation in the UI and is blocked while a reply is active. Export downloads the conversation as Markdown.
 - Upload supported text/code, PDF text, DOCX or XLSX files; select up to eight processed library files for a message. Extracted excerpts are bounded to 32,000 combined characters. OCR, vision, web browsing and voice remain unavailable.
 - Recent model context is bounded to 20 messages and 24,000 characters, plus system preferences and optional project excerpts. Large attachments may be excerpted; the full original text remains saved with the message. This is bounded local inference, not an unlimited context promise.
-- Chat and professional tasks share one FIFO inference slot and a combined queue limit of 20. This protects the initial laptop deployment.
+- Chat, professional tasks, and API jobs share one inference slot. When both queues have work, the worker alternates between workspace and API jobs, using oldest first within each group. The default queue holds 20 jobs with four slots reserved for workspace work. Operators can set `CORE_AI_QUEUE_CAPACITY` and `CORE_AI_WORKSPACE_QUEUE_RESERVE` in the private service environment. Keep both services on the same settings. File extraction runs independently in a bounded subprocess.
 - Conversation history is private to its owning CORE-AI user. The UI keeps the selected conversation ID and layout preferences in browser storage; unsent drafts are held in session memory; messages and files remain in the product database.
 
 ## Connect an app, platform, or webhook
 
-In CORE-AI, open **Manage → Connections → New connection** as an administrator. Give the connection a name and select the installed text models it may use. Set a default or require the caller to specify a model. A project and an Analysis agent are optional. A linked project provides its instructions and matching sources, so select a project whose contents the receiving service may process.
+In CORE-AI, open **Manage → Connections → New connection** as an administrator. Name the connection and choose **Selected models** or **All supported installed models**. All-model access follows the installed Ollama catalog, including new supported models. Clear an individual model to block it, or use **Per-model overrides** to tighten request rate, pending jobs, timeout, context, and output limits. The connection-wide caps still apply. Set a default, lock the key to that model, or require the caller to specify a model. Text generation and text embedding each have their own submission permission. A project and an Analysis agent are optional. A linked project provides its instructions and matching sources, so select a project whose contents the receiving service may process.
 
-Save the key in your service’s credential store. Select **Save encrypted copy for later reveal** when creating or rotating a key if you want to retrieve it from **API keys → View key**. Reveal requires your administrator password and records an audit event. Older keys and keys issued without recovery can be replaced through rotation. The installer provisions the encryption key in the private workstation configuration. Restore that configuration with the matching database snapshot to retain access to encrypted copies. The Connections panel can test an allowed model, view job metadata, pause or resume a key, rotate it, revoke it, and configure request and generation limits. Rotation invalidates the previous key immediately. An already accepted job can finish after a pause or revocation. Existing single-model project keys keep their original model and scope when upgrading.
+Save the key in your service’s credential store. Select **Save encrypted copy for later reveal** when creating or rotating a key if you want to retrieve it from **API keys → View key**. Reveal requires your administrator password and records an audit event. Older keys and keys issued without recovery can be replaced through rotation. The installer provisions the encryption key in the private workstation configuration. Restore that configuration with the matching database snapshot to retain access to encrypted copies. The Connections panel can test an allowed model, view job metadata, pause or resume a key, rotate it, revoke it, and configure request and generation limits. Rotation expires the previous key immediately by default. An administrator can allow up to 24 hours of overlap and end it early from the connection menu. An already accepted job can finish after a pause or revocation. Existing single-model project keys keep their original model and scope when upgrading.
 
 ### REST API
 
@@ -103,18 +103,24 @@ Use any server-side HTTP client. Send `Authorization: Bearer YOUR_KEY` and, for 
 
 | Method and path | Purpose |
 |---|---|
-| `GET /models` | List allowed model names and the default. A fixed-model key returns only its default. |
+| `GET /models` | List allowed generation models and the default. Use `?operation=embedding` for embedding models. A fixed-model key returns only its compatible default. |
+| `GET /model-policies` | Read effective limits for permitted models. Accepts the same `operation` parameter. |
 | `POST /jobs` | Submit JSON such as `{"request_id":"summary-123","prompt":"Summarize the notes.","model":"qwen3:4b"}`. Omit `model` if the connection has a default. HTTP `202` returns a job `id`. |
-| `GET /jobs/{id}` | Read status and, on `SUCCEEDED`, `output`. Poll with the same key and bounded retries. Stop at `SUCCEEDED`, `FAILED`, or `CANCELLED`. |
+| `POST /embeddings` | Queue one text embedding. Send `request_id`, `input`, and an eligible `model` or use the configured default. Enable embedding submission on the key. |
+| `GET /jobs/{id}` | Read status and the successful `output` or `embeddings`. Poll with the same key and bounded retries. Stop at `SUCCEEDED`, `FAILED`, or `CANCELLED`. |
+| `POST /jobs/{id}/cancel` | Cancel a queued job or request cooperative cancellation of a running job. Requires key cancellation permission. |
+| `POST /jobs/{id}/retry` | Send a new `request_id` to rerun a failed or cancelled job under current permissions and limits. |
+| `GET /usage` | Read 30-day model usage and pending jobs. Token totals are provider measurements. Requires result access. |
+| `GET /openapi.json` | Download the versioned automation API schema. |
 
-On a retry, send the same request ID and payload. A changed explicit model or prompt for that ID returns `409`. On a submission rate limit, respect `Retry-After`. For Make, Zapier, n8n, or a similar platform, configure an HTTP action with the same method, URL, headers, and JSON. In n8n use **HTTP Request → Generic Credential Type → Header Auth**.
+When retrying an HTTP submission after a transport failure, send the same request ID and payload. A changed explicit model or prompt for that ID returns `409`. On a submission rate limit, respect `Retry-After`. For Make, Zapier, n8n, or a similar platform, configure an HTTP action with the same method, URL, headers, and JSON. In n8n use **HTTP Request → Generic Credential Type → Header Auth**.
 
 ### Webhooks
 
 - **Inbound** — Any webhook client that can supply the Bearer header and transform its JSON can call `POST /jobs`. Use its stable event ID for `request_id` and map the text you want processed to `prompt`. Providers that send only a fixed payload or their own signatures need an intermediary to verify the provider event and make the CORE-AI API call.
 - **Outbound** — In a connection, choose a named destination under **Job completion webhook**. CORE-AI POSTs a `job.finished` event when a job succeeds, fails, or is cancelled. The payload contains a stable event ID, the job ID, request ID, model, terminal status, and finish time. Fetch the result via the job API when needed. Prompt and result text are absent from callbacks.
 - **Provisioning** — A server operator adds `CORE_AI_WEBHOOK_EVENTS_URL=https://receiver.example/webhook` and `CORE_AI_WEBHOOK_EVENTS_SECRET=YOUR_RANDOM_SIGNING_SECRET` to the workstation’s private service environment at `/etc/core-ai/workstation.env`. Replace `EVENTS` in both names for each destination and use a signing secret of at least 32 characters. After provisioning, restart both services with `sudo systemctl restart core-ai-api core-ai-worker`. The UI exposes destination names. Provision only HTTPS endpoints that you trust to receive job metadata.
-- **Verification and retries** — Compare `X-Core-AI-Signature` with `sha256=` plus the hex HMAC-SHA256 of `X-Core-AI-Timestamp + "." + raw request body`, using the configured secret and a constant-time comparison. Reject stale timestamps. Deduplicate by event ID. Delivery happens independently of inference and retries transient failures up to three total attempts. Delivery status appears in Recent activity.
+- **Verification and retries** — Compare `X-Core-AI-Signature` with `sha256=` plus the hex HMAC-SHA256 of `X-Core-AI-Timestamp + "." + raw request body`, using the configured secret and a constant-time comparison. Reject stale timestamps. Deduplicate by event ID. Delivery happens independently of inference and retries transient failures up to three total attempts. Delivery status appears in Recent activity. An administrator can replay a failed or cancelled delivery if its original destination remains configured and active. A replay keeps the event ID and uses a fresh signature timestamp.
 
 ## Work inside a project
 
@@ -127,7 +133,7 @@ Search the Projects directory and open or create a project to see its focused wo
 - No product-table sharing, broker credentials, host shell tool, Docker socket, root application process or mandatory cloud inference.
 - Tools mode lets the model select only explicitly enabled, typed project tools. Every dispatch rechecks current permissions. Uploaded documents cannot grant access or enable a tool. No host shell or external product action is exposed.
 - The model endpoint accepts explicit private/loopback IPv4 addresses only; redirects and inherited proxy variables are disabled.
-- Interrupted worker leases become visible failed/cancelled tasks. A model answer arriving after a cancellation cannot publish a successful output. Submit a new task deliberately to retry.
+- Interrupted worker leases become visible failed or cancelled tasks. A cancellation requested during inference prevents a later success from being published. An artifact committed before cancellation remains visible in the task step history.
 - Server secrets are root-only in `/etc/core-ai/workstation.env`. Application data is in its dedicated PostgreSQL cluster. systemd passes configuration to the unprivileged service account.
 - Logs/audit are local. There is no application telemetry or third-party dashboard runtime.
 

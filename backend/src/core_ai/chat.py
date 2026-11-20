@@ -8,7 +8,7 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field, field_validator, model_validator
 from psycopg.types.json import Jsonb
-from . import auth, db, models, access
+from . import auth, db, models, access, runs
 
 router = APIRouter(prefix='/api/v1/chat', tags=['chat'])
 ACTIVE = ('QUEUED','RUNNING','CANCEL_REQUESTED')
@@ -110,9 +110,7 @@ def enqueue(conn,ident,user,body):
     if row['archived']: raise HTTPException(409,'Restore this conversation before sending another message.')
     if conn.execute("SELECT id FROM chat_generations WHERE conversation_id=%s AND status IN ('QUEUED','RUNNING','CANCEL_REQUESTED')",(ident,)).fetchone():
         raise HTTPException(409,'Wait for the current reply or stop it before sending another message.')
-    conn.execute('SELECT pg_advisory_xact_lock(187875435)')
-    queued=conn.execute("SELECT (SELECT count(*) FROM runs WHERE status IN ('QUEUED','RUNNING','CANCEL_REQUESTED'))+(SELECT count(*) FROM chat_generations WHERE status IN ('QUEUED','RUNNING','CANCEL_REQUESTED')) AS n").fetchone()['n']
-    if queued>=20: raise HTTPException(409,'The inference queue is full. Try again after a reply finishes.')
+    runs.admit(conn)
     count=conn.execute('SELECT count(*) AS n FROM chat_messages WHERE conversation_id=%s',(ident,)).fetchone()['n']
     if count>=200: raise HTTPException(409,'This conversation has reached 200 messages. Start a new conversation to continue.')
     project_check(conn,body.project_id,user)
@@ -356,10 +354,12 @@ def context(row):
     if row['project_id']:
         with db.connect() as conn:p=access.project(conn,user,row['project_id'])
         system+='\nProject instructions:\n'+p['instructions']
-        docs=db.query("""SELECT id,title,left(content,1800) AS content FROM documents WHERE project_id=%s AND enabled AND
-            to_tsvector('simple',title||' '||content) @@ plainto_tsquery('simple',%s) LIMIT 3""",(row['project_id'],question['content']))
+        docs=db.query("""SELECT id,title,version,left(content,1800) AS content FROM documents WHERE project_id=%s AND enabled AND
+            to_tsvector('simple',title||' '||content) @@ plainto_tsquery('simple',%s) ORDER BY ts_rank(to_tsvector('simple',title||' '||content),
+            plainto_tsquery('simple',%s)) DESC,id LIMIT 3""",(row['project_id'],question['content'],question['content']))
         system+='\nProject reference excerpts (cite [UUID] when used):\n'+'\n'.join('['+str(d['id'])+'] '+d['title']+'\n'+d['content'] for d in docs)
-        db.event('chat.sources',detail={'generation_id':str(row['id']),'sources':[str(d['id']) for d in docs]})
+        db.event('chat.sources',detail={'generation_id':str(row['id']),'sources':[str(d['id']) for d in docs],
+            'source_versions':{str(d['id']):d['version'] for d in docs}})
     return [{'role':'system','content':system},*selected]
 
 
