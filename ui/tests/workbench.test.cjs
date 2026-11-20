@@ -217,5 +217,13 @@ test('custom workbench navigates, splits and opens every implemented module',asy
   await act(async()=>{document.querySelector('.chat-pane-tab[data-current="true"] .chat-tab-close').click();await wait();});
   assert.equal(tabs().length,initialTabs+2);
   assert.equal(chat().querySelector('[aria-label="Chat model"]').textContent,'editor:latest');
+  await act(async()=>{dom.window.innerWidth=1440;dom.window.dispatchEvent(new dom.window.Event('resize'));await wait();});
+  const projectsNav=document.querySelector('.explorer-projects');
+  const projectShortcut=[...projectsNav.querySelectorAll('button')].find(button=>button.textContent==='Project one');
+  await act(async()=>{projectShortcut.click();await new Promise(r=>setTimeout(r,25));});
+  assert.equal(projectShortcut.getAttribute('aria-current'),'page');
+  assert.equal(document.querySelector('.view:not([hidden]) .project-title h1').textContent,'Project one');
+  await act(async()=>{projectsNav.querySelector('[aria-label="New project"]').click();});
+  assert.ok(document.querySelector('.view:not([hidden]) .project-create'));
  }finally{await act(async()=>root.unmount());global.fetch=fetchOld;delete global.IS_REACT_ACT_ENVIRONMENT;for(const k of Object.keys(old)){if(old[k])Object.defineProperty(global,k,old[k]);else delete global[k];}if(locationOld)Object.defineProperty(global,'location',locationOld);else delete global.location;dom.window.close();}
 });

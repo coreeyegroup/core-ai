@@ -1,6 +1,7 @@
 import {useEffect,useState,type FormEvent} from 'react';
+import {ArrowLeft,ChevronDown,Ellipsis,Plus,Search} from 'lucide-react';
 import {api,newId} from './api';
-import {isTextModel} from './ChatPopover';
+import {ChatPopover,isTextModel} from './ChatPopover';
 import {useSession} from './Session';
 import {useResource} from './Workspace';
 
@@ -18,6 +19,11 @@ type Connection={
 type Job={id:string;model:string;status:string;output?:string;error?:string;request_id?:string;duration_seconds?:number;webhook_status?:string};
 const pending=new Set(['QUEUED','RUNNING','CANCEL_REQUESTED']);
 const dateTime=(date:string|null)=>date ? new Date(date).toLocaleString() : '—';
+
+function ConnectionStatus({connection}:{connection:Connection}){
+ const status=connection.revoked_at?'Revoked':connection.paused?'Paused':connection.expired?'Expired':connection.scope_available?'Enabled':'Context unavailable';
+ return <span className="connection-status" data-status={status}><i aria-hidden="true"/>{status}</span>;
+}
 
 export default function Connections({tick}:{tick:number}){
  const {role}=useSession();
@@ -50,9 +56,17 @@ function Manager({tick}:{tick:number}){
   finally{setBusy(false);}
  }
 
+ if(editing!==undefined)return <>
+  <button className="link connection-back" disabled={busy} onClick={()=>{setEditing(undefined);setError('');}}><ArrowLeft size={16}/>API keys</button>
+  <header className="page-head"><div><h1>{editing?'Edit connection':'New connection'}</h1><p>{editing?editing.name:'Set model access for an app, service, or automation.'}</p></div></header>
+  {error&&<div className="error" role="alert">{error}</div>}
+  <ConnectionForm key={editing?.id??'new'} existing={editing} tick={tick} busy={busy}
+   cancel={()=>{setEditing(undefined);setError('');}} save={body=>editing?change('connections/'+editing.id,'PUT',body):change('connections','POST',body,true)}/>
+ </>;
+
  return <>
-  <header className="page-head"><div><h1>Connections</h1><p>Provide API access to your models and send job events to webhook receivers.</p></div>
-   <button className="primary" disabled={busy||!!key} onClick={()=>{setSection('Keys');setEditing(null);}}>New connection</button>
+  <header className="page-head"><div><h1>Connections</h1><p>Manage access to your models and webhook delivery.</p></div>
+   <button className="primary" disabled={busy||!!key} onClick={()=>{setSection('Keys');setError('');setEditing(null);}}><Plus size={16}/>New connection</button>
   </header>
   <nav className="project-sections" aria-label="Connection sections">
    {(['Keys','API reference'] as const).map(tab=><button key={tab} aria-current={tab===section?'page':undefined} onClick={()=>setSection(tab)}>{tab==='Keys'?'API keys':tab}</button>)}
@@ -70,34 +84,39 @@ function Manager({tick}:{tick:number}){
     </div>
    </div>
   </section>}
-  <section className="box">
-   <header>API keys</header>
+  <section className="box connection-list" aria-label="API keys">
    {rows.length>0?<div className="table-scroll"><table>
     <thead><tr><th scope="col">Connection</th><th scope="col">Default model</th><th scope="col">Status</th><th scope="col">Last used</th></tr></thead>
     <tbody>{rows.map(row=><tr key={row.id} aria-selected={row.id===selection}>
-     <td><button className="link" onClick={()=>{setSelection(row.id);setEditing(undefined);}}>{row.name}</button><small>{clients[row.client_type]} · {row.allowed_models.length} {row.allowed_models.length===1?'model':'models'}</small></td>
+     <td><button className="link connection-name" aria-current={row.id===selection?'true':undefined} onClick={()=>{setSelection(row.id);setEditing(undefined);}}>{row.name}</button><small>{clients[row.client_type]} · {row.allowed_models.length} {row.allowed_models.length===1?'model':'models'}</small></td>
      <td>{row.model??'Caller selects'}</td>
-     <td>{row.revoked_at?'Revoked':row.paused?'Paused':row.expired?'Expired':row.scope_available?'Enabled':'Context unavailable'}</td>
+     <td><ConnectionStatus connection={row}/></td>
      <td>{dateTime(row.last_used_at)}</td>
     </tr>)}</tbody>
    </table></div>:<div className="empty">{listError?'Could not load connections.':data?'No API keys yet. Create a connection to authorize a client.':'Loading connections…'}</div>}
   </section>
-  {editing!==undefined&&<ConnectionForm key={editing?.id??'new'} existing={editing} tick={tick} busy={busy}
-   cancel={()=>setEditing(undefined)} save={body=>editing?change('connections/'+editing.id,'PUT',body):change('connections','POST',body,true)}/>}
-  {selected&&editing===undefined&&<section className="box">
-   <header>{selected.name}</header>
-   <div className="settings-content">
-    <p>{[selected.project,selected.agent].filter(Boolean).join(' · ')||'Direct model access'}</p>
-    <p>Allowed models · {selected.allowed_models.join(', ')}</p>
-    <p>Webhook events · {selected.webhook_destination||'Off'}</p>
-    <p>Key expires · {selected.expires_at?dateTime(selected.expires_at):'No expiry'}</p>
+  {selected&&<section className="box connection-details">
+   <header>
+    <div><h2>{selected.name}</h2><ConnectionStatus connection={selected}/></div>
     {!selected.revoked_at&&<div className="actions">
-     <button disabled={busy} onClick={()=>setEditing(selected)}>Edit settings</button>
-     <button disabled={busy} onClick={()=>void change('connections/'+selected.id+'/pause','PUT',{paused:!selected.paused})}>{selected.paused?'Resume':'Pause'}</button>
-     <button disabled={busy||!!key} onClick={()=>{if(confirm('Rotate this key? Clients must switch to the new key.'))void change('connections/'+selected.id+'/rotate','POST',undefined,true);}}>Rotate key</button>
-     <button disabled={busy} onClick={()=>{if(confirm('Revoke this key? Requests using it will be rejected.'))void change('connections/'+selected.id+'/revoke','POST');}}>Revoke</button>
+     <button disabled={busy} onClick={()=>{setError('');setEditing(selected);}}>Edit settings</button>
+     <ChatPopover label="Key actions" kind="menu" align="end" buttonClass="project-menu-trigger" trigger={<Ellipsis size={18}/>}>
+      {dismiss=><>
+       <button role="menuitem" disabled={busy} onClick={()=>{dismiss();void change('connections/'+selected.id+'/pause','PUT',{paused:!selected.paused});}}>{selected.paused?'Resume':'Pause'}</button>
+       <button role="menuitem" disabled={busy||!!key} onClick={()=>{dismiss();if(confirm('Rotate this key? Clients must switch to the new key.'))void change('connections/'+selected.id+'/rotate','POST',undefined,true);}}>Rotate key</button>
+       <button role="menuitem" className="chat-menu-danger" disabled={busy} onClick={()=>{dismiss();if(confirm('Revoke this key? Requests using it will be rejected.'))void change('connections/'+selected.id+'/revoke','POST');}}>Revoke key</button>
+      </>}
+     </ChatPopover>
     </div>}
-   </div>
+   </header>
+   <dl className="connection-summary">
+    <div><dt>Context</dt><dd>{[selected.project,selected.agent].filter(Boolean).join(' · ')||'Direct model access'}</dd></div>
+    <div><dt>Default model</dt><dd>{selected.model??'Caller selects'}</dd></div>
+    <div><dt>Allowed models</dt><dd>{selected.allowed_models.join(', ')}</dd></div>
+    <div><dt>Webhook</dt><dd>{selected.webhook_destination||'Off'}</dd></div>
+    <div><dt>Key expiry</dt><dd>{selected.expires_at?dateTime(selected.expires_at):'No expiry'}</dd></div>
+    <div><dt>Last used</dt><dd>{dateTime(selected.last_used_at)}</dd></div>
+   </dl>
    <ConnectionActivity key={selected.id} connection={selected} tick={tick+revision}/>
   </section>}
   </>}
@@ -150,12 +169,13 @@ function ConnectionForm({existing,tick,busy,save,cancel}:{existing:Connection|nu
  const {data:destinations,error:destinationsError}=useResource('connections/webhook-destinations',tick);
  const {data:catalog,error:catalogError}=useResource('models?catalog=true',tick);
  const [allowed,setAllowed]=useState<string[]>(existing?.allowed_models??[]);
- const [model,setModel]=useState(existing?.model??''),[query,setQuery]=useState('');
+ const [model,setModel]=useState(existing?.model??''),[query,setQuery]=useState(''),[selectedOnly,setSelectedOnly]=useState(false);
  const [routing,setRouting]=useState(existing&&!existing.allow_model_choice?'default':'caller');
  const [projectId,setProjectId]=useState(existing?.project_id??''),[agentId,setAgentId]=useState(existing?.agent_id??'');
  const available:Model[]=(catalog?.models??[]).filter(isTextModel);
  const models=[...new Set([...available.map(item=>item.name),...allowed])];
  const [destination,setDestination]=useState(existing?.webhook_destination??'');
+ const visibleModels=models.filter(name=>name.toLowerCase().includes(query.trim().toLowerCase())&&(!selectedOnly||allowed.includes(name)));
  const contextError=projectsError||agentsError;
  const expiry=existing?.expires_at?new Date(new Date(existing.expires_at).getTime()-new Date(existing.expires_at).getTimezoneOffset()*60000).toISOString().slice(0,16):'';
 
@@ -175,47 +195,63 @@ function ConnectionForm({existing,tick,busy,save,cancel}:{existing:Connection|nu
    timeout_seconds:Number(value('timeout_seconds')),max_output_tokens:Number(value('max_output_tokens')),webhook_destination:destination||null});
  }
 
- return <section className="box"><header>{existing?'Edit connection':'New connection'}</header>
-  <form className="form" onSubmit={submit}>
-   <div className="fields">
-    <label>Name<input name="name" required maxLength={120} defaultValue={existing?.name}/></label>
+ return <form className="connection-editor" onSubmit={submit}>
+   <section className="box">
+   <header>Connection details</header>
+   <div className="form fields">
+    <label>Name<input name="name" required maxLength={120} defaultValue={existing?.name} autoFocus/></label>
     <label>Client<select name="client_type" defaultValue={existing?.client_type??'custom'}>{Object.entries(clients).map(([value,label])=><option key={value} value={value}>{label}</option>)}</select></label>
    </div>
-   <fieldset className="tool-permissions">
-    <legend>Allowed models</legend>
-    <input aria-label="Search allowed models" placeholder="Search models…" value={query} onChange={event=>setQuery(event.target.value)}/>
-    <div className="connection-models">{models.filter(name=>name.toLowerCase().includes(query.toLowerCase())).map(name=>{
+   </section>
+   <section className="box">
+    <header>Model access <span className="muted">{allowed.length} selected</span></header>
+    <div className="form">
+    <fieldset className="connection-model-picker">
+    <legend className="sr-only">Allowed models</legend>
+    <div className="connection-picker-toolbar">
+     <label className="project-search"><Search size={15} aria-hidden="true"/><input type="search" aria-label="Search allowed models" placeholder="Search models" value={query} onChange={event=>setQuery(event.target.value)}/></label>
+     <button type="button" aria-pressed={selectedOnly} onClick={()=>setSelectedOnly(value=>!value)}>{selectedOnly?'Show all':'Selected only'}</button>
+    </div>
+    <div className="connection-models">{visibleModels.map(name=>{
      const entry=available.find(item=>item.name===name);
-     return <label key={name} className="checkbox-label"><input type="checkbox" checked={allowed.includes(name)} disabled={!allowed.includes(name)&&allowed.length>=32} onChange={()=>toggle(name)}/>
-      {name}<small>{entry?entry.capabilities?.join(', ')||'Available':'Unavailable'}</small>
+     return <label key={name} className="connection-model" data-selected={allowed.includes(name)}>
+      <input type="checkbox" aria-label={name} checked={allowed.includes(name)} disabled={!allowed.includes(name)&&allowed.length>=32} onChange={()=>toggle(name)}/>
+      <span><strong>{name}</strong><small>{entry?entry.capabilities?.join(' · ')||'Available':'Unavailable'}</small></span>
      </label>;
     })}</div>
-    {!models.length&&<p className="panel-note">{catalog?'Start Ollama and refresh the workspace to select models.':catalogError||'Loading models…'}</p>}
-   </fieldset>
+    {!visibleModels.length&&<p className="panel-note">{models.length?(selectedOnly&&!allowed.length?'Select models to see them here.':'No matching models.'):catalog?'Start Ollama and refresh the workspace to select models.':catalogError||'Loading models…'}</p>}
+    </fieldset>
    <div className="fields">
     <label>Default model<select value={model} required={routing==='default'} onChange={event=>setModel(event.target.value)}><option value="">{routing==='caller'?'Caller must specify a model':'Select a model'}</option>{allowed.map(name=><option key={name}>{name}</option>)}</select></label>
     <label>Model choice<select name="routing" value={routing} onChange={event=>{setRouting(event.target.value);if(event.target.value==='default'&&!model)setModel(allowed[0]??'');}}><option value="caller">Caller can choose</option><option value="default">Always use the default</option></select></label>
    </div>
-   <details open={!!existing?.project_id||!!existing?.agent_id}>
-    <summary>Optional project and agent context</summary>
+    </div>
+   </section>
+   <details className="box connection-disclosure" open={!!existing?.project_id||!!existing?.agent_id}>
+    <summary>Project and agent context <ChevronDown size={16} aria-hidden="true"/></summary>
+    <div className="form">
     <p className="panel-note">A project grants this connection access to its instructions and matching sources.</p>
     <div className="fields">
      <label>Project<select name="project_id" value={projectId} onChange={event=>setProjectId(event.target.value)}><option value="">No project</option>{(projects??[]).filter((item:Choice)=>!item.archived_at||item.id===existing?.project_id).map((item:Choice)=><option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
      <label>Agent<select name="agent_id" value={agentId} onChange={event=>setAgentId(event.target.value)}><option value="">No agent</option>{(agents??[]).filter((item:Choice)=>(item.enabled&&item.runtime_mode==='analysis')||item.id===existing?.agent_id).map((item:Choice)=><option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
     </div>
     {contextError&&<p className="error" role="alert">{contextError}</p>}
+    </div>
    </details>
-   <details open={!!existing?.webhook_destination}>
-    <summary>Job completion webhook</summary>
+   <details className="box connection-disclosure" open={!!existing?.webhook_destination}>
+    <summary>Job completion webhook <ChevronDown size={16} aria-hidden="true"/></summary>
+    <div className="form">
     <label>Destination<select value={destination} onChange={event=>setDestination(event.target.value)}>
      <option value="">Off</option>
      {(destinations??[]).map((name:string)=><option key={name}>{name}</option>)}
      {destination&&!(destinations??[]).includes(destination)&&<option value={destination} disabled>{destination} (unavailable)</option>}
     </select></label>
     {destinationsError?<p className="error" role="alert">{destinationsError}</p>:<p className="panel-note">{destinations?.length?'Send a signed event when a job finishes.':'Ask the server operator to provision a webhook destination.'}</p>}
+    </div>
    </details>
-   <details>
-    <summary>Permissions, limits, and expiry</summary>
+   <details className="box connection-disclosure">
+    <summary>Permissions, limits, and expiry <ChevronDown size={16} aria-hidden="true"/></summary>
+    <div className="form">
     <div className="fields">
      <label className="checkbox-label"><input type="checkbox" name="can_discover" defaultChecked={existing?.can_discover??true}/>Discover models</label>
      <label className="checkbox-label"><input type="checkbox" name="can_submit" defaultChecked={existing?.can_submit??true}/>Submit jobs</label>
@@ -228,10 +264,10 @@ function ConnectionForm({existing,tick,busy,save,cancel}:{existing:Connection|nu
      <label>Generation timeout (seconds)<input type="number" name="timeout_seconds" min={15} max={300} required defaultValue={existing?.timeout_seconds??300}/></label>
      <label>Maximum output tokens<input type="number" name="max_output_tokens" min={128} max={4096} required defaultValue={existing?.max_output_tokens??2048}/></label>
     </div>
+    </div>
    </details>
-   <div className="actions"><button className="primary" disabled={busy||(!!destination&&!(destinations??[]).includes(destination))||!allowed.length||(routing==='default'&&!model)||(!!existing?.project_id&&!projects)||(!!existing?.agent_id&&!agents)}>{existing?'Save settings':'Create key'}</button><button type="button" onClick={cancel}>Cancel</button></div>
-  </form>
- </section>;
+   <div className="actions connection-form-actions"><button className="primary" disabled={busy||(!!destination&&!(destinations??[]).includes(destination))||!allowed.length||(routing==='default'&&!model)||(!!existing?.project_id&&!projects)||(!!existing?.agent_id&&!agents)}>{existing?'Save settings':'Create key'}</button><button type="button" onClick={cancel}>Cancel</button></div>
+  </form>;
 }
 
 function ConnectionActivity({connection,tick}:{connection:Connection;tick:number}){
@@ -261,7 +297,7 @@ function ConnectionActivity({connection,tick}:{connection:Connection;tick:number
   finally{setBusy(false);}
  }
 
- return <div className="settings-content">
+ return <div className="settings-content connection-activity">
   <div className="actions">
    <label>Test model<select value={selectedModel} onChange={event=>setModel(event.target.value)}>
     {(connection.allow_model_choice?connection.allowed_models:[selectedModel]).map(name=><option key={name}>{name}</option>)}

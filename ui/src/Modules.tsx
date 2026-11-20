@@ -2,7 +2,7 @@ import {useEffect,useRef,useState, type FormEvent} from 'react';
 import {api} from './api';
 import Chat,{MessageMarkdown} from './Chat';
 import Connections from './Connections';
-import ProjectWorkspace from './Projects';
+import ProjectWorkspace,{type ProjectLocation} from './Projects';
 import Sources from './Sources';
 import Settings from './Settings';
 import {FilesPanel,ArtifactLibrary,AccessPanel,CapabilitiesPanel,useResource,openArtifact} from './Workspace';
@@ -19,14 +19,14 @@ const when=(v:string|null)=>v?new Date(v).toLocaleString():'—';
 export function ErrorNote({error}:{error:string}){return error?<div className="error" role="alert">{error}</div>:null;}
 function Empty({children}:{children:React.ReactNode}){return <div className="empty">{children}</div>;}
 function Status({value}:{value:string}){return <span className={'state '+value.toLowerCase()}>{value.replaceAll('_',' ')}</span>;}
-export function Module({view,tick,refresh,go,appearance,changeAppearance,visible}:{view:View;visible?:boolean;tick:number;refresh:()=>void;go:(v:View)=>void;appearance:Appearance;changeAppearance:(p:Partial<Appearance>)=>void}){
+export function Module({view,tick,refresh,go,appearance,changeAppearance,visible,projectLocation,changeProjectLocation}:{projectLocation:ProjectLocation;changeProjectLocation:(location:ProjectLocation)=>void;view:View;visible?:boolean;tick:number;refresh:()=>void;go:(v:View)=>void;appearance:Appearance;changeAppearance:(p:Partial<Appearance>)=>void}){
  const lastVisibleTick=useRef(tick);
  if(visible!==false)lastVisibleTick.current=tick;
  tick=lastVisibleTick.current;
  switch(view){
   case 'Chat':return <Chat tick={tick} visible={visible} sendKey={appearance.sendKey} chatDefaults={appearance.chatDefaults}/>;
   case 'Overview':return <Overview tick={tick} go={go}/>;
-  case 'Projects':return <ProjectWorkspace tick={tick} refresh={refresh}/>;
+  case 'Projects':return <ProjectWorkspace tick={tick} refresh={refresh} location={projectLocation} changeLocation={changeProjectLocation}/>;
   case 'Agents':return <Agents tick={tick} refresh={refresh}/>;
   case 'Tasks':return <Tasks tick={tick} refresh={refresh}/>;
   case 'Knowledge':return <Sources tick={tick} refresh={refresh}/>;

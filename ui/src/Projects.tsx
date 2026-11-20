@@ -7,6 +7,9 @@ import Sources from './Sources';
 import {ArtifactLibrary,FilesPanel,useResource} from './Workspace';
 import {useSession} from './Session';
 
+export type ProjectLocation={id:string;creating:boolean};
+export const projectDirectory:ProjectLocation={id:'',creating:false};
+
 type Project={
  id:string;name:string;description:string;instructions:string;default_model:string|null;
  default_mode:string|null;archived_at:string|null;owner_id?:string;member_role?:string;
@@ -15,9 +18,10 @@ type Chat={id:string;title:string;project_id:string|null;pinned:boolean;archived
 const sections=['Chats','Sources','Instructions','Artifacts','Members','Settings'] as const;
 const displayDate=(value:string)=>new Date(value).toLocaleString();
 
-export default function Projects({tick,refresh}:{tick:number;refresh:()=>void}){
+export default function Projects({tick,refresh,location,changeLocation}:{tick:number;refresh:()=>void;location:ProjectLocation;changeLocation:(location:ProjectLocation)=>void}){
  const {data,error}=useResource('projects',tick);
- const [id,setId]=useState(''),[creating,setCreating]=useState(false),[archives,setArchives]=useState(false);
+ const {id,creating}=location;
+ const [archives,setArchives]=useState(false);
  const [busy,setBusy]=useState(false),[problem,setProblem]=useState(''),[query,setQuery]=useState('');
  const {role}=useSession();
  const projects:Project[]=data??[];
@@ -35,7 +39,7 @@ export default function Projects({tick,refresh}:{tick:number;refresh:()=>void}){
   try{
    const body=Object.fromEntries(new FormData(event.currentTarget));
    const project=await api('projects','POST',body);
-   setId(project.id);setCreating(false);setArchives(false);refresh();
+   changeLocation({id:project.id,creating:false});setArchives(false);refresh();
   }catch(e){setProblem((e as Error).message);}
   finally{setBusy(false);}
  }
@@ -43,7 +47,7 @@ export default function Projects({tick,refresh}:{tick:number;refresh:()=>void}){
  if(current&&!creating)return <section className="page project-page">
   <div className="project-content">
    <ProjectHome key={current.id} project={current} tick={tick} refresh={refresh}
-    back={()=>{returnFocus.current=true;setArchives(!!current.archived_at);setId('');}}/>
+    back={()=>{returnFocus.current=true;setArchives(!!current.archived_at);changeLocation(projectDirectory);}}/>
   </div>
  </section>;
 
@@ -52,7 +56,7 @@ export default function Projects({tick,refresh}:{tick:number;refresh:()=>void}){
  return <section className="page project-page">
   <header className="page-head">
    <div><h1 tabIndex={-1} ref={directoryHeading}>Projects</h1><p>Keep related chats, sources, and artifacts together.</p></div>
-   {!creating&&<button className="primary" disabled={role==='VIEWER'} onClick={()=>{setCreating(true);setProblem('');}}><Plus size={15}/>New project</button>}
+   {!creating&&<button className="primary" disabled={role==='VIEWER'} onClick={()=>{changeLocation({id,creating:true});setProblem('');}}><Plus size={15}/>New project</button>}
   </header>
   {(problem||error)&&<div className="error" role="alert">{problem||error}</div>}
   {creating?<section className="box project-create">
@@ -60,7 +64,7 @@ export default function Projects({tick,refresh}:{tick:number;refresh:()=>void}){
    <form className="form" onSubmit={create}>
     <label>Name<input name="name" required maxLength={120} autoFocus/></label>
     <label>Description<textarea name="description" maxLength={4000} rows={2}/></label>
-    <div className="actions"><button className="primary" disabled={busy}>Create project</button><button type="button" onClick={()=>{returnFocus.current=true;setCreating(false);}}>Cancel</button></div>
+    <div className="actions"><button className="primary" disabled={busy}>Create project</button><button type="button" onClick={()=>{returnFocus.current=true;changeLocation({id,creating:false});}}>Cancel</button></div>
    </form>
   </section>:<>
    <div className="project-toolbar">
@@ -69,7 +73,7 @@ export default function Projects({tick,refresh}:{tick:number;refresh:()=>void}){
    </div>
    {id&&!current?<p className="muted" role="status">Opening project…</p>:<>
     <div className="project-directory">
-     {visibleProjects.map(project=><button className="project-card" key={project.id} onClick={()=>{setId(project.id);setProblem('');}}>
+     {visibleProjects.map(project=><button className="project-card" key={project.id} onClick={()=>{changeLocation({id:project.id,creating:false});setProblem('');}}>
       <Folder size={20} aria-hidden="true"/>
       <span><b>{project.name}</b>{project.description&&<small>{project.description}</small>}</span>
       <ArrowRight size={15} aria-hidden="true"/>
