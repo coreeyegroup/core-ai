@@ -37,7 +37,7 @@ export function Module({view,tick,refresh,go,appearance,changeAppearance,visible
   case 'Workflows':return <CapabilitiesPanel tick={tick} feature="workflows"/>;
   case 'Models':return <Models tick={tick} refresh={refresh}/>;
   case 'Tools':return <Tools tick={tick}/>;
-  case 'Integrations':return <Connections tick={tick}/>;
+  case 'Integrations':return <Connections tick={tick} visible={visible}/>;
   case 'Operations':return <Operations tick={tick}/>;
   case 'Settings':return <Settings appearance={appearance} change={changeAppearance}/>;
  }

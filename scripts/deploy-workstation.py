@@ -1,5 +1,6 @@
 """Native deployment, rollback and local administration for CORE-AI only."""
 import argparse
+import base64
 import datetime
 import fnmatch
 import getpass
@@ -104,6 +105,10 @@ def database_setup(origin,model_url):
              'CORE_AI_ORIGIN':origin,'CORE_AI_MODEL_URL':model_url}
     # Save before creation so interruption can resume without resetting credentials.
     cfg.update(CORE_AI_ORIGIN=origin,CORE_AI_MODEL_URL=model_url)
+    if 'CORE_AI_CONNECTION_REVEAL_KEY' not in cfg:
+        material=run('/usr/bin/openssl','genpkey','-algorithm','RSA','-pkeyopt','rsa_keygen_bits:3072',
+                     stdout=subprocess.PIPE,stderr=subprocess.DEVNULL).stdout
+        cfg['CORE_AI_CONNECTION_REVEAL_KEY']=base64.b64encode(material).decode('ascii')
     write_private(ENV,''.join(f'{k}={v}\n' for k,v in cfg.items()))
     if not role_exists:
         pg(f"CREATE ROLE {ROLE} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION PASSWORD '{password}';")

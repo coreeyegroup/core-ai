@@ -56,27 +56,39 @@ def seed(username, password):
         db.event('administrator.created', detail={'username': username}, conn=conn)
     return True
 
-def login(username, password):
+def checked_account(conn, username, password, denied_action):
     # A fixed dummy scrypt workload also runs for unknown usernames.
+    row = conn.execute('SELECT * FROM users WHERE username=%s FOR UPDATE', (username,)).fetchone()
+    valid = password_ok(password, row['password_hash'] if row else 'scrypt$missing$' + '0'*128)
+    locked = row and row['locked_until'] and row['locked_until'] > datetime.now(timezone.utc)
+    if not row or not row['enabled'] or locked or not valid:
+        if row and not locked:
+            conn.execute("""UPDATE users SET failed_attempts=failed_attempts+1,
+                locked_until=CASE WHEN failed_attempts>=4 THEN now()+interval '5 minutes' ELSE NULL END
+                WHERE id=%s""", (row['id'],))
+        db.event(denied_action, row['id'] if row and denied_action!='session.denied' else 'system',
+                 {'username': username[:64]}, conn=conn)
+        return None
+    conn.execute('UPDATE users SET failed_attempts=0,locked_until=NULL WHERE id=%s', (row['id'],))
+    return row
+
+
+def confirm_admin_password(user, password):
     with db.connect() as conn:
-        row = conn.execute('SELECT * FROM users WHERE username=%s FOR UPDATE', (username,)).fetchone()
-        valid = password_ok(password, row['password_hash'] if row else 'scrypt$missing$' + '0'*128)
-        locked = row and row['locked_until'] and row['locked_until'] > datetime.now(timezone.utc)
-        if not row or not row['enabled'] or locked or not valid:
-            if row and not locked:
-                conn.execute('''UPDATE users SET failed_attempts=failed_attempts+1,
-                    locked_until=CASE WHEN failed_attempts>=4 THEN now()+interval '5 minutes' ELSE NULL END
-                    WHERE id=%s''', (row['id'],))
-            db.event('session.denied', detail={'username': username[:64]}, conn=conn)
-            failure = True
-        else:
-            failure = False
+        row = checked_account(conn, user['username'], password, 'connection.reauthentication_denied')
+    if not row or row['id'] != user['id'] or row['role'] != 'ADMIN':
+        raise HTTPException(403, 'Password confirmation failed or the account is temporarily locked.')
+
+
+def login(username, password):
+    with db.connect() as conn:
+        row = checked_account(conn, username, password, 'session.denied')
+        if row:
             token, csrf = secrets.token_urlsafe(32), secrets.token_urlsafe(24)
-            conn.execute('UPDATE users SET failed_attempts=0,locked_until=NULL WHERE id=%s', (row['id'],))
             conn.execute('DELETE FROM sessions WHERE expires_at<=now()')
             conn.execute("INSERT INTO sessions(token_hash,user_id,csrf,expires_at) VALUES (%s,%s,%s,now()+interval '8 hours')",
                          (token_hash(token), row['id'], csrf))
             db.event('session.created', row['id'], conn=conn)
-    if failure:
+    if not row:
         raise HTTPException(401, 'Invalid credentials or account temporarily locked.')
     return token, {'username': row['username'], 'csrf': csrf, 'role': row['role'],'id':str(row['id'])}

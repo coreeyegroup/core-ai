@@ -347,7 +347,7 @@ export default function Chat({tick,visible=true,sendKey='Enter',chatDefaults=def
   if(!visible||!newChat||focusedNewChat.current===newChat||viewer)return;
   const frame=window.requestAnimationFrame(()=>{
    focusedNewChat.current=newChat;
-   if(!document.activeElement?.closest('[aria-modal="true"]'))composer.current?.focus();
+   if(!document.activeElement?.closest('[aria-modal="true"], #core-ai-explorer-toggle'))composer.current?.focus();
   });
   return()=>window.cancelAnimationFrame(frame);
  },[visible,newChat,viewer]);

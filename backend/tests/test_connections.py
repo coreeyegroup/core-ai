@@ -255,3 +255,43 @@ def test_paused_connection_cancels_pending_webhook(signed, monkeypatch):
     assert signed.put(f"/api/v1/connections/{issued['id']}/pause",json={'paused':True}).status_code == 200
     assert webhooks.claim() is None
     assert signed.get(f"/api/v1/connections/{issued['id']}/activity").json()[0]['webhook_status'] == 'CANCELLED'
+
+
+def test_recoverable_key_requires_reauthentication_and_stays_out_of_lists(signed, monkeypatch):
+    import base64
+    import subprocess
+
+    private = subprocess.run(['/usr/bin/openssl','genpkey','-algorithm','RSA','-pkeyopt','rsa_keygen_bits:2048'],
+                             capture_output=True,check=True).stdout
+    monkeypatch.setenv('CORE_AI_CONNECTION_REVEAL_KEY',base64.b64encode(private).decode())
+    assert signed.get('/api/v1/connections/key-storage').json() == {'available':True}
+    created = signed.post('/api/v1/connections',json={'name':'Revealable','model':'local:chat','save_for_reveal':True}).json()
+    path = '/api/v1/connections/'+created['id']
+    row = db.query('SELECT token_hash,encrypted_token FROM automation_connections WHERE id=%s',(created['id'],),one=True)
+    assert created['token'].encode() not in row['encrypted_token']
+    listed = signed.get('/api/v1/connections').json()[0]
+    assert listed['can_reveal'] and set(listed).isdisjoint({'token','token_hash','encrypted_token'})
+    assert signed.post(path+'/reveal',json={'password':'wrong-password'}).status_code == 403
+    revealed = signed.post(path+'/reveal',json={'password':'correct-password-123'})
+    assert revealed.status_code == 200 and revealed.json()['token'] == created['token']
+    assert revealed.headers['cache-control']=='no-store'
+    assert signed.post(path+'/reveal',headers={'Origin':'https://other.example'},json={'password':'correct-password-123'}).status_code==403
+    events = signed.get('/api/v1/events').json()
+    assert any(event['action']=='connection.key_revealed' and event['detail']=={'id':created['id']} for event in events)
+    assert created['token'] not in str(events)
+    rotated = signed.post(path+'/rotate',json={'save_for_reveal':False})
+    assert rotated.status_code==200
+    assert signed.post(path+'/reveal',json={'password':'correct-password-123'}).status_code==409
+
+
+def test_unavailable_webhook_does_not_close_other_edit_controls(signed, monkeypatch):
+    monkeypatch.setenv('CORE_AI_WEBHOOK_EVENTS_URL','https://receiver.example/webhook')
+    monkeypatch.setenv('CORE_AI_WEBHOOK_EVENTS_SECRET','fake-local-signing-secret-for-automated-tests')
+    original = {'name':'Service','model':'local:chat','webhook_destination':'EVENTS'}
+    created = signed.post('/api/v1/connections',json=original)
+    assert created.status_code==201
+    monkeypatch.delenv('CORE_AI_WEBHOOK_EVENTS_URL')
+    updated=signed.put('/api/v1/connections/'+created.json()['id'],json={**original,'name':'Renamed','requests_per_minute':9})
+    assert updated.status_code==200
+    row=signed.get('/api/v1/connections').json()[0]
+    assert (row['name'],row['requests_per_minute'],row['webhook_destination'])==('Renamed',9,'EVENTS')

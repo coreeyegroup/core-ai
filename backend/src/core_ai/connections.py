@@ -1,13 +1,14 @@
 """Admin-managed bearer credentials and durable local inference jobs."""
+import hmac
 import re
 import secrets
 import uuid
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, StringConstraints, field_validator, model_validator
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, SecretStr, StringConstraints, field_validator, model_validator
 
-from . import access, auth, db, runs, webhooks
+from . import access, auth, db, runs, webhooks, key_storage
 
 router = APIRouter(prefix='/api/v1')
 User = Annotated[dict, Depends(auth.session)]
@@ -46,6 +47,10 @@ class Connection(BaseModel):
         return self
 
 
+class ConnectionCreate(Connection):
+    save_for_reveal: bool = False
+
+
 class Job(BaseModel):
     model_config = ConfigDict(extra='forbid')
     request_id: str = Field(min_length=1, max_length=100, pattern=r'^[A-Za-z0-9_.:-]+$')
@@ -67,13 +72,19 @@ def list_connections(user: User):
         SELECT c.id,c.name,c.project_id,p.name AS project,c.agent_id,a.name AS agent,c.model,c.allowed_models,
                c.allow_model_choice,c.client_type,c.webhook_destination,c.can_discover,c.can_submit,c.can_read,c.paused,c.expires_at,c.last_used_at,c.requests_per_minute,c.max_pending,
                c.timeout_seconds,c.max_output_tokens,c.created_at,c.revoked_at,
-               c.expires_at<=now() AS expired,
+               c.expires_at<=now() AS expired, c.encrypted_token IS NOT NULL AS can_reveal,
                u.enabled AND u.role='ADMIN' AND (p.archived_at IS NULL)
                  AND (c.agent_id IS NULL OR (a.enabled AND a.runtime_mode='analysis')) AS scope_available
         FROM automation_connections c LEFT JOIN projects p ON p.id=c.project_id
         LEFT JOIN agents a ON a.id=c.agent_id JOIN users u ON u.id=c.created_by
         ORDER BY c.created_at DESC
     """)
+
+
+@router.get('/connections/key-storage')
+def connection_key_storage(user: User):
+    access.admin(user)
+    return {'available':key_storage.configured()}
 
 
 @router.get('/connections/webhook-destinations')
@@ -91,11 +102,14 @@ def analysis_agent(conn, user, agent_id):
     return agent
 
 
-def settings(conn, body, user):
-    if body.project_id is not None:
+def settings(conn, body, user, previous=None):
+    previous = previous or {}
+    if body.project_id is not None and body.project_id != previous.get('project_id'):
         access.project(conn, user, body.project_id, True)
-    analysis_agent(conn, user, body.agent_id)
-    if body.webhook_destination and body.webhook_destination not in webhooks.destinations():
+    if body.agent_id != previous.get('agent_id'):
+        analysis_agent(conn, user, body.agent_id)
+    if (body.webhook_destination and body.webhook_destination != previous.get('webhook_destination')
+            and body.webhook_destination not in webhooks.destinations()):
         raise HTTPException(422, 'Select a configured webhook destination.')
     return (body.name, body.project_id, body.agent_id, body.model, body.allowed_models,
             body.allow_model_choice, body.expires_at, body.requests_per_minute, body.max_pending,
@@ -103,16 +117,17 @@ def settings(conn, body, user):
 
 
 @router.post('/connections', status_code=201)
-def create_connection(body: Connection, user: User):
+def create_connection(body: ConnectionCreate, user: User):
     access.admin(user)
     ident, token = uuid.uuid4(), 'coreai_' + secrets.token_urlsafe(32)
+    encrypted = key_storage.transform(token.encode('ascii')) if body.save_for_reveal else None
     with db.connect() as conn:
         conn.execute("""
             INSERT INTO automation_connections(id,token_hash,created_by,name,project_id,agent_id,model,allowed_models,
                 allow_model_choice,expires_at,requests_per_minute,max_pending,timeout_seconds,max_output_tokens,
-                client_type,can_discover,can_submit,can_read,webhook_destination)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-        """, (ident, auth.token_hash(token), user['id'], *settings(conn, body, user)))
+                client_type,can_discover,can_submit,can_read,webhook_destination,encrypted_token)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+        """, (ident, auth.token_hash(token), user['id'], *settings(conn, body, user), encrypted))
         db.event('connection.created', user['id'], {'id': str(ident)}, conn=conn)
     return {'id': ident, 'token': token}
 
@@ -121,14 +136,18 @@ def create_connection(body: Connection, user: User):
 def update_connection(ident: uuid.UUID, body: Connection, user: User):
     access.admin(user)
     with db.connect() as conn:
-        row = conn.execute("""
+        previous = conn.execute("""
+            SELECT project_id,agent_id,webhook_destination FROM automation_connections
+            WHERE id=%s AND revoked_at IS NULL FOR UPDATE
+        """, (ident,)).fetchone()
+        if not previous:
+            raise HTTPException(404, 'Active connection not found.')
+        conn.execute("""
             UPDATE automation_connections SET name=%s,project_id=%s,agent_id=%s,model=%s,allowed_models=%s,
                 allow_model_choice=%s,expires_at=%s,requests_per_minute=%s,max_pending=%s,
                 timeout_seconds=%s,max_output_tokens=%s,client_type=%s,can_discover=%s,can_submit=%s,can_read=%s,webhook_destination=%s
-            WHERE id=%s AND revoked_at IS NULL RETURNING id
-        """, (*settings(conn, body, user), ident)).fetchone()
-        if not row:
-            raise HTTPException(404, 'Active connection not found.')
+            WHERE id=%s
+        """, (*settings(conn, body, user, previous), ident))
         db.event('connection.updated', user['id'], {'id': str(ident)}, conn=conn)
     return {'ok': True}
 
@@ -151,19 +170,48 @@ def pause_connection(ident: uuid.UUID, body: Pause, user: User):
     return {'ok': True}
 
 
+class Rotate(BaseModel):
+    save_for_reveal: bool | None = None
+
+
 @router.post('/connections/{ident}/rotate')
-def rotate_connection(ident: uuid.UUID, user: User):
+def rotate_connection(ident: uuid.UUID, user: User, body: Rotate | None = None):
     access.admin(user)
     token = 'coreai_' + secrets.token_urlsafe(32)
     with db.connect() as conn:
-        row = conn.execute('''
-            UPDATE automation_connections SET token_hash=%s
-            WHERE id=%s AND revoked_at IS NULL RETURNING id
-        ''', (auth.token_hash(token), ident)).fetchone()
+        row = conn.execute('SELECT encrypted_token IS NOT NULL AS saved FROM automation_connections WHERE id=%s AND revoked_at IS NULL FOR UPDATE',(ident,)).fetchone()
         if not row:
             raise HTTPException(404, 'Active connection not found.')
+        save = body.save_for_reveal if body and body.save_for_reveal is not None else row['saved']
+        encrypted = key_storage.transform(token.encode('ascii')) if save else None
+        conn.execute('UPDATE automation_connections SET token_hash=%s,encrypted_token=%s WHERE id=%s',
+                     (auth.token_hash(token),encrypted,ident))
         db.event('connection.rotated', user['id'], {'id': str(ident)}, conn=conn)
     return {'id': ident, 'token': token}
+
+
+class Reveal(BaseModel):
+    password: SecretStr
+
+
+@router.post('/connections/{ident}/reveal')
+def reveal_key(ident: uuid.UUID, body: Reveal, user: User):
+    access.admin(user)
+    password = body.password.get_secret_value()
+    if not 1 <= len(password) <= 256:
+        raise HTTPException(403, 'Enter your current administrator password.')
+    auth.confirm_admin_password(user,password)
+    with db.connect() as conn:
+        row = conn.execute('SELECT token_hash,encrypted_token FROM automation_connections WHERE id=%s AND revoked_at IS NULL FOR UPDATE',(ident,)).fetchone()
+        if not row:
+            raise HTTPException(404, 'Unrevoked connection not found.')
+        if row['encrypted_token'] is None:
+            raise HTTPException(409, 'No recoverable copy exists. Rotate the key with encrypted storage enabled.')
+        token = key_storage.transform(row['encrypted_token'],decrypt=True).decode('ascii',errors='replace')
+        if not hmac.compare_digest(auth.token_hash(token),row['token_hash']):
+            raise HTTPException(503, 'Encrypted key does not match the current connection.')
+        db.event('connection.key_revealed', user['id'], {'id':str(ident)}, conn=conn)
+    return {'id':ident, 'token':token}
 
 
 @router.post('/connections/{ident}/revoke')
@@ -171,7 +219,7 @@ def revoke_connection(ident: uuid.UUID, user: User):
     access.admin(user)
     with db.connect() as conn:
         row = conn.execute('''
-            UPDATE automation_connections SET revoked_at=now()
+            UPDATE automation_connections SET revoked_at=now(),encrypted_token=NULL
             WHERE id=%s AND revoked_at IS NULL RETURNING id
         ''', (ident,)).fetchone()
         if row:

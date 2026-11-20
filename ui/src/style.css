@@ -144,3 +144,10 @@
  .connection-list :is(th,td):nth-child(2),.connection-list :is(th,td):nth-child(4){display:none}
  .connection-editor .form.fields{display:grid;grid-template-columns:1fr}
 }
+
+.connection-row-actions{justify-content:flex-end;flex-wrap:wrap}
+.connection-key-dialog{max-width:min(440px,calc(100vw - 24px));border:1px solid var(--line);border-radius:8px;padding:16px;background:var(--canvas);color:var(--text)}
+.connection-key-dialog::backdrop{background:#0008}
+.connection-key-dialog h2{margin-top:0}
+.connection-key-dialog label:not(.checkbox-label){display:grid;gap:5px}
+.connection-key-dialog .actions{justify-content:flex-end;margin-top:12px}

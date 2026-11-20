@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from typing import Annotated
 from fastapi import FastAPI, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
+from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel, Field
 from . import __version__, auth, db, models, access, runs as run_queue
 
@@ -29,6 +30,12 @@ async def private_headers(request, call_next):
     response.headers['Cache-Control'] = 'no-store'
     response.headers['X-Content-Type-Options'] = 'nosniff'
     return response
+
+@app.exception_handler(RequestValidationError)
+async def invalid_request(request, exc):
+    detail = [{key: error[key] for key in ('loc','msg','type')} for error in exc.errors()]
+    return JSONResponse({'detail':detail}, status_code=422)
+
 
 @app.exception_handler(Exception)
 async def internal_error(request, exc):
