@@ -4,7 +4,7 @@ import signal
 import threading
 import time
 import httpx
-from . import db, models, chat, files, access, agent_runtime
+from . import db, models, chat, files, access, agent_runtime, webhooks
 
 stopping = threading.Event()
 
@@ -144,6 +144,8 @@ def main():
             raise SystemExit('Another CORE-AI worker is running.')
         thread = threading.Thread(target=heartbeat, daemon=True)
         thread.start()
+        webhook_thread = threading.Thread(target=webhooks.run, args=(stopping,), daemon=True)
+        webhook_thread.start()
         try:
             while not stopping.is_set():
                 try:
@@ -186,6 +188,7 @@ def main():
         finally:
             stopping.set()
             thread.join(timeout=6)
+            webhook_thread.join(timeout=6)
 
 if __name__ == '__main__':
     main()

@@ -186,3 +186,72 @@ def test_migration_preserves_existing_key_and_job(tmp_path, monkeypatch):
     assert (current['token_hash'],current['project_id'],current['agent_id']) == ('fixture-hash',project,agent)
     existing = db.query('SELECT status,connection_id,project_id,agent_id FROM runs WHERE id=%s',(job,),one=True)
     assert existing == {'status':'QUEUED','connection_id':connection,'project_id':project,'agent_id':agent}
+
+
+def test_webhook_terminal_event_signature_and_delivery_status(signed, monkeypatch):
+    import hashlib
+    import hmac
+    from core_ai import webhooks
+
+    secret = 'fake-local-signing-secret-for-automated-tests'
+    monkeypatch.setenv('CORE_AI_WEBHOOK_EVENTS_URL','https://receiver.example/webhook')
+    monkeypatch.setenv('CORE_AI_WEBHOOK_EVENTS_SECRET',secret)
+    monkeypatch.setenv('CORE_AI_WEBHOOK_INVALID_URL','http://receiver.example/webhook')
+    monkeypatch.setenv('CORE_AI_WEBHOOK_INVALID_SECRET',secret)
+    base = {'name':'Service','model':'local:chat','client_type':'platform'}
+    assert signed.get('/api/v1/connections/webhook-destinations').json() == ['EVENTS']
+    assert signed.post('/api/v1/connections',json={**base,'webhook_destination':'INVALID'}).status_code == 422
+    issued = signed.post('/api/v1/connections',json={**base,'webhook_destination':'EVENTS'}).json()
+    headers = {'Authorization':'Bearer '+issued['token']}
+    body = {'request_id':'event-1','prompt':'private test prompt'}
+    first = signed.post(JOBS,headers=headers,json=body).json()['id']
+    assert signed.post(JOBS,headers=headers,json=body).json()['id'] == first
+    assert webhooks.claim() is None
+    assert str(worker.claim()['id']) == first
+    worker.finish(first,'SUCCEEDED',output='private result')
+    item = webhooks.claim()
+    assert str(item['run_id']) == first and item['attempts'] == 1
+    assert webhooks.claim() is None
+
+    real_client = httpx.Client
+    response_code = 503
+    calls = []
+    def receiver(request):
+        calls.append(request.url)
+        assert str(request.url) == 'https://receiver.example/webhook'
+        assert 'authorization' not in request.headers
+        assert b'private' not in request.content
+        signed_bytes = request.headers['X-Core-AI-Timestamp'].encode()+b'.'+request.content
+        assert request.headers['X-Core-AI-Signature'] == 'sha256='+hmac.new(secret.encode(),signed_bytes,hashlib.sha256).hexdigest()
+        event = json.loads(request.content)
+        assert event['type'] == 'job.finished' and event['id'] == first
+        assert event['data']['request_id'] == 'event-1' and event['data']['status'] == 'SUCCEEDED'
+        return httpx.Response(response_code,headers={'Location':'http://external.example/redirect'})
+
+    monkeypatch.setattr(webhooks.httpx,'Client',lambda **kwargs:real_client(transport=httpx.MockTransport(receiver),**kwargs))
+    assert webhooks.deliver(item,webhooks.destinations()) == 'PENDING'
+    response_code = 302
+    assert webhooks.deliver(item,webhooks.destinations()) == 'FAILED'
+    assert len(calls) == 2
+    response_code = 204
+    assert webhooks.deliver(item,webhooks.destinations()) == 'DELIVERED'
+    activity = signed.get(f"/api/v1/connections/{issued['id']}/activity").json()
+    assert activity[0]['webhook_status'] == 'PENDING'
+    assert 'token' not in activity[0] and 'webhook_url' not in activity[0]
+
+
+def test_paused_connection_cancels_pending_webhook(signed, monkeypatch):
+    from core_ai import webhooks
+
+    monkeypatch.setenv('CORE_AI_WEBHOOK_EVENTS_URL','https://receiver.example/webhook')
+    monkeypatch.setenv('CORE_AI_WEBHOOK_EVENTS_SECRET','fake-local-signing-secret-for-automated-tests')
+    issued = signed.post('/api/v1/connections',json={
+        'name':'Sender','model':'local:chat','client_type':'webhook','webhook_destination':'EVENTS',
+    }).json()
+    headers = {'Authorization': 'Bearer '+issued['token']}
+    first = signed.post(JOBS,headers=headers,json={'request_id':'pause-test','prompt':'test'}).json()['id']
+    assert str(worker.claim()['id']) == first
+    worker.finish(first,'FAILED',error='test error')
+    assert signed.put(f"/api/v1/connections/{issued['id']}/pause",json={'paused':True}).status_code == 200
+    assert webhooks.claim() is None
+    assert signed.get(f"/api/v1/connections/{issued['id']}/activity").json()[0]['webhook_status'] == 'CANCELLED'

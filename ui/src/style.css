@@ -47,13 +47,47 @@
 .connection-guide code{overflow-wrap:anywhere}
 .connection-key input{width:100%;font-family:var(--mono)}
 
-.project-workspace{display:grid;grid-template-columns:minmax(166px,24%) minmax(0,1fr);gap:14px;align-items:start}
-.project-content{min-width:0}.project-content>.page-head{padding-top:0}
+/* Project directory, focused project view and shared section navigation. */
+.project-page{max-width:1020px;margin-inline:auto}
+.project-page .page-head,.connections-page .page-head{align-items:flex-start;gap:12px}
+.project-page .page-head h1,.connections-page .page-head h1{margin:0}
+.project-page .page-head h1:focus{outline:none}
+.project-content{min-width:0}
 .project-content>.page{padding:0}
-.project-sections{display:flex;flex-wrap:wrap;gap:4px;margin-bottom:10px;border-bottom:1px solid var(--line)}
-.project-sections button{border-color:transparent;background:transparent}
-.project-sections button[aria-current=page]{background:var(--selection);box-shadow:inset 0 -2px var(--accent)}
-.project-chat-row{align-items:center;flex-wrap:wrap}.project-chat-row>.artifact-record{flex:1;min-width:100px;border:0}
+.project-breadcrumb{display:flex;margin-bottom:12px}
+.project-breadcrumb .link{min-height:32px;gap:6px;padding-inline:0}
+.project-title h1{overflow-wrap:anywhere}
+.project-content .page-head h2{margin:0;font-size:var(--ui-size);font-weight:600}
+.project-title .actions{flex-wrap:nowrap}
+.project-toolbar{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px;margin:0 0 12px}
+.project-toolbar .actions{flex-wrap:wrap}
+.project-search{display:flex;align-items:center;gap:8px;flex:1 1 200px;min-width:0;max-width:420px;padding-inline:8px;border:1px solid var(--line);border-radius:7px;color:var(--muted);background:var(--surface)}
+.project-search:focus-within{border-color:var(--accent)}
+.app .project-search input{width:100%;min-width:0;min-height:34px;border:0;box-shadow:none;background:transparent;padding:4px 0}
+.project-directory{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,270px),1fr));gap:10px}
+.app .project-card{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:12px;min-height:79px;padding:12px;text-align:start;border-radius:9px;background:var(--surface)}
+.app .project-card:hover{border-color:var(--accent)}
+.project-card span{display:grid;gap:4px;min-width:0;overflow-wrap:anywhere}
+.project-card small{color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.project-card>svg,.project-chat-open>svg{color:var(--muted)}
+.project-create{max-width:560px}
+.project-sections{display:flex;gap:4px;margin:0 0 16px;border-bottom:1px solid var(--line);overflow-x:auto;scrollbar-width:thin}
+.app .project-sections button{flex:none;white-space:nowrap;border:0;border-radius:4px 4px 0 0;background:transparent;padding:7px 10px;color:var(--muted)}
+.app .project-sections button[aria-current=page]{background:var(--selection);box-shadow:inset 0 -2px var(--accent);color:var(--selected-text)}
+.project-chat-list{list-style:none;margin:0;padding:0;border-block:1px solid var(--line)}
+.project-chat-row{display:flex;align-items:center;min-width:0;gap:5px;padding:4px 7px;border-bottom:1px solid var(--line)}
+.project-chat-row:last-child{border-bottom:0}
+.project-chat-row:hover{background:var(--surface)}
+.app .project-chat-open{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:10px;flex:1;min-width:0;min-height:43px;padding:5px 4px;border:0;background:transparent;text-align:start}
+.project-chat-open strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500}
+.project-chat-open time{font-size:11px;color:var(--muted);white-space:nowrap}
+.app .project-menu-trigger{flex:none;width:34px;min-height:34px;padding:4px}
 .connection-models{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,185px),1fr));gap:4px;max-height:220px;overflow:auto;margin-top:6px}
 .connection-models small{color:var(--muted);overflow-wrap:anywhere}
-@container(max-width:700px){.project-workspace{grid-template-columns:minmax(0,1fr)}}
+.connection-guide .guide-tabs{margin-bottom:12px;flex-wrap:wrap}
+.connection-guide .guide-tabs button[aria-pressed=true]{background:var(--selection);color:var(--selected-text)}
+.connection-guide pre{max-width:100%;overflow:auto}
+@container(max-width:430px){
+ .project-chat-open time{font-size:10px}
+ .app .project-chat-open{gap:6px}
+}

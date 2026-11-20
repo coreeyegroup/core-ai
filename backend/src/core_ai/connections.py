@@ -7,7 +7,7 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, StringConstraints, field_validator, model_validator
 
-from . import access, auth, db, runs
+from . import access, auth, db, runs, webhooks
 
 router = APIRouter(prefix='/api/v1')
 User = Annotated[dict, Depends(auth.session)]
@@ -18,7 +18,8 @@ TOKEN = re.compile(r'(?i:Bearer) (coreai_[A-Za-z0-9_-]{43})')
 
 class Connection(BaseModel):
     name: Label
-    client_type: Literal['n8n','custom'] = 'custom'
+    client_type: Literal['n8n','custom','webhook','platform'] = 'custom'
+    webhook_destination: str | None = Field(default=None,pattern=webhooks.DESTINATION_PATTERN)
     can_discover: bool = True
     can_submit: bool = True
     can_read: bool = True
@@ -64,7 +65,7 @@ def list_connections(user: User):
     access.admin(user)
     return db.query("""
         SELECT c.id,c.name,c.project_id,p.name AS project,c.agent_id,a.name AS agent,c.model,c.allowed_models,
-               c.allow_model_choice,c.client_type,c.can_discover,c.can_submit,c.can_read,c.paused,c.expires_at,c.last_used_at,c.requests_per_minute,c.max_pending,
+               c.allow_model_choice,c.client_type,c.webhook_destination,c.can_discover,c.can_submit,c.can_read,c.paused,c.expires_at,c.last_used_at,c.requests_per_minute,c.max_pending,
                c.timeout_seconds,c.max_output_tokens,c.created_at,c.revoked_at,
                c.expires_at<=now() AS expired,
                u.enabled AND u.role='ADMIN' AND (p.archived_at IS NULL)
@@ -73,6 +74,12 @@ def list_connections(user: User):
         LEFT JOIN agents a ON a.id=c.agent_id JOIN users u ON u.id=c.created_by
         ORDER BY c.created_at DESC
     """)
+
+
+@router.get('/connections/webhook-destinations')
+def webhook_destinations(user: User):
+    access.admin(user)
+    return sorted(webhooks.destinations())
 
 
 def analysis_agent(conn, user, agent_id):
@@ -88,9 +95,11 @@ def settings(conn, body, user):
     if body.project_id is not None:
         access.project(conn, user, body.project_id, True)
     analysis_agent(conn, user, body.agent_id)
+    if body.webhook_destination and body.webhook_destination not in webhooks.destinations():
+        raise HTTPException(422, 'Select a configured webhook destination.')
     return (body.name, body.project_id, body.agent_id, body.model, body.allowed_models,
             body.allow_model_choice, body.expires_at, body.requests_per_minute, body.max_pending,
-            body.timeout_seconds, body.max_output_tokens, body.client_type, body.can_discover, body.can_submit, body.can_read)
+            body.timeout_seconds, body.max_output_tokens, body.client_type, body.can_discover, body.can_submit, body.can_read, body.webhook_destination)
 
 
 @router.post('/connections', status_code=201)
@@ -101,8 +110,8 @@ def create_connection(body: Connection, user: User):
         conn.execute("""
             INSERT INTO automation_connections(id,token_hash,created_by,name,project_id,agent_id,model,allowed_models,
                 allow_model_choice,expires_at,requests_per_minute,max_pending,timeout_seconds,max_output_tokens,
-                client_type,can_discover,can_submit,can_read)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                client_type,can_discover,can_submit,can_read,webhook_destination)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
         """, (ident, auth.token_hash(token), user['id'], *settings(conn, body, user)))
         db.event('connection.created', user['id'], {'id': str(ident)}, conn=conn)
     return {'id': ident, 'token': token}
@@ -115,7 +124,7 @@ def update_connection(ident: uuid.UUID, body: Connection, user: User):
         row = conn.execute("""
             UPDATE automation_connections SET name=%s,project_id=%s,agent_id=%s,model=%s,allowed_models=%s,
                 allow_model_choice=%s,expires_at=%s,requests_per_minute=%s,max_pending=%s,
-                timeout_seconds=%s,max_output_tokens=%s,client_type=%s,can_discover=%s,can_submit=%s,can_read=%s
+                timeout_seconds=%s,max_output_tokens=%s,client_type=%s,can_discover=%s,can_submit=%s,can_read=%s,webhook_destination=%s
             WHERE id=%s AND revoked_at IS NULL RETURNING id
         """, (*settings(conn, body, user), ident)).fetchone()
         if not row:
@@ -176,10 +185,11 @@ def revoke_connection(ident: uuid.UUID, user: User):
 def connection_activity(ident: uuid.UUID, user: User):
     access.admin(user)
     return db.query("""
-        SELECT id,request_id,model,status,created_at,finished_at,
-            EXTRACT(EPOCH FROM finished_at-started_at) AS duration_seconds,
-            CASE WHEN status='FAILED' THEN 'Inference failed' END AS error
-        FROM runs WHERE connection_id=%s ORDER BY created_at DESC LIMIT 100
+        SELECT r.id,r.request_id,r.model,r.status,r.created_at,r.finished_at,d.status AS webhook_status,
+            EXTRACT(EPOCH FROM r.finished_at-r.started_at) AS duration_seconds,
+            CASE WHEN r.status='FAILED' THEN 'Inference failed' END AS error
+        FROM runs r LEFT JOIN automation_webhook_deliveries d ON d.run_id=r.id
+        WHERE r.connection_id=%s ORDER BY r.created_at DESC LIMIT 100
     """, (ident,))
 
 
@@ -211,7 +221,7 @@ def discover_models(request: Request):
         return {'models': selectable_models(connection), 'default': connection['model']}
 
 
-def enqueue_job(conn, connection, body):
+def enqueue_job(conn, connection, body, *, notify=False):
     if not connection['can_submit']:
         raise HTTPException(403, 'Job submission is disabled for this key.')
     previous = conn.execute("""
@@ -241,16 +251,20 @@ def enqueue_job(conn, connection, body):
     if connection['project_id'] is not None:
         access.project(conn, user, connection['project_id'], True)
     agent = analysis_agent(conn, user, connection['agent_id'])
-    return runs.enqueue(conn, project_id=connection['project_id'], agent=agent, prompt=body.prompt,
+    job_id = runs.enqueue(conn, project_id=connection['project_id'], agent=agent, prompt=body.prompt,
                         model=model, user_id=user['id'], connection_id=connection['id'], request_id=body.request_id,
                         timeout_seconds=connection['timeout_seconds'], max_output_tokens=connection['max_output_tokens'])
+    if notify and connection['webhook_destination']:
+        conn.execute('INSERT INTO automation_webhook_deliveries(run_id,destination) VALUES (%s,%s)',
+                     (job_id,connection['webhook_destination']))
+    return job_id
 
 
 @router.post('/automation/jobs', status_code=202)
 def submit_job(body: Job, request: Request):
     with db.connect() as conn:
         connection = authenticated_connection(conn, request)
-        return {'id': enqueue_job(conn, connection, body)}
+        return {'id': enqueue_job(conn, connection, body, notify=True)}
 
 
 @router.post('/connections/{ident}/test', status_code=202)

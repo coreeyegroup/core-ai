@@ -91,20 +91,34 @@ See [release behavior and limits](docs/release-1.2.md) and the [requirements reg
 - Chat and professional tasks share one FIFO inference slot and a combined queue limit of 20. This protects the initial laptop deployment.
 - Conversation history is private to its owning CORE-AI user. The UI keeps the selected conversation ID and layout preferences in browser storage; unsent drafts are held in session memory; messages and files remain in the product database.
 
-## Connect n8n or another service
+## Connect an app, platform, or webhook
 
 In CORE-AI, open **Manage → Connections → New connection** as an administrator. Give the connection a name and select the installed text models it may use. Set a default or require the caller to specify a model. A project and an Analysis agent are optional. A linked project provides its instructions and matching sources, so select a project whose contents the receiving service may process.
 
 The key is shown once. Save it in your service’s credential store. The Connections panel can test an allowed model, view job metadata, pause or resume a key, rotate it, revoke it, and configure request and generation limits. Rotation invalidates the previous key immediately. An already accepted job can finish after a pause or revocation. Existing single-model project keys keep their original model and scope when upgrading.
 
-1. Configure an n8n [HTTP Request](https://docs.n8n.io/integrations/builtin/core-nodes/n8n-nodes-base.httprequest/) node with **Generic Credential Type → Header Auth**. Set the name to `Authorization` and value to `Bearer YOUR_KEY`.
-2. Optionally send `GET https://ai.coreeye.in/api/v1/automation/models` to see the allowed model names and default. A fixed-model key returns only its default.
-3. Send a `POST` to `https://ai.coreeye.in/api/v1/automation/jobs` with JSON such as `{"request_id":"summary-123","prompt":"Summarize the supplied notes.","model":"qwen3:4b"}`. Omit `model` if the connection has a default. The API returns HTTP `202` and a job `id`. Retries should reuse the same request ID and payload. A changed explicit model or prompt for that ID returns `409`.
-4. Poll `GET https://ai.coreeye.in/api/v1/automation/jobs/{id}` with the same credential and a bounded retry count. Read `output` on `SUCCEEDED`. Stop polling on `FAILED` or `CANCELLED`. For a submission rate limit, respect the `Retry-After` header.
+### REST API
+
+Use any server-side HTTP client. Send `Authorization: Bearer YOUR_KEY` and, for JSON requests, `Content-Type: application/json`. The base URL is `https://ai.coreeye.in/api/v1/automation` on the production install.
+
+| Method and path | Purpose |
+|---|---|
+| `GET /models` | List allowed model names and the default. A fixed-model key returns only its default. |
+| `POST /jobs` | Submit JSON such as `{"request_id":"summary-123","prompt":"Summarize the notes.","model":"qwen3:4b"}`. Omit `model` if the connection has a default. HTTP `202` returns a job `id`. |
+| `GET /jobs/{id}` | Read status and, on `SUCCEEDED`, `output`. Poll with the same key and bounded retries. Stop at `SUCCEEDED`, `FAILED`, or `CANCELLED`. |
+
+On a retry, send the same request ID and payload. A changed explicit model or prompt for that ID returns `409`. On a submission rate limit, respect `Retry-After`. For Make, Zapier, n8n, or a similar platform, configure an HTTP action with the same method, URL, headers, and JSON. In n8n use **HTTP Request → Generic Credential Type → Header Auth**.
+
+### Webhooks
+
+- **Inbound** — Any webhook client that can supply the Bearer header and transform its JSON can call `POST /jobs`. Use its stable event ID for `request_id` and map the text you want processed to `prompt`. Providers that send only a fixed payload or their own signatures need an intermediary to verify the provider event and make the CORE-AI API call.
+- **Outbound** — In a connection, choose a named destination under **Job completion webhook**. CORE-AI POSTs a `job.finished` event when a job succeeds, fails, or is cancelled. The payload contains a stable event ID, the job ID, request ID, model, terminal status, and finish time. Fetch the result via the job API when needed. Prompt and result text are absent from callbacks.
+- **Provisioning** — A server operator adds `CORE_AI_WEBHOOK_EVENTS_URL=https://receiver.example/webhook` and `CORE_AI_WEBHOOK_EVENTS_SECRET=YOUR_RANDOM_SIGNING_SECRET` to the workstation’s private service environment at `/etc/core-ai/workstation.env`. Replace `EVENTS` in both names for each destination and use a signing secret of at least 32 characters. After provisioning, restart both services with `sudo systemctl restart core-ai-api core-ai-worker`. The UI exposes destination names. Provision only HTTPS endpoints that you trust to receive job metadata.
+- **Verification and retries** — Compare `X-Core-AI-Signature` with `sha256=` plus the hex HMAC-SHA256 of `X-Core-AI-Timestamp + "." + raw request body`, using the configured secret and a constant-time comparison. Reject stale timestamps. Deduplicate by event ID. Delivery happens independently of inference and retries transient failures up to three total attempts. Delivery status appears in Recent activity.
 
 ## Work inside a project
 
-Open or create a project to see its chats, sources, instructions, artifacts, and members. Start a new chat from the project to preselect its context and any project model or response-style defaults. Moving a chat changes context for future replies and keeps the conversation private to its owner. Project sources and explicitly shared artifacts follow project membership. Owners and administrators can archive or restore projects from Settings. Archived projects remain readable and can be restored before accepting new project work.
+Search the Projects directory and open or create a project to see its focused workspace. Use **All projects** to return to the directory. Project sections include Chats, Sources, Instructions, Artifacts, Members, and Settings. Start a new chat from the project to preselect its context and any project model or response-style defaults. Moving a chat changes context for future replies and keeps the conversation private to its owner. Project sources and explicitly shared artifacts follow project membership. Owners and administrators can archive or restore projects from Settings. Archived projects remain readable and can be restored before accepting new project work.
 
 ## Security and independence
 
