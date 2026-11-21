@@ -59,7 +59,8 @@ function Manager({tick,visible}:{tick:number;visible:boolean}){
  const {data,error:listError}=useResource('connections',tick+revision);
  const {data:storage}=useResource('connections/key-storage',tick);
  const storageAvailable=storage?.available===true;
- const rows:Connection[]=data??[];
+ const [showRevoked,setShowRevoked]=useState(false);
+ const rows:Connection[]=(data??[]).filter((row:Connection)=>showRevoked||!row.revoked_at);
  const selected=rows.find(row=>row.id===selection);
  const reload=()=>setRevision(value=>value+1);
  const keyPanel=useRef<HTMLHeadingElement>(null);
@@ -89,11 +90,22 @@ function Manager({tick,visible}:{tick:number;visible:boolean}){
   setBusy(true);setError('');
   try {
    const result=await api(path,method,body);
+   if(path.endsWith('/revoke')){
+    const id=path.split('/')[1];
+    setKey(current=>current?.id===id?null:current);
+    setSelection(current=>current===id?null:current);
+   }
    if(showKey&&active.current){setCopied(false);setKey(result);}
    if(method==='POST'&&path==='connections')setSelection(result.id);
    setEditing(undefined);reload();
   } catch(e){setError((e as Error).message);}
   finally{setBusy(false);}
+ }
+
+ function deleteKey(connection:Connection){
+  if(window.confirm(`Delete the API key for "${connection.name}"? Clients using this connection will lose access immediately. Job history stays available under Show revoked keys.`)){
+   void change('connections/'+connection.id+'/revoke','POST');
+  }
  }
 
  if(editing!==undefined)return <>
@@ -127,6 +139,7 @@ function Manager({tick,visible}:{tick:number;visible:boolean}){
    </div>
   </section>}
   <section className="box connection-list" aria-label="API keys">
+   <header><label><input type="checkbox" checked={showRevoked} onChange={event=>setShowRevoked(event.target.checked)}/> Show revoked keys</label></header>
    {rows.length>0?<div className="table-scroll"><table>
     <thead><tr><th scope="col">Connection</th><th scope="col">Default model</th><th scope="col">Status</th><th scope="col">Last used</th><th scope="col">Actions</th></tr></thead>
     <tbody>{rows.map(row=><tr key={row.id} aria-selected={row.id===selection}>
@@ -137,6 +150,7 @@ function Manager({tick,visible}:{tick:number;visible:boolean}){
      <td>{!row.revoked_at&&<div className="actions connection-row-actions">
       <button disabled={busy} aria-label={'View key for '+row.name} onClick={()=>{setKey(null);setKeyAction({type:'reveal',connection:row});}}>View key</button>
       <button disabled={busy} aria-label={'Edit '+row.name} onClick={()=>edit(row)}>Edit</button>
+      <button className="chat-menu-danger" disabled={busy} aria-label={'Delete API key for '+row.name} onClick={()=>deleteKey(row)}>Delete API key</button>
      </div>}</td>
     </tr>)}</tbody>
    </table></div>:<div className="empty">{listError?'Could not load connections.':data?'No API keys yet. Create a connection to authorize a client.':'Loading connections…'}</div>}
@@ -151,7 +165,7 @@ function Manager({tick,visible}:{tick:number;visible:boolean}){
        <button role="menuitem" disabled={busy} onClick={()=>{dismiss();void change('connections/'+selected.id+'/pause','PUT',{paused:!selected.paused});}}>{selected.paused?'Resume':'Pause'}</button>
        <button role="menuitem" disabled={busy||!!key} onClick={()=>{dismiss();setKeyAction({type:'rotate',connection:selected});}}>Rotate key</button>
        {selected.overlap_until&&<button role="menuitem" disabled={busy} onClick={()=>{dismiss();if(confirm('End the rotation grace period now?'))void change('connections/'+selected.id+'/end-overlap','POST');}}>End rotation overlap</button>}
-       <button role="menuitem" className="chat-menu-danger" disabled={busy} onClick={()=>{dismiss();if(confirm('Revoke this key? Requests using it will be rejected.'))void change('connections/'+selected.id+'/revoke','POST');}}>Revoke key</button>
+       <button role="menuitem" className="chat-menu-danger" disabled={busy} onClick={()=>{dismiss();deleteKey(selected);}}>Delete API key</button>
       </>}
      </ChatPopover>
     </div>}

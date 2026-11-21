@@ -23,6 +23,10 @@ test('custom workbench navigates, splits and opens every implemented module',asy
   if(options.method==='POST'&&key==='connections'){
    connectionWrites.push(JSON.parse(options.body));
    result={id:'fixture-connection',token:'fixture-only'};
+   responses.connections=[{...connectionWrites.at(-1),id:result.id,allowed_models:[],scope_available:true}];
+  }
+  if(options.method==='POST'&&key==='connections/fixture-connection/revoke'){
+   responses.connections=responses.connections.map(row=>({...row,revoked_at:new Date().toISOString()}));
   }
   if(options.method==='POST'&&key==='chat/conversations'){
    const b=JSON.parse(options.body),id='chat-'+(++conversationCount);
@@ -80,6 +84,11 @@ test('custom workbench navigates, splits and opens every implemented module',asy
   const toggle=document.querySelector('[aria-label="Hide sidebar"]');
   await act(async()=>{toggle.click();});
   assert.equal(document.querySelector('.explorer'),null);
+  assert.equal(document.querySelector('[aria-label="Activity ribbon"]'),ribbon);
+  await act(async()=>{ribbon.querySelector('[aria-label="Models"]').click();});
+  assert.ok(document.querySelector('.view:not([hidden])[aria-label="Models"]'));
+  assert.equal(document.querySelector('.explorer'),null);
+  await act(async()=>{ribbon.querySelector('[aria-label="Chat"]').click();});
   await act(async()=>{document.querySelector('[aria-label="Show sidebar"]').click();});
   assert.ok(document.querySelector('.explorer'));
   const starter=[...document.querySelectorAll('.starter-grid button')].find(b=>b.textContent.includes('Understand'));
@@ -259,6 +268,17 @@ test('custom workbench navigates, splits and opens every implemented module',asy
   assert.equal(connectionWrites[0].model_access,'all');
   assert.equal(connectionWrites[0].can_embed,true);
   assert.deepEqual(connectionWrites[0].model_policies,{'test:latest':{enabled:false}});
+  const deleteKey=connections().querySelector('[aria-label="Delete API key for Usage test"]');
+  dom.window.confirm=()=>false;
+  await act(async()=>{deleteKey.click();});
+  assert.ok(!fetched.includes('/api/v1/connections/fixture-connection/revoke'));
+  dom.window.confirm=()=>true;
+  await act(async()=>{deleteKey.click();await wait();});
+  assert.ok(fetched.includes('/api/v1/connections/fixture-connection/revoke'));
+  assert.ok(!connections().querySelector('.connection-name'));
+  assert.ok(!connections().querySelector('[aria-label="Connection key"]'));
+  await act(async()=>{connections().querySelector('.connection-list input[type="checkbox"]').click();});
+  assert.equal(connections().querySelector('.connection-status').dataset.status,'Revoked');
   await act(async()=>{window.dispatchEvent(new CustomEvent('core-ai-goto',{detail:{view:'Workflows'}}));await wait();});
   const workflow=()=>document.querySelector('.view:not([hidden])');
   const researchForm=workflow().querySelector('.research-form');

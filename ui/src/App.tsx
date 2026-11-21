@@ -61,7 +61,7 @@ export default function App(){
  const sidebarVisible=!layout.maximized&&(mobile?mobileOpen:layout.left);
  const drawerOpen=mobile&&sidebarVisible;
  const dockedExplorer=sidebarVisible&&!mobile;
- const ribbonVisible=appearance.activity&&!mobile&&!layout.maximized;
+ const ribbonVisible=appearance.activity||!sidebarVisible;
  const estimatedWidth=viewport.width-(dockedExplorer?layout.leftWidth:0)-(ribbonVisible?42:0)-(layout.right&&viewport.width>1100&&!layout.maximized?layout.rightWidth+3:0);
  const panelWidth=workspaceBounds?.width??estimatedWidth;
  const panelHeight=workspaceBounds?.height??viewport.height;

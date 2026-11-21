@@ -14,7 +14,7 @@ export const defaultChat: ChatDefaults = {mode:'general',temperature:.4,max_toke
 export type Appearance = { theme: Theme; fontSize: number; density: 'Compact' | 'Comfortable'; activity: boolean; status: boolean; wrapTabs: boolean; readingSize:number;sendKey:'Enter'|'CtrlEnter'; chatDefaults:ChatDefaults };
 export const typographyVersion = 2;
 export const appearanceKey = 'core-ai.appearance.v1';
-export const defaultAppearance: Appearance = {theme:'Standard',fontSize:14,density:'Compact',activity:false,status:true,wrapTabs:false,readingSize:17,sendKey:'Enter',chatDefaults:defaultChat};
+export const defaultAppearance: Appearance = {theme:'Standard',fontSize:14,density:'Compact',activity:true,status:true,wrapTabs:false,readingSize:17,sendKey:'Enter',chatDefaults:defaultChat};
 export function restoreAppearance(raw:string|null):Appearance {
   try {
     const x=JSON.parse(raw||'null');
