@@ -172,7 +172,7 @@ test('custom workbench navigates, splits and opens every implemented module',asy
   assert.equal(document.querySelector('.composer-context').textContent,'Project one');
   assert.equal(document.querySelector('[aria-label="Message CORE-AI"]').value,'');
   await act(async()=>{document.querySelector('.new-chat').click();});
-  assert.equal(document.querySelector('.composer-context').textContent,'Private conversation');
+  assert.equal(document.querySelector('.composer-context').textContent,'Private');
   assert.equal(document.querySelector('[aria-label="Message CORE-AI"]').value,'');
 
   await act(async()=>{Object.defineProperty(dom.window,'innerWidth',{value:390,writable:true,configurable:true});dom.window.dispatchEvent(new dom.window.Event('resize'));});

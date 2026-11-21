@@ -44,7 +44,7 @@ export function Module({view,tick,refresh,go,appearance,changeAppearance,visible
   case 'Settings':return <Settings appearance={appearance} change={changeAppearance}/>;
  }
 }
-function PageHead({title,subtitle,children}:{title:string;subtitle:string;children?:React.ReactNode}){return <div className="page-head"><div><div className="eyebrow">CORE-AI WORKSTATION</div><h1>{title}</h1><p>{subtitle}</p></div>{children}</div>;}
+function PageHead({title,subtitle,children}:{title:string;subtitle:string;children?:React.ReactNode}){return <div className="page-head"><div><h1>{title}</h1><p>{subtitle}</p></div>{children}</div>;}
 function Overview({tick,go}:{tick:number;go:(v:View)=>void}){
  const {data:d,error}=useData('overview',tick);
  const pending=d?.runs.filter((r:Row)=>['QUEUED','RUNNING','CANCEL_REQUESTED'].includes(r.status)).reduce((n:number,r:Row)=>n+Number(r.n),0);

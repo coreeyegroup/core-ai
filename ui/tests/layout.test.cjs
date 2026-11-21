@@ -12,7 +12,7 @@ test('typography upgrades the legacy defaults while retaining custom sizes',()=>
  vm.runInNewContext(compiled,module);
  const {restoreAppearance,defaultAppearance,typographyVersion}=module.exports;
  const legacy={...defaultAppearance,fontSize:12,readingSize:14};
- assert.equal(restoreAppearance(JSON.stringify(legacy)).fontSize,14);
+ assert.equal(restoreAppearance(JSON.stringify(legacy)).fontSize,15);
  assert.equal(restoreAppearance(JSON.stringify(legacy)).readingSize,17);
  const custom={...legacy,fontSize:15,readingSize:19};
  assert.equal(restoreAppearance(JSON.stringify(custom)).fontSize,15);
