@@ -87,3 +87,43 @@ def test_repository_link_normalization():
                  'https://github.com/obra/superpowers/tree/main',
                  'https://github.com//obra/superpowers', 'obra/..'):
         assert skills.repository_name(link) is None
+
+
+def test_chat_skill_controls_use_approved_current_versions(signed, work, monkeypatch):
+    commit = 'a' * 40
+    entries, _ = skills.discover(bundle(), time.monotonic() + 5)
+    monkeypatch.setattr(skills, 'fetch_collection', lambda repository, ref: (commit, entries[:3], []))
+    collection = signed.post('/api/v1/skills/import', json={'repository': 'example/skills'}).json()['id']
+    catalog = '/api/v1/skills/collections/' + collection
+    assert signed.put(catalog+'/activate', json={'commit': commit}).status_code == 200
+    preview_path = '/api/v1/skills/chat/preview'
+    preview = signed.post(preview_path, json={'prompt': 'Investigate case 001'}).json()
+    assert len(preview['available']) == 3
+    assert preview['automatic'][0]['name'] == 'skill-001'
+    assert 'body' not in preview['automatic'][0]
+    agent = work['agent_id']
+    assert signed.post(preview_path, json={'agent_id': agent}).json()['available'] == []
+    assert signed.put('/api/v1/skills/agents/'+agent, json={'collections': [collection]}).status_code == 200
+    assert len(signed.post(preview_path, json={'agent_id': agent}).json()['available']) == 3
+
+    def send(mode, selected=(), content='Investigate case 001'):
+        conversation = signed.post('/api/v1/chat/conversations', json={'model': work['model']}).json()['id']
+        path = '/api/v1/chat/conversations/' + conversation
+        response = signed.post(path+'/messages', json={
+            'content': content, 'request_id': str(uuid.uuid4()), 'model': work['model'],
+            'skill_selection': {'mode': mode, 'selected': list(selected)},
+        })
+        return path, response
+
+    choice = {key: preview['available'][0][key] for key in ('collection_id', 'commit', 'path')}
+    path, response = send('manual', [choice])
+    assert response.status_code == 201, response.text
+    generation = response.json()['id']
+    versions = signed.get(path+'/reply/'+generation).json()['skill_versions']
+    assert [version['name'] for version in versions] == ['skill-000']
+    assert signed.get(path).json()['messages'][-1]['skill_versions'] == versions
+    assert send('manual', [{**choice, 'commit': 'b'*40}])[1].status_code == 409
+    assert send('manual')[1].status_code == 422
+    path, response = send('off', [choice], '/skill skill-001')
+    assert response.status_code == 201, response.text
+    assert signed.get(path).json()['messages'][-1]['skill_versions'] == []

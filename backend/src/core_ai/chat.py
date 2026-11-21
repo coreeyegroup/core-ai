@@ -57,6 +57,7 @@ class Metadata(BaseModel):
     archived: bool | None = None
 
 class Send(Preferences):
+    skill_selection: skills.ChatSelection | None = None
     content: str = Field(min_length=1,max_length=16000)
     attachments: list[Attachment] = Field(default_factory=list,max_length=8)
     request_id: uuid.UUID
@@ -100,9 +101,16 @@ def create(conn,user_id,body, title=None, forked_from=None):
     return ident
 
 
+def request_digest(body):
+    payload = body.model_dump(mode='json', exclude={'request_id'})
+    if payload['skill_selection'] is None:
+        del payload['skill_selection']
+    return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
+
+
 def enqueue(conn,ident,user,body):
     row=owned(conn,ident,user['id'],True)
-    digest=hashlib.sha256(json.dumps(body.model_dump(mode='json',exclude={'request_id'}),sort_keys=True).encode()).hexdigest()
+    digest=request_digest(body)
     previous=conn.execute('SELECT * FROM chat_generations WHERE request_id=%s AND requested_by=%s',(body.request_id,user['id'])).fetchone()
     if previous:
         if previous['request_digest']!=digest or previous['conversation_id']!=ident:
@@ -136,7 +144,7 @@ def enqueue(conn,ident,user,body):
     conn.execute('''INSERT INTO chat_generations(id,conversation_id,user_message_id,assistant_message_id,requested_by,request_id,request_digest,model,mode,instructions,project_id,temperature,max_tokens,status)
         VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'QUEUED')''',
         (generation,ident,question,answer,user['id'],body.request_id,digest,body.model,body.mode,body.instructions,body.project_id,body.temperature,body.max_tokens))
-    context, versions = skills.snapshot(conn, body.agent_id, body.content)
+    context, versions = skills.snapshot(conn, body.agent_id, body.content, body.skill_selection)
     conn.execute('''UPDATE chat_generations SET agent_id=%s,agent_instructions=%s,skill_context=%s,
                  skill_versions=%s WHERE id=%s''',
                  (body.agent_id, profile['instructions'] if profile else '', context, Jsonb(versions), generation))
@@ -188,7 +196,7 @@ def conversation(ident:uuid.UUID,user=Depends(auth.session)):
             sources_by_message.setdefault(source['assistant_message_id'],[]).append(
                 {'id':source['id'],'title':source['title']})
         skill_versions = conn.execute('''SELECT assistant_message_id,skill_versions FROM chat_generations
-            WHERE conversation_id=%s AND skill_versions <> '[]'::jsonb''', (ident,)).fetchall()
+            WHERE conversation_id=%s''', (ident,)).fetchall()
         skills_by_message = {item['assistant_message_id']: item['skill_versions'] for item in skill_versions}
         for message in row['messages']:
             if message['id'] in skills_by_message:
@@ -200,7 +208,7 @@ def conversation(ident:uuid.UUID,user=Depends(auth.session)):
 
 @router.get('/conversations/{ident}/reply/{generation}')
 def reply(ident:uuid.UUID,generation:uuid.UUID,user=Depends(auth.session)):
-    row=db.query('''SELECT g.id,g.status,m.id AS message_id,m.content,m.error,m.status AS message_status
+    row=db.query('''SELECT g.id,g.status,g.skill_versions,m.id AS message_id,m.content,m.error,m.status AS message_status
         FROM chat_generations g JOIN chat_messages m ON m.id=g.assistant_message_id
         JOIN conversations c ON c.id=g.conversation_id
         WHERE c.id=%s AND c.user_id=%s AND g.id=%s''',(ident,user['id'],generation),one=True)
@@ -263,7 +271,7 @@ def fork_conversation(ident:uuid.UUID,body:Fork,user=Depends(auth.session)):
         old=owned(conn,ident,user['id'],True)
         existing=conn.execute('SELECT g.*,c.forked_from FROM chat_generations g JOIN conversations c ON c.id=g.conversation_id WHERE g.request_id=%s AND g.requested_by=%s',(body.request_id,user['id'])).fetchone()
         if existing:
-            digest=hashlib.sha256(json.dumps(body.model_dump(mode='json',exclude={'request_id'}),sort_keys=True).encode()).hexdigest()
+            digest=request_digest(body)
             if existing['forked_from']!=ident or existing['request_digest']!=digest:
                 raise HTTPException(409,'Request identifier already used for another branch.')
             return {'id':existing['id'],'conversation_id':existing['conversation_id'],'assistant_message_id':existing['assistant_message_id']}

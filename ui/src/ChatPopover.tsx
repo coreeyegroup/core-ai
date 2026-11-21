@@ -2,8 +2,8 @@ import {useEffect,useId,useLayoutEffect,useRef,useState,type KeyboardEvent,type 
 import {createPortal} from 'react-dom';
 import {ChevronDown,Check} from 'lucide-react';
 
-export function ChatPopover({label,children,trigger,kind,align='start',className='',buttonClass=''}:{
- label:string; trigger:ReactNode; kind:'menu'|'dialog'; align?:'start'|'end'; className?:string;buttonClass?:string;
+export function ChatPopover({label,children,trigger,kind,align='start',className='',buttonClass='',disabled=false}:{
+ label:string; trigger:ReactNode; kind:'menu'|'dialog'; align?:'start'|'end'; className?:string;buttonClass?:string;disabled?:boolean;
  children:(dismiss:()=>void)=>ReactNode;
 }){
  const [open,setOpen]=useState(false),[position,setPosition]=useState({left:0,top:0,maxHeight:0});
@@ -22,10 +22,12 @@ export function ChatPopover({label,children,trigger,kind,align='start',className
    setPosition({left,top:flip?rect.top-Math.min(panel.current.scrollHeight,maxHeight)-4:rect.bottom+4,maxHeight});
   };
   place();
+  const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(place);
+  observer?.observe(panel.current);
   panel.current.querySelector<HTMLElement>('input,button:not([disabled])')?.focus({preventScroll:true});
   window.addEventListener('resize',place);
   window.addEventListener('scroll',place,true);
-  return()=>{window.removeEventListener('resize',place);window.removeEventListener('scroll',place,true);};
+  return()=>{observer?.disconnect();window.removeEventListener('resize',place);window.removeEventListener('scroll',place,true);};
  },[open,align]);
  useEffect(()=>{
   if(!open)return;
@@ -37,7 +39,7 @@ export function ChatPopover({label,children,trigger,kind,align='start',className
   if(e.key==='Escape'){e.preventDefault();e.stopPropagation();dismiss();return;}
   if(e.key==='Tab'&&kind==='menu'){dismiss();return;}
   if(!['ArrowDown','ArrowUp','Home','End'].includes(e.key))return;
-  if(e.target instanceof HTMLInputElement&&['Home','End'].includes(e.key))return;
+  if(kind==='dialog' && e.target instanceof HTMLElement && e.target.matches('input,select,textarea'))return;
   const items=Array.from(panel.current?.querySelectorAll<HTMLButtonElement>('button:not([disabled])')??[]);
   if(!items.length)return;
   const index=items.indexOf(document.activeElement as HTMLButtonElement);
@@ -45,7 +47,7 @@ export function ChatPopover({label,children,trigger,kind,align='start',className
   e.preventDefault();items[next].focus();
  }
  return <>
-  <button type="button" className={buttonClass} ref={anchor} aria-label={label} aria-haspopup={kind} aria-expanded={open} aria-controls={open?id:undefined} onClick={()=>setOpen(value=>!value)} onKeyDown={e=>{if(['ArrowDown','ArrowUp'].includes(e.key)){e.preventDefault();setOpen(true);}}}>{trigger}</button>
+  <button type="button" className={buttonClass} ref={anchor} disabled={disabled} aria-label={label} aria-haspopup={kind} aria-expanded={open} aria-controls={open?id:undefined} onClick={()=>setOpen(value=>!value)} onKeyDown={e=>{if(['ArrowDown','ArrowUp'].includes(e.key)){e.preventDefault();setOpen(true);}}}>{trigger}</button>
   {open&&createPortal(<div id={id} className={'chat-popover '+className} ref={panel} style={position} role={kind} aria-label={label} onKeyDown={keydown}
     onBlur={e=>{if(e.relatedTarget instanceof Node&&!panel.current?.contains(e.relatedTarget)&&!anchor.current?.contains(e.relatedTarget))setOpen(false);}}>
     {children(dismiss)}

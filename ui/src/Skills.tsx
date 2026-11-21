@@ -22,7 +22,7 @@ function sourceUrl(repository: string, commit: string, path: string) {
 export function SkillVersions({versions}: {versions?: SkillVersion[]}) {
  if (!versions?.length) return null;
  return <details className="skill-used">
-  <summary>Skills used ({versions.length})</summary>
+  <summary><strong>Skills used</strong> · {versions.map(skill => skill.name).join(', ')}</summary>
   <ul>{versions.map(skill => <li key={skill.repository + skill.commit + skill.path}>
    <a href={sourceUrl(skill.repository,skill.commit,skill.path)} target="_blank" rel="noreferrer">{skill.name} · {skill.commit.slice(0,8)}</a>
    {skill.shortened && ' · excerpt'}
@@ -30,7 +30,7 @@ export function SkillVersions({versions}: {versions?: SkillVersion[]}) {
  </details>;
 }
 
-export default function Skills({tick}: {tick: number}) {
+export default function Skills({tick,refreshWorkspace}: {tick: number; refreshWorkspace:()=>void}) {
  const {role} = useSession();
  const [repository,setRepository] = useState('');
  const [ref,setRef] = useState('HEAD');
@@ -61,7 +61,7 @@ export default function Skills({tick}: {tick: number}) {
   {notice && <p role="status" className="notice">{notice}</p>}
   {role === 'ADMIN' && <form className="box form" onSubmit={importSource}>
    <header>Import or check for updates</header>
-   <div className="actions skill-import">
+   <div className="skill-import-grid">
     <label>GitHub repository<input required list="skill-repositories" value={repository} onChange={event => setRepository(event.target.value)} placeholder="owner/repository"/></label>
     <datalist id="skill-repositories">{sources.map(source => <option key={source} value={source}/>)}</datalist>
     <label>Branch, tag, or commit<input required value={ref} onChange={event => setRef(event.target.value)}/></label>
@@ -82,7 +82,7 @@ export default function Skills({tick}: {tick: number}) {
    {selection && <CollectionDetail key={selection.id} selection={selection} changeVersion={commit => setSelection({...selection,commit})}
      tick={tick+revision} editable={role==='ADMIN'} busy={busy} action={action}/>}
   </div>
-  {role!=='VIEWER' && <Assignments rows={rows} tick={tick+revision}/>}
+  {role!=='VIEWER' && <Assignments rows={rows} tick={tick+revision} refreshWorkspace={refreshWorkspace}/>}
  </section>;
 }
 
@@ -151,11 +151,33 @@ function SkillBody({path}: {path:string}) {
  return error ? <p role="alert">{error}</p> : <pre>{data?.body ?? 'Loading instructions…'}</pre>;
 }
 
-function Assignments({rows,tick}: {rows: Collection[];tick: number}) {
- const {data,error} = useResource('agents',tick);
+function Assignments({rows,tick,refreshWorkspace}: {rows: Collection[];tick: number;refreshWorkspace:()=>void}) {
+ const [revision,refresh] = useState(0);
+ const {data,error} = useResource('agents',tick+revision);
  const [agent,setAgent] = useState('');
+ const [creating,setCreating] = useState(false);
+ const [busy,setBusy] = useState(false);
+ const [failure,setFailure] = useState('');
+ async function create(event: FormEvent<HTMLFormElement>) {
+  event.preventDefault();
+  const form = new FormData(event.currentTarget);
+  setBusy(true);setFailure('');
+  try {
+   const result = await api('agents','POST',{name:form.get('name'),instructions:form.get('instructions')});
+   setAgent(result.id);setCreating(false);refresh(value=>value+1);refreshWorkspace();
+  } catch (err) {setFailure((err as Error).message);}
+  finally {setBusy(false);}
+ }
  return <section className="box form">
-  <header>Assign collections to an agent</header>
+  <header className="skill-section-heading"><span>Assign collections to an agent</span>
+   <button type="button" disabled={busy} aria-expanded={creating} onClick={()=>{setCreating(value=>!value);setFailure('');}}>{creating?'Cancel':'New agent'}</button>
+  </header>
+  {creating && <form className="skill-agent-form" onSubmit={create}>
+   <label>Agent name<input name="name" required maxLength={120} autoFocus/></label>
+   <label>Instructions<textarea name="instructions" required maxLength={16000} rows={3}/></label>
+   {failure && <p role="alert" className="error">{failure}</p>}
+   <button className="primary" disabled={busy}>{busy?'Creating…':'Create agent'}</button>
+  </form>}
   {error && <p role="alert">{error}</p>}
   <label>Agent<select value={agent} onChange={event=>setAgent(event.target.value)}>
    <option value="">Select an agent</option>

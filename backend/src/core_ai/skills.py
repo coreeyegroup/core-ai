@@ -4,7 +4,7 @@ import re
 import tarfile
 import time
 import uuid
-from typing import Annotated
+from typing import Annotated, Literal
 from urllib.parse import quote, urlsplit
 
 import httpx
@@ -286,20 +286,68 @@ def select(candidates, prompt):
     return [row[-1] for row in ranked[:2]]
 
 
-def snapshot(conn, agent_id, prompt):
-    if not agent_id:
-        select([], prompt)
-        return '', []
-    rows = conn.execute('''
+class SkillChoice(BaseModel):
+    collection_id: uuid.UUID
+    commit: str = Field(pattern=r'^[0-9a-f]{40}$')
+    path: str = Field(min_length=1, max_length=500)
+
+
+class ChatSelection(BaseModel):
+    mode: Literal['auto', 'manual', 'off'] = 'auto'
+    selected: list[SkillChoice] = Field(default_factory=list, max_length=8)
+
+
+class ChatPreview(BaseModel):
+    agent_id: uuid.UUID | None = None
+    prompt: str = Field(default='', max_length=16000)
+
+
+def candidates(conn, agent_id):
+    return conn.execute("""
         SELECT s.*, c.repository, c.id AS collection_id, r.commit_sha AS commit
-        FROM agent_skill_collections a JOIN skill_collections c ON c.id=a.collection_id
+        FROM skill_collections c
         JOIN skill_releases r ON r.collection_id=c.id AND r.commit_sha=c.active_commit
         CROSS JOIN LATERAL jsonb_to_recordset(r.skills)
             AS s(name text,description text,path text)
-        WHERE a.agent_id=%s AND NOT EXISTS (
+        WHERE (%s::uuid IS NULL OR EXISTS (
+            SELECT 1 FROM agent_skill_collections a WHERE a.collection_id=c.id AND a.agent_id=%s))
+        AND NOT EXISTS (
             SELECT 1 FROM skill_exclusions e WHERE e.collection_id=c.id AND e.path=s.path)
-    ''', (agent_id,)).fetchall()
-    selected = select(rows, prompt)
+        ORDER BY c.repository,s.name,s.path,c.id
+    """, (agent_id, agent_id)).fetchall()
+
+
+@router.post('/chat/preview')
+def chat_preview(body: ChatPreview, user: User):
+    with db.connect() as conn:
+        if body.agent_id and not access.agent(conn, user, body.agent_id)['enabled']:
+            raise HTTPException(422, 'Choose an enabled agent profile.')
+        available = candidates(conn, body.agent_id)
+        try:
+            automatic = select(available, body.prompt)
+            error = ''
+        except HTTPException as exc:
+            automatic, error = [], exc.detail
+    return {'available': available, 'automatic': automatic, 'error': error}
+
+
+def snapshot(conn, agent_id, prompt, selection=None):
+    if selection and selection.mode == 'off':
+        return '', []
+    if not agent_id and selection is None:
+        select([], prompt)
+        return '', []
+    available = candidates(conn, agent_id)
+    if selection and selection.mode == 'manual':
+        lookup = {(row['collection_id'], row['commit'], row['path']): row for row in available}
+        keys = dict.fromkeys((choice.collection_id, choice.commit, choice.path) for choice in selection.selected)
+        if not keys:
+            raise HTTPException(422, 'Select at least one skill or choose Auto or Off.')
+        if any(key not in lookup for key in keys):
+            raise HTTPException(409, 'A selected skill changed or is no longer available. Review your selections.')
+        selected = [lookup[key] for key in keys]
+    else:
+        selected = select(available, prompt)
     if not selected:
         return '', []
     provenance, guidance = [], []

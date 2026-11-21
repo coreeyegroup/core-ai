@@ -219,12 +219,17 @@ and records the exact commit. Review its inventory and excluded skills before se
 an older imported version to roll back. Import requires outbound HTTPS to GitHub's
 API and codeload hosts from the API server.
 
-Select an agent and save one or more collection assignments. In Chat, choose that agent
-under Advanced. In Tasks or Workflows, choose it in the run form. CORE-AI matches approved
-skill names and descriptions against the prompt and loads up to two instruction excerpts.
-Start a prompt with `/skill owner/repo:skill-name` to choose one explicitly. **Skills used**
-links to the exact versions used in chat replies and task details. Existing runs and
-research retries retain their original selection after a catalog update.
+Under **Assign collections to an agent**, select an existing agent or create a new one,
+then save its collection assignments. In Chat, open **Skills** next to the composer.
+**Auto** previews up to two relevant matches for the draft, **Manual** lets you select
+specific versions, and **Off** skips skill instructions. The default assistant can use
+all approved collections. Selecting an agent under Advanced limits the choices to that
+agent's assignments. Each reply identifies the exact skill versions supplied to the model.
+
+In Tasks or Workflows, select the agent in the run form. Start a prompt with
+`/skill owner/repo:skill-name` to choose one explicitly. **Skills used** links to the
+pinned versions. Existing runs and research retries retain their original selection
+after a catalog update.
 
 The catalog imports instructions. Reference and asset links are available for review
 at the pinned commit. Bundle scripts, hooks, external tools, and host-specific plugins

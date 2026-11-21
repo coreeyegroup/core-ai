@@ -28,7 +28,7 @@ export function Module({view,tick,refresh,go,appearance,changeAppearance,visible
   case 'Chat':return <Chat tick={tick} visible={visible} sendKey={appearance.sendKey} chatDefaults={appearance.chatDefaults}/>;
   case 'Overview':return <Overview tick={tick} go={go}/>;
   case 'Projects':return <ProjectWorkspace tick={tick} refresh={refresh} location={projectLocation} changeLocation={changeProjectLocation}/>;
-  case 'Skills':return <Skills tick={tick}/>;
+  case 'Skills':return <Skills tick={tick} refreshWorkspace={refresh}/>;
   case 'Agents':return <Agents tick={tick} refresh={refresh}/>;
   case 'Tasks':return <Tasks tick={tick} refresh={refresh}/>;
   case 'Knowledge':return <Sources tick={tick} refresh={refresh}/>;

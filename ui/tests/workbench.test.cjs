@@ -14,7 +14,14 @@ test('custom workbench navigates, splits and opens every implemented module',asy
    excluded:[],changes:{added:['review/SKILL.md'],removed:[],changed:[]}
   };
   responses['skills/agents/agent']=[];
+  const chatSkill={name:'review',description:'Review evidence',repository:'example/skills',collection_id:'collection',commit:catalogCommit,path:'review/SKILL.md'};
+  responses['skills/chat/preview']={available:[chatSkill],automatic:[chatSkill],error:''};
+  responses['skills/agents/new-agent']=[];
  let conversationCount=0;const writes=[],connectionWrites=[],researchWrites=[];const fetchOld=global.fetch;global.fetch=async(path,options={})=>{fetched.push(path);const key=path.replace('/api/v1/','');let result=responses[key==='models?catalog=true'?'models':key]??{};
+  if(options.method==='POST'&&key==='agents'){
+   result={id:'new-agent'};
+   responses.agents=[...responses.agents,{...JSON.parse(options.body),id:result.id,enabled:true}];
+  }
   if(options.method==='POST'&&key==='runs'){
    const body=JSON.parse(options.body),id='research-1';
    researchWrites.push(body);
@@ -300,6 +307,21 @@ test('custom workbench navigates, splits and opens every implemented module',asy
   const assign=skillsPanel.querySelector('fieldset').closest('form');
   await act(async()=>{assign.dispatchEvent(new dom.window.Event('submit',{bubbles:true,cancelable:true}));await wait();});
   assert.equal(fetched.filter(path=>path==='/api/v1/skills/agents/agent').length,2);
+  await act(async()=>{[...skillsPanel.querySelectorAll('button')].find(button=>button.textContent==='New agent').click();});
+  const createAgent=skillsPanel.querySelector('.skill-agent-form');
+  createAgent.elements.namedItem('name').value='Evidence Reviewer';
+  createAgent.elements.namedItem('instructions').value='Review evidence.';
+  await act(async()=>{createAgent.dispatchEvent(new dom.window.Event('submit',{bubbles:true,cancelable:true}));await wait();});
+  assert.equal(skillsPanel.querySelector('section.form select').value,'new-agent');
+  await act(async()=>{window.dispatchEvent(new CustomEvent('core-ai-goto',{detail:{view:'Chat'}}));await wait();});
+  await act(async()=>{chat().querySelector('.chat-skills-trigger').click();});
+  await act(async()=>{await new Promise(resolve=>setTimeout(resolve,230));});
+  const skillPicker=document.querySelector('.chat-skills-picker');
+  assert.match(skillPicker.textContent,/Preview for this draft.*review/);
+  await act(async()=>{change(skillPicker.querySelector('select'),'manual');});
+  await act(async()=>{await new Promise(resolve=>setTimeout(resolve,230));});
+  await act(async()=>{skillPicker.querySelector('.chat-skill-options input').click();});
+  assert.match(chat().querySelector('.chat-skills-trigger').textContent,/Manual \(1\)/);
   await act(async()=>{window.dispatchEvent(new CustomEvent('core-ai-goto',{detail:{view:'Workflows'}}));await wait();});
   const workflow=()=>document.querySelector('.view:not([hidden])');
   const researchForm=workflow().querySelector('.research-form');

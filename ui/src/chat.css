@@ -88,3 +88,12 @@ select option{background-color:var(--input);color:var(--text)}
 .message-sources{margin-block:7px;color:var(--muted);font-size:calc(var(--ui-size) - 1px)}
 .message-sources summary{cursor:pointer}
 .app .message-sources button{display:block;max-width:100%;overflow-wrap:anywhere;margin:3px 0 0 10px}
+
+.chat-popover.chat-skills-popover{width:min(400px,calc(100vw - 12px));padding:10px}
+.chat-skills-picker{display:grid;gap:6px}
+.chat-skills-picker p,.chat-skills-picker ul{margin:0}
+.chat-skills-picker>label,.chat-skills-picker div>label{display:grid;gap:4px}
+.chat-skill-options{max-height:210px;overflow:auto;margin-top:6px}
+.chat-skill-options label{display:flex;align-items:flex-start;gap:8px;padding:6px 2px;border-bottom:1px solid var(--line)}
+.chat-skill-options small{display:block}
+.chat-skill-selections{padding-left:18px;max-height:120px;overflow:auto}
