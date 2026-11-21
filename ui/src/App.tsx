@@ -42,8 +42,8 @@ class Boundary extends Component<{children:ReactNode},{error:boolean}>{state={er
 function safeGet(k:string){try{return localStorage.getItem(k);}catch{return null;}}
 const params=new URLSearchParams(location.search),detached=params.has('view');
 function initial(){const l=restore(safeGet(key));const v=params.get('view') as View;return views.includes(v)?{...defaults(),groups:[[v]],active:[v],left:false,bottom:false}:l;}
-const icons:Record<View,typeof MessageSquare>={Chat:MessageSquare,Overview:LayoutDashboard,Projects:Folder,Files,Artifacts:FileText,Agents:Bot,Tasks:ListTodo,Knowledge:BookOpen,Tools:Wrench,Models:SlidersHorizontal,Integrations:Plug,Operations:Activity,Settings:SettingsIcon,Access:Shield,Capabilities:Shield,Workflows:Workflow};
-const navGroups:{label:string;items:View[]}[]=[{label:'Workspace',items:['Chat','Projects','Files','Artifacts']},{label:'Build & automate',items:['Agents','Tasks','Knowledge','Tools','Workflows']},{label:'Manage',items:['Overview','Models','Integrations','Operations','Access','Capabilities','Settings']}];
+const icons:Record<View,typeof MessageSquare>={Chat:MessageSquare,Overview:LayoutDashboard,Projects:Folder,Files,Artifacts:FileText,Agents:Bot,Skills:BookOpen,Tasks:ListTodo,Knowledge:BookOpen,Tools:Wrench,Models:SlidersHorizontal,Integrations:Plug,Operations:Activity,Settings:SettingsIcon,Access:Shield,Capabilities:Shield,Workflows:Workflow};
+const navGroups:{label:string;items:View[]}[]=[{label:'Workspace',items:['Chat','Projects','Files','Artifacts']},{label:'Build & automate',items:['Agents','Skills','Tasks','Knowledge','Tools','Workflows']},{label:'Manage',items:['Overview','Models','Integrations','Operations','Access','Capabilities','Settings']}];
 const title=(v:View)=>v==='Integrations'?'Connections':v;
 type Right={kind:'artifact';id:string}|{kind:'source';id:string;version?:number}|null;
 export default function App(){

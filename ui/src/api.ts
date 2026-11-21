@@ -18,8 +18,8 @@ export function cachedRead(path:string,force=false){
  promise.catch(()=>{if(sharedReads.get(path)?.promise===promise)sharedReads.delete(path);});
  return promise;
 }
-export async function api(path:string,method='GET',body?:unknown){
-  const res=await fetch('/api/v1/'+path,{method,credentials:'same-origin',cache:'no-store',headers:{'Content-Type':'application/json','x-core-ai-csrf':csrf},body:body===undefined?undefined:JSON.stringify(body),signal:AbortSignal.timeout(15000)});
+export async function api(path:string,method='GET',body?:unknown,timeout=15000){
+  const res=await fetch('/api/v1/'+path,{method,credentials:'same-origin',cache:'no-store',headers:{'Content-Type':'application/json','x-core-ai-csrf':csrf},body:body===undefined?undefined:JSON.stringify(body),signal:AbortSignal.timeout(timeout)});
   const value=await res.json().catch(()=>({detail:'Invalid server response.'}));
   if(!res.ok){const error=new Error(typeof value.detail==='string'?value.detail:'Request rejected. Check the fields.');Object.assign(error,{status:res.status});throw error;}
   if(method!=='GET'&&/^(projects|agents|models)(\/|$)/.test(path))sharedReads.clear();

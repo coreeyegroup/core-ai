@@ -1,4 +1,4 @@
-export const views=['Chat','Overview','Projects','Files','Agents','Tasks','Knowledge','Artifacts','Models','Tools','Integrations','Operations','Access','Capabilities','Workflows','Settings'] as const;
+export const views=['Chat','Overview','Projects','Files','Agents','Skills','Tasks','Knowledge','Artifacts','Models','Tools','Integrations','Operations','Access','Capabilities','Workflows','Settings'] as const;
 export type View=typeof views[number];
 export type Layout={version:1;workspace:'Build'|'Research'|'Operations';groups:View[][];paneIds:string[];active:View[];focus:number;axis:'row'|'column';left:boolean;right:boolean;bottom:boolean;leftWidth:number;rightWidth:number;bottomHeight:number;maximized:boolean};
 export const key='core-ai.workstation.layout.v2';

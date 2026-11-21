@@ -177,7 +177,7 @@ def structured(run, stopping, schema, instructions, payload, spec):
     with httpx.Client(timeout=min(30, float(seconds)), trust_env=False, follow_redirects=False) as client:
         with client.stream('POST', config['endpoint']+'/api/chat', json={
             'model': run['model'], 'stream': False, 'format': schema.model_json_schema(),
-            'messages': [{'role': 'system', 'content': instructions + '\nAgent guidance: ' + run['instructions'][:2000]},
+            'messages': [{'role': 'system', 'content': instructions + '\nAgent guidance: ' + run['instructions'][:2000] + run.get('skill_context', '')},
                          {'role': 'user', 'content': content}],
             'options': {'temperature': 0, 'num_ctx': run['context_tokens'],
                         'num_predict': spec.max_output_tokens},
@@ -412,7 +412,8 @@ def retry(conn, ident, user):
     agent = {'id': source['agent_id'], 'version': source['agent_version'], 'instructions': source['instructions'],
              'runtime_mode': source['runtime_mode'], 'tools': source['tools']}
     new_id = runs.enqueue(conn, project_id=source['project_id'], agent=agent, prompt=source['prompt'],
-                          model=source['model'], user_id=user['id'], retry_of=ident)
+                          model=source['model'], user_id=user['id'], retry_of=ident,
+                          skill_snapshot=(source.get('skill_context', ''), source.get('skill_versions', [])))
     spec = Specification.model_validate({**source['specification'], 'scheduled_for': None})
     create(conn, new_id, spec)
     return {'id': new_id}

@@ -1,3 +1,4 @@
+import {SkillVersions,type SkillVersion} from './Skills';
 import {createContext,useCallback,useContext,useEffect,useId,useRef,useState,type ReactNode,type FormEvent} from 'react';
 import Markdown from 'react-markdown';
 import {ChevronDown,ChevronRight,Ellipsis,MessageSquare,Pin,Plus,Search,X} from 'lucide-react';
@@ -10,7 +11,7 @@ import rehypeKatex from 'rehype-katex';
 import {ChatModelPicker,ChatPopover,ConversationDialog,isTextModel} from './ChatPopover';
 
 type Attachment={name:string;content:string;file_id?:string;status?:string};
-type Message={id:string;role:'user'|'assistant';content:string;sources?:{id:string;title:string}[];attachments:Attachment[];model:string|null;status:string;error:string|null;created_at:string};
+type Message={id:string;role:'user'|'assistant';content:string;skill_versions?:SkillVersion[];sources?:{id:string;title:string}[];attachments:Attachment[];model:string|null;status:string;error:string|null;created_at:string};
 type Conversation={id:string;title:string;model:string;mode:ChatDefaults['mode'];instructions:string;project_id:string|null;temperature:number;max_tokens:number;pinned:boolean;archived:boolean;updated_at:string;messages:Message[];generation:{id:string;status:string}|null};
 type Preferences=ChatDefaults&{model:string;instructions:string;project_id:string|null;agent_id?:string|null};
 type Draft={text:string;attachments:Attachment[];preferences?:Preferences};
@@ -464,6 +465,7 @@ export default function Chat({tick,visible=true,sendKey='Enter',chatDefaults=def
     {collapsed&&preview&&<div className="message-preview">{preview.slice(0,144)}</div>}
     <div className="message-content" id={bodyId} hidden={collapsed}>
      {user?<div className="user-text">{m.content}</div>:<MessageMarkdown text={m.content}/>}
+     <SkillVersions versions={m.skill_versions}/>
      {!!m.sources?.length&&<details className="message-sources">
       <summary>Project sources supplied to the model</summary>
       {m.sources.map(source=><button type="button" className="link" key={source.id} onClick={()=>window.dispatchEvent(new CustomEvent('core-ai-source',{detail:{id:source.id}}))}>{source.title}</button>)}

@@ -5,6 +5,15 @@ test('custom workbench navigates, splits and opens every implemented module',asy
  global.IS_REACT_ACT_ENVIRONMENT=true;dom.window.HTMLElement.prototype.scrollIntoView=function(){};
  const fetched=[];const overview={projects:1,agents:1,documents:0,runs:[],worker:{online:true},inference:{endpoint:'http://127.0.0.1:11434',model:'test:latest'},release:'test'};
  const responses={'chat/conversations?archived=false&q=':[],session:{username:'test-admin',role:'ADMIN',csrf:'csrf-test'},overview,projects:[{id:'project',name:'Project one',description:'',created_at:new Date().toISOString()}],agents:[{id:'agent',name:'Analyst',instructions:'Test',version:1,enabled:true}],models:{available:true,models:[{name:'test:latest',size:1000000},{name:'editor:latest',size:1000000}],config:overview.inference},runs:[],events:[],documents:[],artifacts:[],files:[],'library/artifacts':[],'access/users':[],capabilities:{features:[]},'operations/metrics':{tasks:[],chat:[],files:[]},tools:[],connections:[],'connections/webhook-destinations':[],'connections/key-storage':{available:true}};
+  const catalogCommit='a'.repeat(40);
+  const catalogRow={id:'collection',repository:'example/skills',git_ref:'HEAD',active_commit:null,latest_commit:catalogCommit};
+  responses.skills=[catalogRow];
+  responses['skills/collections/collection?commit='+catalogCommit]={
+   ...catalogRow,commit:catalogCommit,releases:[{commit_sha:catalogCommit,skill_count:1}],
+   skills:[{name:'review',description:'Review evidence',path:'review/SKILL.md',references:[]}],
+   excluded:[],changes:{added:['review/SKILL.md'],removed:[],changed:[]}
+  };
+  responses['skills/agents/agent']=[];
  let conversationCount=0;const writes=[],connectionWrites=[],researchWrites=[];const fetchOld=global.fetch;global.fetch=async(path,options={})=>{fetched.push(path);const key=path.replace('/api/v1/','');let result=responses[key==='models?catalog=true'?'models':key]??{};
   if(options.method==='POST'&&key==='runs'){
    const body=JSON.parse(options.body),id='research-1';
@@ -63,7 +72,7 @@ test('custom workbench navigates, splits and opens every implemented module',asy
   assert.ok(!surface.contains(document.querySelector('.library-picker-button')));
   assert.equal(model.nextElementSibling.getAttribute('aria-label'),'Send message');
   const ribbon=document.querySelector('[aria-label="Activity ribbon"]');
-  assert.equal(ribbon.querySelectorAll('button').length,16);
+  assert.equal(ribbon.querySelectorAll('button').length,17);
   assert.equal(ribbon.querySelector('[aria-current="page"]').getAttribute('aria-label'),'Chat');
   assert.ok(document.querySelector('.explorer-scroll .workspace-navigation'));
   assert.ok(document.querySelector('.explorer-scroll .history-scroll'));
@@ -187,8 +196,8 @@ test('custom workbench navigates, splits and opens every implemented module',asy
   assert.equal(document.querySelectorAll('.group').length,2);
   const openAll=[...document.querySelectorAll('.layout-menu button')].find(b=>b.textContent==='Open all panels');
   await act(async()=>{openAll.click();await new Promise(r=>setTimeout(r,30));});
-  assert.equal(document.querySelectorAll('[role="tab"]').length,16);
-  assert.equal(document.querySelectorAll('[role="tabpanel"]').length,16);
+  assert.equal(document.querySelectorAll('[role="tab"]').length,17);
+  assert.equal(document.querySelectorAll('[role="tabpanel"]').length,17);
   assert.ok(!document.body.textContent.includes('This panel could not render'));
   assert.ok(fetched.includes('/api/v1/projects')&&fetched.includes('/api/v1/connections'));
   const panes=()=>[...document.querySelectorAll('.group .chat-workspace')];
@@ -211,7 +220,7 @@ test('custom workbench navigates, splits and opens every implemented module',asy
   await add();
   assert.equal(tabs().length,initialTabs+1);
   assert.equal(document.querySelectorAll('.group').length,1);
-  assert.equal(document.querySelectorAll('[role="tab"]').length,16);
+  assert.equal(document.querySelectorAll('[role="tab"]').length,17);
   assert.ok(document.querySelector('#panel-0-Chat .chat-pane-strip'));
   await setChat('test:latest','research');
   await draft();
@@ -279,6 +288,18 @@ test('custom workbench navigates, splits and opens every implemented module',asy
   assert.ok(!connections().querySelector('[aria-label="Connection key"]'));
   await act(async()=>{connections().querySelector('.connection-list input[type="checkbox"]').click();});
   assert.equal(connections().querySelector('.connection-status').dataset.status,'Revoked');
+  await act(async()=>{window.dispatchEvent(new CustomEvent('core-ai-goto',{detail:{view:'Skills'}}));await wait();});
+  const skillsPanel=document.querySelector('.view:not([hidden]) .skills-page');
+  await act(async()=>{skillsPanel.querySelector('.record').click();await wait();});
+  const approve=[...skillsPanel.querySelectorAll('button')].find(button=>button.textContent==='Approve and activate');
+  assert.ok(approve);
+  await act(async()=>{approve.click();await wait();});
+  assert.ok(fetched.includes('/api/v1/skills/collections/collection/activate'));
+  await act(async()=>{change(skillsPanel.querySelector('section.form select'),'agent');await wait();});
+  await act(async()=>{skillsPanel.querySelector('.skill-assignment input').click();await wait();});
+  const assign=skillsPanel.querySelector('fieldset').closest('form');
+  await act(async()=>{assign.dispatchEvent(new dom.window.Event('submit',{bubbles:true,cancelable:true}));await wait();});
+  assert.equal(fetched.filter(path=>path==='/api/v1/skills/agents/agent').length,2);
   await act(async()=>{window.dispatchEvent(new CustomEvent('core-ai-goto',{detail:{view:'Workflows'}}));await wait();});
   const workflow=()=>document.querySelector('.view:not([hidden])');
   const researchForm=workflow().querySelector('.research-form');

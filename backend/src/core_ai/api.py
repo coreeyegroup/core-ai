@@ -347,6 +347,9 @@ def integrations(user: User):
 from .chat import router as chat_router
 app.include_router(chat_router)
 
+from .skills import router as skills_router
+app.include_router(skills_router)
+
 from .connections import router as connections_router
 app.include_router(connections_router)
 

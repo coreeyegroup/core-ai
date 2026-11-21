@@ -209,3 +209,23 @@ For session clients, use `POST /api/v1/runs` with the existing `project_id`, `ag
 - One-time schedules support a start time within 30 days. Queued work can delay execution, and the deadline still applies. Run deadlines include time spent queued or paused. Review has its own expiry. A job that never gets an eligible worker before its deadline fails explicitly.
 - Model metering displays provider-reported tokens accepted before each checkpoint. A call interrupted before receipt may still consume provider resources. A separate four-call attempt budget counts calls before contacting the provider.
 - The initial workflow uses project sources and private Ollama structured outputs. This release does not configure independent multi-agent hosts, remote model routing, recurring/event schedules, or external write tools. Verify the exact Ollama model and deployment for structured output support before relying on it operationally.
+
+## GitHub skill collections
+
+In **Build & automate → Skills**, an administrator can scan a public GitHub repository by
+owner/repo, branch, tag, or commit. CORE-AI discovers the collection's `SKILL.md` files
+and records the exact commit. Review its inventory and excluded skills before selecting
+**Approve and activate**. Re-scan the same repository/ref to review changes. Activate
+an older imported version to roll back. Import requires outbound HTTPS to GitHub's
+API and codeload hosts from the API server.
+
+Select an agent and save one or more collection assignments. In Chat, choose that agent
+under Advanced. In Tasks or Workflows, choose it in the run form. CORE-AI matches approved
+skill names and descriptions against the prompt and loads up to two instruction excerpts.
+Start a prompt with `/skill owner/repo:skill-name` to choose one explicitly. **Skills used**
+links to the exact versions used in chat replies and task details. Existing runs and
+research retries retain their original selection after a catalog update.
+
+The catalog imports instructions. Reference and asset links are available for review
+at the pinned commit. Bundle scripts, hooks, external tools, and host-specific plugins
+require their own execution environment. Agent tool permissions continue to apply.

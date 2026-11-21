@@ -5,6 +5,7 @@ import Connections from './Connections';
 import ProjectWorkspace,{type ProjectLocation} from './Projects';
 import Sources from './Sources';
 import Settings from './Settings';
+import Skills,{SkillVersions} from './Skills';
 import {FilesPanel,ArtifactLibrary,AccessPanel,CapabilitiesPanel,useResource,openArtifact} from './Workspace';
 import {useSession} from './Session';
 import {views,type View} from './layout';
@@ -27,6 +28,7 @@ export function Module({view,tick,refresh,go,appearance,changeAppearance,visible
   case 'Chat':return <Chat tick={tick} visible={visible} sendKey={appearance.sendKey} chatDefaults={appearance.chatDefaults}/>;
   case 'Overview':return <Overview tick={tick} go={go}/>;
   case 'Projects':return <ProjectWorkspace tick={tick} refresh={refresh} location={projectLocation} changeLocation={changeProjectLocation}/>;
+  case 'Skills':return <Skills tick={tick}/>;
   case 'Agents':return <Agents tick={tick} refresh={refresh}/>;
   case 'Tasks':return <Tasks tick={tick} refresh={refresh}/>;
   case 'Knowledge':return <Sources tick={tick} refresh={refresh}/>;
@@ -139,6 +141,7 @@ function Tasks({tick,refresh,researchOnly=false}:{tick:number;refresh:()=>void;r
     {detail.output&&<button onClick={()=>download(detail.output,'core-ai-'+id+'.md')}>Download result</button>}
    </div></header>
    <div className="meta">Agent v{detail.agent_version} · {detail.model} · {detail.id}</div>
+   <SkillVersions versions={detail.skill_versions}/>
    <p>{detail.prompt}</p><ErrorNote error={detail.error||''}/>
    {detail.research&&<ResearchDetails detail={detail} readonly={readonly||busy} action={action}/>}
    {detail.output?<><MessageMarkdown text={detail.output}/>

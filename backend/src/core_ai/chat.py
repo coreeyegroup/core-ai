@@ -8,6 +8,7 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field, field_validator, model_validator
 from psycopg.types.json import Jsonb
+from . import skills
 from . import auth, db, models, access, runs
 
 router = APIRouter(prefix='/api/v1/chat', tags=['chat'])
@@ -135,7 +136,10 @@ def enqueue(conn,ident,user,body):
     conn.execute('''INSERT INTO chat_generations(id,conversation_id,user_message_id,assistant_message_id,requested_by,request_id,request_digest,model,mode,instructions,project_id,temperature,max_tokens,status)
         VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'QUEUED')''',
         (generation,ident,question,answer,user['id'],body.request_id,digest,body.model,body.mode,body.instructions,body.project_id,body.temperature,body.max_tokens))
-    conn.execute('UPDATE chat_generations SET agent_id=%s,agent_instructions=%s WHERE id=%s',(body.agent_id,profile['instructions'] if profile else '',generation))
+    context, versions = skills.snapshot(conn, body.agent_id, body.content)
+    conn.execute('''UPDATE chat_generations SET agent_id=%s,agent_instructions=%s,skill_context=%s,
+                 skill_versions=%s WHERE id=%s''',
+                 (body.agent_id, profile['instructions'] if profile else '', context, Jsonb(versions), generation))
     conn.execute('UPDATE conversations SET agent_id=%s WHERE id=%s',(body.agent_id,ident))
     title=body.content.strip().splitlines()[0][:70] if count==0 and row['title']=='New chat' else row['title']
     conn.execute('''UPDATE conversations SET title=%s,model=%s,mode=%s,instructions=%s,project_id=%s,temperature=%s,max_tokens=%s,updated_at=now() WHERE id=%s''',
@@ -183,7 +187,12 @@ def conversation(ident:uuid.UUID,user=Depends(auth.session)):
         for source in sources:
             sources_by_message.setdefault(source['assistant_message_id'],[]).append(
                 {'id':source['id'],'title':source['title']})
+        skill_versions = conn.execute('''SELECT assistant_message_id,skill_versions FROM chat_generations
+            WHERE conversation_id=%s AND skill_versions <> '[]'::jsonb''', (ident,)).fetchall()
+        skills_by_message = {item['assistant_message_id']: item['skill_versions'] for item in skill_versions}
         for message in row['messages']:
+            if message['id'] in skills_by_message:
+                message['skill_versions'] = skills_by_message[message['id']]
             if message['id'] in sources_by_message:
                 message['sources']=sources_by_message[message['id']]
         row['generation']=conn.execute("SELECT id,status,model,created_at FROM chat_generations WHERE conversation_id=%s AND status IN ('QUEUED','RUNNING','CANCEL_REQUESTED')",(ident,)).fetchone()
@@ -351,6 +360,7 @@ def context(row):
     if not user:raise ValueError('The requesting account is inactive.')
     access.writer(user)
     if row.get('agent_instructions'):system+='\nAgent profile instructions:\n'+row['agent_instructions']
+    system += row.get('skill_context', '')
     if row['project_id']:
         with db.connect() as conn:p=access.project(conn,user,row['project_id'])
         system+='\nProject instructions:\n'+p['instructions']

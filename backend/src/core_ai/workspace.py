@@ -285,6 +285,7 @@ def capabilities(user=Depends(auth.session)):
         {'id':'artifacts','label':'Artifact editor','status':'implemented','reason':'Versioned Markdown, text, code and JSON with private/project access.'},
         {'id':'agent-tools','label':'Bounded agent tools','status':'implemented','reason':'Project inspection, knowledge retrieval and artifact creation. Requires a tools-capable model.'},
         {'id':'code-execution','label':'Repository execution','status':'planned','reason':'No qualified coding sandbox is configured. Host shell access is unavailable.'},
+        {'id':'skills','label':'GitHub skill collections','status':'implemented','reason':'Bulk discovery, pinned releases, agent assignments and run provenance for approved instructions.'},
         {'id':'workflows','label':'Durable project research','status':'implemented','reason':'Checkpointed research runs, source revisions and private report review.'},
         {'id':'scheduled-workflows','label':'Scheduled workflows','status':'planned','reason':'Scheduling and event-trigger adapters need separate configuration.'},
         {'id':'web','label':'Web research connectors','status':'planned','reason':'No external search connector is configured. Local source analysis is available.'},

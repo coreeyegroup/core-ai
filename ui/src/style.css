@@ -162,3 +162,17 @@
 .research-details dl{display:grid;grid-template-columns:auto minmax(0,1fr);gap:6px 14px;margin:0}
 .research-details dd{margin:0}
 .research-details blockquote{margin:6px 0 14px;padding-inline-start:12px;border-inline-start:2px solid var(--line)}
+
+.skill-workspace{display:grid;grid-template-columns:minmax(170px,240px) minmax(0,1fr);gap:10px;align-items:start;margin:10px 0}
+.skill-import{align-items:end;flex-wrap:wrap}
+.skill-import label,.skills-page .settings-content>label{display:grid;gap:3px}
+.skill-description{display:block}
+.skill-preview{margin-top:8px;border-top:1px solid var(--line)}
+.skill-preview pre{max-height:360px;overflow:auto;background:var(--canvas)}
+.skill-used{color:var(--muted);font-size:.9em;margin-top:6px}
+.skill-used ul{margin:4px 0}
+.skill-assignment{display:flex;gap:8px 14px;flex-wrap:wrap}
+.skill-assignment label{display:flex;align-items:center;gap:4px}
+@media(max-width:759px){.skill-workspace{grid-template-columns:minmax(0,1fr)}}
+
+.skill-table{max-height:420px;overflow:auto}
