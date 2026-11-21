@@ -28,7 +28,7 @@ def test_catalog_bulk_activation_update_rollback_and_run_provenance(signed, work
     assert skills.parse_skill('broken/SKILL.md', b'---\nname: []\ndescription: Invalid\n---\ntext') is None
     sha = 'a' * 40
     updated_sha = 'b' * 40
-    location = {'repository': 'https://github.com/example/skills', 'ref': 'main'}
+    location = {'repository': 'https://github.com/example/skills?utm_source=chatgpt.com#readme', 'ref': 'main'}
     monkeypatch.setattr(skills, 'fetch_collection', lambda repository, ref: (sha, discovered, []))
     imported = signed.post('/api/v1/skills/import', json=location)
     assert imported.status_code == 200, imported.text
@@ -76,3 +76,14 @@ def test_catalog_bulk_activation_update_rollback_and_run_provenance(signed, work
     auto_result = signed.get('/api/v1/runs/'+auto.json()['id']).json()['skill_versions']
     assert auto_result[0]['name'] == 'skill-001' and auto_result[0]['commit'] == sha
     assert len(auto_result) <= 2
+
+
+def test_repository_link_normalization():
+    assert skills.repository_name('https://github.com/obra/superpowers?utm_source=chatgpt.com') == 'obra/superpowers'
+    assert skills.repository_name('Obra/Superpowers') == 'obra/superpowers'
+    assert skills.repository_name('https://github.com/obra/superpowers.git/') == 'obra/superpowers'
+    for link in ('https://github.com.evil.example/obra/superpowers',
+                 'https://github.com@evil.example/obra/superpowers',
+                 'https://github.com/obra/superpowers/tree/main',
+                 'https://github.com//obra/superpowers', 'obra/..'):
+        assert skills.repository_name(link) is None

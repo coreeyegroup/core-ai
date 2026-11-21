@@ -5,7 +5,7 @@ import tarfile
 import time
 import uuid
 from typing import Annotated
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 import httpx
 import yaml
@@ -17,7 +17,7 @@ from . import access, auth, db
 
 router = APIRouter(prefix='/api/v1/skills')
 User = Annotated[dict, Depends(auth.session)]
-REPOSITORY = re.compile(r'(?:https://github\.com/)?([a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+)/?')
+REPOSITORY = re.compile(r'[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+')
 REF = re.compile(r'[a-zA-Z0-9_][a-zA-Z0-9._/-]{0,199}')
 SHA = re.compile(r'[0-9a-f]{40}')
 NAME = re.compile(r'[a-z0-9]+(?:-[a-z0-9]+)*')
@@ -126,14 +126,28 @@ def catalog(user: User):
     ''')
 
 
+def repository_name(value):
+    value = value.strip()
+    if '://' in value:
+        try:
+            url = urlsplit(value)
+        except ValueError:
+            return None
+        if url.scheme != 'https' or url.netloc.lower() != 'github.com':
+            return None
+        value = url.path.removeprefix('/')
+    value = value.removesuffix('/').removesuffix('.git')
+    if REPOSITORY.fullmatch(value) and all(part not in ('.', '..') for part in value.split('/')):
+        return value.lower()
+    return None
+
+
 @router.post('/import')
 def import_collection(body: Import, user: User):
     access.admin(user)
-    match = REPOSITORY.fullmatch(body.repository.strip().removesuffix('.git'))
-    if (not match or any(part in ('.', '..') for part in match[1].split('/'))
-            or not REF.fullmatch(body.ref) or '..' in body.ref):
+    repository = repository_name(body.repository)
+    if not repository or not REF.fullmatch(body.ref) or '..' in body.ref:
         raise HTTPException(422, 'Enter a public GitHub owner/repository and a valid branch, tag, or commit.')
-    repository = match[1].lower()
     try:
         sha, skills, invalid = fetch_collection(repository, body.ref)
     except (httpx.HTTPError, ValueError, tarfile.TarError, OSError, EOFError):
