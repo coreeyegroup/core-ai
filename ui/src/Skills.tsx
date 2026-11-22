@@ -3,6 +3,7 @@ import {api} from './api';
 import {useSession} from './Session';
 import {useResource} from './Workspace';
 import type {View} from './layout';
+import type {SkillSetup} from './AgentSetup';
 import {collectionTitle,matchesSkill,skillPurpose,skillTitle} from './skillLabels';
 
 export type SkillVersion = {repository: string; commit: string; path: string; name: string; shortened: boolean};
@@ -32,7 +33,7 @@ export function SkillVersions({versions}: {versions?: SkillVersion[]}) {
  </details>;
 }
 
-export default function Skills({tick,refreshWorkspace,go}: {tick: number; refreshWorkspace:()=>void; go:(view:View)=>void}) {
+export default function Skills({tick,refreshWorkspace,go,setup}: {tick: number; refreshWorkspace:()=>void; go:(view:View)=>void; setup?:SkillSetup}) {
  const {role} = useSession();
  const [step,setStep] = useState<'import'|'review'|'assign'|null>(null);
  const [query,setQuery] = useState('');
@@ -51,13 +52,23 @@ export default function Skills({tick,refreshWorkspace,go}: {tick: number; refres
  const shown = step ?? (canImport && data && !rows.length ? 'import' : 'review');
  const defaultCollection = rows.find(row=>row.active_commit) ?? rows[0];
  const opened = selection ?? (defaultCollection ? {id:defaultCollection.id,commit:defaultCollection.active_commit??defaultCollection.latest_commit} : null);
+ const [returnToSetup,setReturnToSetup]=useState(false);
+ useEffect(()=>{
+  if(!setup||!canImport)return;
+  setRepository(setup.repository);setRef(setup.collection?.git_ref??'main');
+  setReturnToSetup(true);setScan(null);setError('');
+  if(setup.collection){
+   setSelection({id:setup.collection.id,commit:setup.collection.latest_commit});
+   setStep('review');
+  }else setStep('import');
+ },[setup,canImport]);
  const activeCount = rows.filter(row=>row.active_commit).length;
  const pendingCount = rows.filter(row=>row.active_commit!==row.latest_commit).length;
  const filtered = rows.filter(row=>(collectionTitle(row.repository)+' '+row.repository).toLowerCase().includes(query.trim().toLowerCase()) &&
   (!pendingOnly || row.active_commit!==row.latest_commit));
  async function action(operation: () => Promise<void>) {
   setBusy(true);setError('');
-  try {await operation();refresh(value => value+1);}
+  try {await operation();refresh(value => value+1);if(returnToSetup)refreshWorkspace();}
   catch (err) {setError((err as Error).message);}
   finally {setBusy(false);}
  }
@@ -74,6 +85,7 @@ export default function Skills({tick,refreshWorkspace,go}: {tick: number; refres
  return <section className="page skills-page">
   <header className="page-head"><div><h1>Skills</h1><p>Find a skill by task. Open Chat for a one-time choice, or set up an agent with reusable collections.</p></div>
    <div className="actions">
+    {returnToSetup&&<button type="button" onClick={()=>{setReturnToSetup(false);go('Setup');}}>Back to setup</button>}
     <button type="button" onClick={()=>go('Agents')}>Open Agents</button>
     <button type="button" className="primary" onClick={()=>go('Chat')}>Open Chat</button>
    </div>
@@ -244,8 +256,8 @@ function Assignments({rows,tick,refreshWorkspace,go,suggestedCollection}: {sugge
  </section>;
 }
 
-export function AgentCollections({agent,rows,tick,readonly=false,onDirtyChange,onSaved,onReview,suggestedCollection}: {
- agent:string;rows:Collection[];tick:number;readonly?:boolean;suggestedCollection?:string;onDirtyChange:(dirty:boolean)=>void;onSaved?:()=>void;onReview?:()=>void;
+export function AgentCollections({agent,rows,tick,readonly=false,onDirtyChange,onSaved,onReview,suggestedCollection,onSelectionSaved}: {
+ agent:string;rows:Collection[];tick:number;readonly?:boolean;suggestedCollection?:string;onSelectionSaved?:(ids:string[])=>void;onDirtyChange:(dirty:boolean)=>void;onSaved?:()=>void;onReview?:()=>void;
 }) {
  const {data,error} = useResource('skills/agents/'+agent,tick);
  const [saved,setSaved] = useState<string[] | null>(null);
@@ -258,7 +270,7 @@ export function AgentCollections({agent,rows,tick,readonly=false,onDirtyChange,o
  const initialized = useRef(false);
  useEffect(() => {
   if (!Array.isArray(data)) return;
-  setSaved(data);
+  setSaved(data);onSelectionSaved?.(data);
   if (!initialized.current && suggestedCollection && suggestedActive && !readonly) {
    initialized.current = true;
    if (!data.includes(suggestedCollection)) {
@@ -266,7 +278,7 @@ export function AgentCollections({agent,rows,tick,readonly=false,onDirtyChange,o
     onDirtyChange(true);
    }
   }
- },[data,onDirtyChange,readonly,suggestedActive,suggestedCollection]);
+ },[data,onDirtyChange,onSelectionSaved,readonly,suggestedActive,suggestedCollection]);
  const selected = draft??saved;
  if (!selected) return <p role={error?'alert':undefined}>{error || 'Loading assignments…'}</p>;
  const active = rows.filter(row=>readonly?selected.includes(row.id):row.active_commit || selected.includes(row.id) || saved?.includes(row.id));
@@ -278,7 +290,7 @@ export function AgentCollections({agent,rows,tick,readonly=false,onDirtyChange,o
   setBusy(true);setStatus('');setFailure('');
   try {
    await api('skills/agents/'+agent,'PUT',{collections:draft});
-   setSaved(draft);setDraft(null);onDirtyChange(false);setStatus('Assignments saved.');
+   setSaved(draft);setDraft(null);onDirtyChange(false);onSelectionSaved?.(draft);setStatus('Assignments saved.');
   } catch (err) {setFailure((err as Error).message);}
   finally {setBusy(false);}
  }}>

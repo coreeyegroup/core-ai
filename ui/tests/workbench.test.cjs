@@ -17,27 +17,51 @@ test('custom workbench navigates, splits and opens every implemented module',asy
   const chatSkill={name:'systematic-debugging',description:'Review evidence',repository:'example/skills',collection_id:'collection',commit:catalogCommit,path:'systematic-debugging/SKILL.md'};
   responses['skills/chat/preview']={available:[chatSkill],automatic:[chatSkill],error:''};
   responses['skills/agents/new-agent']=[];
+  const forexCommit='b'.repeat(40);
+  const forexCollection={...catalogRow,id:'forex',repository:'marian2js/trading-skills',git_ref:'main',latest_commit:forexCommit};
+  responses['skills/collections/forex?commit='+forexCommit]={
+   ...forexCollection,commit:forexCommit,releases:[{commit_sha:forexCommit,skill_count:1}],
+   skills:[{name:'macro-event-analysis',description:'Explain macro events',path:'macro-event-analysis/SKILL.md',references:[]}],
+   excluded:[],changes:{added:['macro-event-analysis/SKILL.md'],removed:[],changed:[]}
+  };
  let conversationCount=0,agentCount=0;const writes=[],connectionWrites=[],researchWrites=[],assignmentWrites=[];const fetchOld=global.fetch;global.fetch=async(path,options={})=>{fetched.push(path);const key=path.replace('/api/v1/','');let result=responses[key==='models?catalog=true'?'models':key]??{};
   if(options.method==='POST'&&key==='agents'){
-   result={id:++agentCount===1?'new-agent':'studio-agent'};
+   result={id:['new-agent','studio-agent','guided-agent'][agentCount++]};
    responses['skills/agents/'+result.id]=[];
    responses.agents=[...responses.agents,{...JSON.parse(options.body),id:result.id,enabled:true,version:1}];
   }
   if(options.method==='POST'&&key==='skills/import'){
-   assert.deepEqual(JSON.parse(options.body),{repository:'example/skills',ref:'HEAD'});
-   result={id:'collection',commit:catalogCommit,count:1,invalid:['draft/SKILL.md']};
+   const body=JSON.parse(options.body);
+   if(body.repository===forexCollection.repository){
+    assert.equal(body.ref,'main');
+    responses.skills=[...responses.skills,forexCollection];
+    result={id:'forex',commit:forexCommit,count:1,invalid:[]};
+   }else{
+    assert.deepEqual(body,{repository:'example/skills',ref:'HEAD'});
+    result={id:'collection',commit:catalogCommit,count:1,invalid:['draft/SKILL.md']};
+   }
   }
   if(options.method==='PUT'&&key==='skills/collections/collection/activate'){
    assert.deepEqual(JSON.parse(options.body),{commit:catalogCommit,expected_commit:null});
    catalogRow.active_commit=catalogCommit;
    responses['skills/collections/collection?commit='+catalogCommit].active_commit=catalogCommit;
   }
+  if(options.method==='PUT'&&key==='skills/collections/forex/activate'){
+   forexCollection.active_commit=forexCommit;
+   responses['skills/collections/forex?commit='+forexCommit].active_commit=forexCommit;
+  }
   if(options.method==='PUT'&&key.startsWith('skills/agents/')){
    const body=JSON.parse(options.body);
    assignmentWrites.push(body.collections);
    responses[key]=body.collections;
   }
-  if(options.method==='POST'&&key==='runs'){
+  if(options.method==='POST'&&key==='runs'&&!JSON.parse(options.body).research){
+   const body=JSON.parse(options.body),id='guided-task';
+   responses['runs/'+id]={...body,id,status:'QUEUED',agent_version:1,events:[]};
+   responses.runs=[responses['runs/'+id],...responses.runs];
+   result={id};
+  }
+  if(options.method==='POST'&&key==='runs'&&JSON.parse(options.body).research){
    const body=JSON.parse(options.body),id='research-1';
    researchWrites.push(body);
    const draft='# Evidence report';
@@ -94,7 +118,7 @@ test('custom workbench navigates, splits and opens every implemented module',asy
   assert.ok(!surface.contains(document.querySelector('.library-picker-button')));
   assert.equal(model.nextElementSibling.getAttribute('aria-label'),'Send message');
   const ribbon=document.querySelector('[aria-label="Activity ribbon"]');
-  assert.equal(ribbon.querySelectorAll('button').length,17);
+  assert.equal(ribbon.querySelectorAll('button').length,18);
   assert.equal(ribbon.querySelector('[aria-current="page"]').getAttribute('aria-label'),'Chat');
   assert.ok(document.querySelector('.explorer-scroll .workspace-navigation'));
   assert.ok(document.querySelector('.explorer-scroll .history-scroll'));
@@ -218,8 +242,8 @@ test('custom workbench navigates, splits and opens every implemented module',asy
   assert.equal(document.querySelectorAll('.group').length,2);
   const openAll=[...document.querySelectorAll('.layout-menu button')].find(b=>b.textContent==='Open all panels');
   await act(async()=>{openAll.click();await new Promise(r=>setTimeout(r,30));});
-  assert.equal(document.querySelectorAll('[role="tab"]').length,17);
-  assert.equal(document.querySelectorAll('[role="tabpanel"]').length,17);
+  assert.equal(document.querySelectorAll('[role="tab"]').length,18);
+  assert.equal(document.querySelectorAll('[role="tabpanel"]').length,18);
   assert.ok(!document.body.textContent.includes('This panel could not render'));
   assert.ok(fetched.includes('/api/v1/projects')&&fetched.includes('/api/v1/connections'));
   const panes=()=>[...document.querySelectorAll('.group .chat-workspace')];
@@ -242,7 +266,7 @@ test('custom workbench navigates, splits and opens every implemented module',asy
   await add();
   assert.equal(tabs().length,initialTabs+1);
   assert.equal(document.querySelectorAll('.group').length,1);
-  assert.equal(document.querySelectorAll('[role="tab"]').length,17);
+  assert.equal(document.querySelectorAll('[role="tab"]').length,18);
   assert.ok(document.querySelector('#panel-0-Chat .chat-pane-strip'));
   await setChat('test:latest','research');
   await draft();
@@ -397,5 +421,45 @@ test('custom workbench navigates, splits and opens every implemented module',asy
   assert.match(workflow().querySelector('.research-review').textContent,/Evidence report/);
   await act(async()=>{[...workflow().querySelectorAll('button')].find(button=>button.textContent==='Approve and save').click();await wait();});
   assert.ok([...workflow().querySelectorAll('button')].some(button=>button.textContent==='Open saved artifact'));
+  const navigate=async view=>act(async()=>{window.dispatchEvent(new CustomEvent('core-ai-goto',{detail:{view}}));await wait();});
+  await navigate('Setup');
+  const setup=()=>document.querySelector('.view:not([hidden]) .setup-page');
+  const task=()=>document.querySelector('.view:not([hidden]) [aria-label=Tasks], .view:not([hidden]):is([aria-label=Tasks])');
+  assert.match(setup().querySelector('[aria-current=step]').textContent,/Choose an agent/);
+  const template=setup().querySelector('select');
+  assert.deepEqual([...template.options].map(option=>option.textContent),['International Forex','India F&O','Strategy validation','Custom agent']);
+  await act(async()=>{change(template,'india');});
+  assert.match(setup().querySelector('textarea').value,/Indian F&O/);
+  await act(async()=>{change(template,'forex');submit(setup());await wait();});
+  assert.match(setup().querySelector('[aria-current=step]').textContent,/Attach skills/);
+  await act(async()=>{button(setup(),'Open import form').click();await wait();});
+  assert.equal(skillsPanel.querySelector('.skill-import-grid input').value,'marian2js/trading-skills');
+  await act(async()=>{submit(skillsPanel);await wait();});
+  await act(async()=>{button(skillsPanel,'Approve and activate').click();await wait();});
+  await act(async()=>{button(skillsPanel,'Back to setup').click();await wait();});
+  const assignment=setup().querySelector('.collection-assignment-form');
+  assert.ok([...assignment.querySelectorAll('label')].find(label=>label.textContent.includes('marian2js/trading-skills')).querySelector('input').checked);
+  await act(async()=>{submit(setup());await wait();});
+  assert.deepEqual(assignmentWrites.at(-1),['forex']);
+  await act(async()=>{button(setup(),'Continue to start work').click();});
+  const oldWrites=writes.length;
+  await act(async()=>{button(setup(),'Open test chat').click();await wait();});
+  assert.equal(chat().querySelector('[aria-label="Chat agent profile"]').value,'guided-agent');
+  assert.match(chat().querySelector('[aria-label="Message CORE-AI"]').value,/EURUSD and USDJPY/);
+  assert.equal(writes.length,oldWrites);
+  await navigate('Tasks');
+  const taskPrompt=()=>task().querySelector('textarea[name=prompt]');
+  taskPrompt().value='Keep this unfinished task';
+  await navigate('Setup');
+  await act(async()=>{button(setup(),'Open task form').click();await wait();});
+  assert.equal(taskPrompt().value,'Keep this unfinished task');
+  await act(async()=>{button(task(),'Use setup draft').click();});
+  assert.equal(task().querySelector('select[name=agent_id]').value,'guided-agent');
+  assert.match(taskPrompt().value,/EURUSD and USDJPY/);
+  change(task().querySelector('select[name=model]'),'test:latest');
+  await act(async()=>{submit(task());await wait();});
+  assert.equal(responses['runs/guided-task'].project_id,'project');
+  assert.equal(responses['runs/guided-task'].agent_id,'guided-agent');
+  assert.match(task().querySelector('.result').textContent,/Task result.*QUEUED/);
  }finally{await act(async()=>root.unmount());global.fetch=fetchOld;delete global.IS_REACT_ACT_ENVIRONMENT;for(const k of Object.keys(old)){if(old[k])Object.defineProperty(global,k,old[k]);else delete global[k];}if(locationOld)Object.defineProperty(global,'location',locationOld);else delete global.location;dom.window.close();}
 });

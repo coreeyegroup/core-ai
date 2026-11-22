@@ -6,6 +6,7 @@ import Connections from './Connections';
 import ProjectWorkspace,{type ProjectLocation} from './Projects';
 import Sources from './Sources';
 import Settings from './Settings';
+import AgentSetup,{type RunSetup,type SkillSetup} from './AgentSetup';
 import Skills,{AgentCollections,SkillVersions,type Collection} from './Skills';
 import {FilesPanel,ArtifactLibrary,AccessPanel,CapabilitiesPanel,useResource,openArtifact} from './Workspace';
 import {useSession} from './Session';
@@ -21,23 +22,27 @@ const when=(v:string|null)=>v?new Date(v).toLocaleString():'—';
 export function ErrorNote({error}:{error:string}){return error?<div className="error" role="alert">{error}</div>:null;}
 function Empty({children}:{children:React.ReactNode}){return <div className="empty">{children}</div>;}
 function Status({value}:{value:string}){return <span className={'state '+value.toLowerCase()}>{value.replaceAll('_',' ')}</span>;}
-export function Module({view,tick,refresh,go,appearance,changeAppearance,visible,projectLocation,changeProjectLocation}:{projectLocation:ProjectLocation;changeProjectLocation:(location:ProjectLocation)=>void;view:View;visible?:boolean;tick:number;refresh:()=>void;go:(v:View)=>void;appearance:Appearance;changeAppearance:(p:Partial<Appearance>)=>void}){
+export function Module({view,tick,refresh,go,appearance,changeAppearance,visible,projectLocation,changeProjectLocation,setupLaunch,launchSetup,openSetupChat}:{
+ setupLaunch?:{skills?:SkillSetup;task?:RunSetup};
+ launchSetup:(view:'Skills'|'Tasks',payload:{skills:SkillSetup}|{task:RunSetup})=>void;
+ openSetupChat:(setup:RunSetup)=>boolean;projectLocation:ProjectLocation;changeProjectLocation:(location:ProjectLocation)=>void;view:View;visible?:boolean;tick:number;refresh:()=>void;go:(v:View)=>void;appearance:Appearance;changeAppearance:(p:Partial<Appearance>)=>void}){
  const lastVisibleTick=useRef(tick);
  if(visible!==false)lastVisibleTick.current=tick;
  tick=lastVisibleTick.current;
  switch(view){
-  case 'Chat':return <Chat tick={tick} visible={visible} sendKey={appearance.sendKey} chatDefaults={appearance.chatDefaults}/>;
+  case 'Chat':return <Chat onSetup={()=>go('Setup')} tick={tick} visible={visible} sendKey={appearance.sendKey} chatDefaults={appearance.chatDefaults}/>;
+  case 'Setup':return <AgentSetup tick={tick} refresh={refresh} go={go} openSkills={skills=>launchSetup('Skills',{skills})} openTask={task=>launchSetup('Tasks',{task})} openChat={openSetupChat}/>;
   case 'Overview':return <Overview tick={tick} go={go}/>;
   case 'Projects':return <ProjectWorkspace tick={tick} refresh={refresh} location={projectLocation} changeLocation={changeProjectLocation}/>;
-  case 'Skills':return <Skills tick={tick} refreshWorkspace={refresh} go={go}/>;
+  case 'Skills':return <Skills tick={tick} refreshWorkspace={refresh} go={go} setup={setupLaunch?.skills}/>;
   case 'Agents':return <Agents tick={tick} refresh={refresh} go={go}/>;
-  case 'Tasks':return <Tasks tick={tick} refresh={refresh}/>;
+  case 'Tasks':return <Tasks tick={tick} refresh={refresh} go={go} setup={setupLaunch?.task}/>;
   case 'Knowledge':return <Sources tick={tick} refresh={refresh}/>;
   case 'Artifacts':return <ArtifactLibrary tick={tick} refresh={refresh}/>;
   case 'Files':return <FilesPanel tick={tick} refresh={refresh}/>;
   case 'Access':return <AccessPanel tick={tick} refresh={refresh}/>;
   case 'Capabilities':return <CapabilitiesPanel tick={tick}/>;
-  case 'Workflows':return <Tasks tick={tick} refresh={refresh} researchOnly/>;
+  case 'Workflows':return <Tasks tick={tick} refresh={refresh} go={go} researchOnly/>;
   case 'Models':return <Models tick={tick} refresh={refresh}/>;
   case 'Tools':return <Tools tick={tick}/>;
   case 'Integrations':return <Connections tick={tick} visible={visible}/>;
@@ -49,7 +54,7 @@ function PageHead({title,subtitle,children}:{title:string;subtitle:string;childr
 function Overview({tick,go}:{tick:number;go:(v:View)=>void}){
  const {data:d,error}=useData('overview',tick);
  const pending=d?.runs.filter((r:Row)=>['QUEUED','RUNNING','CANCEL_REQUESTED'].includes(r.status)).reduce((n:number,r:Row)=>n+Number(r.n),0);
- return <section className="page"><PageHead title="Overview" subtitle="Workspace activity and service readiness."/><ErrorNote error={error}/><div className="metric-grid">{[['Projects',d?.projects,'Projects'],['Agents',d?.agents,'Agents'],['Active tasks',pending,'Tasks'],['Knowledge documents',d?.documents,'Knowledge']].map(([label,n,v])=><button className="metric" key={label} onClick={()=>go(v as View)}><small>{label}</small><strong>{n??'—'}</strong><ArrowUpRight className="metric-link" size={14} aria-hidden="true"/></button>)}</div><div className="overview-grid"><section className="box"><header>Runtime readiness</header><div className="readiness"><div><span className={'dot '+(d?.worker?.online?'ready':'')}/><b>Task worker</b><span>{d?d.worker?.online?'Online · one inference slot':'Offline or heartbeat stale':'Checking…'}</span></div><div><span className="dot"/><b>Model provider</b><span>{d?.inference.endpoint??'Checking…'}</span><button onClick={()=>go('Models')}>Inspect models</button></div><div><b>Product interfaces</b><span>Independent operation · no connectors required</span><button onClick={()=>go('Integrations')}>Interfaces</button></div></div></section><section className="box"><header>Your workspace</header><div className="pipeline">{(['Projects','Agents','Knowledge','Tasks','Artifacts'] as View[]).map((v,i)=><button key={v} onClick={()=>go(v)}><b>{v}</b><span>{['Define the work','Set instructions','Add project sources','Queue and inspect','Review outputs'][i]}</span></button>)}</div></section></div><div className="two-col overview-notes"><section className="box"><header>Execution boundary</header><p>This release supports local model generation and bounded project tools. Each task records its agent version, tool events and result. Host commands and product actions are unavailable.</p></section><section className="box"><header>Workspace controls</header><p>Use Ctrl K to find a panel or command. Open views together, split your workspace, pin tabs and detach a workspace into its own window.</p><button onClick={()=>go('Tasks')}>Create a task →</button></section></div></section>;
+ return <section className="page"><PageHead title="Overview" subtitle="Workspace activity and service readiness."><button onClick={()=>go('Setup')}>Get started</button></PageHead><ErrorNote error={error}/><div className="metric-grid">{[['Projects',d?.projects,'Projects'],['Agents',d?.agents,'Agents'],['Active tasks',pending,'Tasks'],['Knowledge documents',d?.documents,'Knowledge']].map(([label,n,v])=><button className="metric" key={label} onClick={()=>go(v as View)}><small>{label}</small><strong>{n??'—'}</strong><ArrowUpRight className="metric-link" size={14} aria-hidden="true"/></button>)}</div><div className="overview-grid"><section className="box"><header>Runtime readiness</header><div className="readiness"><div><span className={'dot '+(d?.worker?.online?'ready':'')}/><b>Task worker</b><span>{d?d.worker?.online?'Online · one inference slot':'Offline or heartbeat stale':'Checking…'}</span></div><div><span className="dot"/><b>Model provider</b><span>{d?.inference.endpoint??'Checking…'}</span><button onClick={()=>go('Models')}>Inspect models</button></div><div><b>Product interfaces</b><span>Independent operation · no connectors required</span><button onClick={()=>go('Integrations')}>Interfaces</button></div></div></section><section className="box"><header>Your workspace</header><div className="pipeline">{(['Projects','Agents','Knowledge','Tasks','Artifacts'] as View[]).map((v,i)=><button key={v} onClick={()=>go(v)}><b>{v}</b><span>{['Define the work','Set instructions','Add project sources','Queue and inspect','Review outputs'][i]}</span></button>)}</div></section></div><div className="two-col overview-notes"><section className="box"><header>Execution boundary</header><p>This release supports local model generation and bounded project tools. Each task records its agent version, tool events and result. Host commands and product actions are unavailable.</p></section><section className="box"><header>Workspace controls</header><p>Use Ctrl K to find a panel or command. Open views together, split your workspace, pin tabs and detach a workspace into its own window.</p><button onClick={()=>go('Tasks')}>Create a task →</button></section></div></section>;
 }
 type AgentProfile = {name:string;instructions:string;enabled:boolean;runtime_mode:string;tools:string[]};
 type AgentRecord = AgentProfile & {id:string;version:number};
@@ -98,7 +103,7 @@ function Agents({tick,refresh,go}:{tick:number;refresh:()=>void;go:(view:View)=>
  }
  return <section className="page agents-page">
   <PageHead title="Agents" subtitle="Set up an agent, attach skill collections, and use it in Chat.">
-   <div className="actions"><button type="button" onClick={()=>go('Skills')}>Open Skills</button>
+   <div className="actions"><button type="button" onClick={()=>go('Setup')}>Guided setup</button><button type="button" onClick={()=>go('Skills')}>Open Skills</button>
     {!readonly&&<button type="button" className="primary" disabled={busy} onClick={()=>open(null)}>New agent</button>}</div>
   </PageHead>
   <ErrorNote error={error}/>
@@ -147,11 +152,36 @@ function Agents({tick,refresh,go}:{tick:number;refresh:()=>void;go:(view:View)=>
   </div>
  </section>;
 }
-function Tasks({tick,refresh,researchOnly=false}:{tick:number;refresh:()=>void;researchOnly?:boolean}){
+function Tasks({tick,refresh,go,researchOnly=false,setup}:{tick:number;refresh:()=>void;go:(view:View)=>void;researchOnly?:boolean;setup?:RunSetup}){
  const readonly=useSession().role==='VIEWER';
  const {data:projects}=useData('projects',tick),{data:agents}=useData('agents',tick),{data:models}=useData('models',tick),{data:runs,error}=useData('runs',tick);
  const [id,setId]=useState(''),{data:detail,error:detailError}=useData(id?'runs/'+id:'runs',tick);
  const [err,setErr]=useState(''),[busy,setBusy]=useState(false),[research,setResearch]=useState(researchOnly),[calcs,setCalcs]=useState<number[]>([]);
+ const formRef=useRef<HTMLFormElement>(null);
+ const detailsRef=useRef<HTMLDetailsElement>(null);
+ const applied=useRef<RunSetup>(null);
+ const [pendingSetup,setPendingSetup]=useState<RunSetup|null>(null);
+ const availableProjects=projects?.filter((project:Row)=>!project.archived_at);
+ const enabled=agents?.filter((agent:Row)=>agent.enabled);
+ function applySetup(value:RunSetup){
+  const fields=formRef.current?.elements;
+  if(!fields)return;
+  (fields.namedItem('agent_id') as HTMLSelectElement).value=value.agentId;
+  (fields.namedItem('prompt') as HTMLTextAreaElement).value=value.prompt;
+  const project=fields.namedItem('project_id') as HTMLSelectElement;
+  const model=fields.namedItem('model') as HTMLSelectElement;
+  if(!project.value&&project.options.length===2)project.selectedIndex=1;
+  if(!model.value&&model.options.length===2)model.selectedIndex=1;
+  setPendingSetup(null);
+ }
+ useEffect(()=>{
+  if(!setup||applied.current===setup||!Array.isArray(agents))return;
+  applied.current=setup;
+  if(detailsRef.current)detailsRef.current.open=true;
+  const fields=formRef.current?.elements;
+  if(fields&&(fields.namedItem('prompt') as HTMLTextAreaElement).value.trim())setPendingSetup(setup);
+  else applySetup(setup);
+ },[setup,agents,projects,models]);
  async function submit(e:FormEvent<HTMLFormElement>){
   e.preventDefault();
   const form=e.currentTarget,f=new FormData(form),field=(name:string)=>String(f.get(name)??'');
@@ -175,18 +205,21 @@ function Tasks({tick,refresh,researchOnly=false}:{tick:number;refresh:()=>void;r
   catch(e){setErr((e as Error).message);}
   finally{setBusy(false);}
  }
- const enabled=agents?.filter((a:Row)=>a.enabled);
  return <section className="page">
-  <PageHead title={researchOnly?'Workflows':'Tasks'} subtitle={researchOnly?'Project research with cited evidence, checkpoints, and review.':'Queue work and inspect the recorded result.'}/>
+  <PageHead title={researchOnly?'Workflows':'Tasks'} subtitle={researchOnly?'Project research with cited evidence, checkpoints, and review.':'Queue work and inspect the recorded result.'}>{!researchOnly&&<button onClick={()=>go('Setup')}>Guided setup</button>}</PageHead>
   <ErrorNote error={err||error||detailError}/>
-  <details className="box" open={!id}><summary>{researchOnly?'New research run':'New task'}</summary>
-   <form className="form research-form" onSubmit={submit}>
+  <details ref={detailsRef} className="box" open={!id}><summary>{researchOnly?'New research run':'New task'}</summary>
+   <form ref={formRef} className="form research-form" onSubmit={submit}>
+    {pendingSetup&&<div className="actions setup-task-note"><p>Use the guided agent and sample prompt in this form?</p><button type="button" onClick={()=>applySetup(pendingSetup)}>Use setup draft</button><button type="button" onClick={()=>setPendingSetup(null)}>Keep current draft</button></div>}
+    {setup&&!pendingSetup&&<p className="panel-note">Review the selected agent, choose a project and model, and add your inputs before queuing.</p>}
+    {!readonly&&Array.isArray(availableProjects)&&!availableProjects.length&&<div className="actions setup-task-note"><p>A task needs an active project.</p><button type="button" onClick={()=>go('Projects')}>Open Projects</button></div>}
+    {!readonly&&Array.isArray(enabled)&&!enabled.length&&<div className="actions setup-task-note"><p>A task needs an enabled agent.</p><button type="button" onClick={()=>go('Setup')}>Set up an agent</button></div>}
     <div className="fields task-fields">
-     <label>Project<select name="project_id" required defaultValue=""><option value="" disabled>Select project</option>{projects?.filter((p:Row)=>!p.archived_at).map((p:Row)=><option key={p.id} value={p.id}>{p.name}</option>)}</select></label>
+     <label>Project<select name="project_id" required defaultValue=""><option value="" disabled>Select project</option>{availableProjects?.map((p:Row)=><option key={p.id} value={p.id}>{p.name}</option>)}</select></label>
      <label>Agent<select name="agent_id" required defaultValue=""><option value="" disabled>Select agent</option>{enabled?.map((p:Row)=><option key={p.id} value={p.id}>{p.name} · v{p.version}</option>)}</select></label>
      <label>Model<select name="model" required defaultValue=""><option value="" disabled>Select model</option>{models?.models.map((p:Row)=><option key={p.name}>{p.name}</option>)}</select></label>
     </div>
-    {models&&!models.available&&<p className="warn">Model host is offline. Open Models to inspect the connection.</p>}
+    {models&&(!models.available||!models.models?.length)&&<div className="actions setup-task-note"><p className="warn">{models.available?'No models are available.':'The model host is offline.'}</p><button type="button" onClick={()=>go('Models')}>Open Models</button></div>}
     {!researchOnly&&<label>Execution<select value={research?'research':'agent'} onChange={e=>setResearch(e.target.value==='research')}><option value="agent">Agent settings</option><option value="research">Durable research</option></select></label>}
     <label>{research?'Research goal':'Task instructions'}<textarea name="prompt" rows={4} required maxLength={20000} placeholder="Describe the work and the expected result…"/></label>
     {research&&<>
@@ -211,17 +244,9 @@ function Tasks({tick,refresh,researchOnly=false}:{tick:number;refresh:()=>void;r
      </details>
      <label className="checkbox-label"><input type="checkbox" name="require_review" defaultChecked/>Review before saving the private report</label>
     </>}
-    <button className="primary" disabled={busy||readonly||!projects?.length||!enabled?.length||!models?.available}>{research?'Queue research':'Queue task'}</button>
+    <button className="primary" disabled={busy||readonly||!availableProjects?.length||!enabled?.length||!models?.available||!models?.models.length}>{research?'Queue research':'Queue task'}</button>
    </form>
   </details>
-  <section className="box"><header>{researchOnly?'Research runs':'Recent tasks'} <span>Latest 100</span></header>
-   <div className="table-scroll"><table><thead><tr><th>Task</th><th>Project / agent</th><th>Model</th><th>Status</th><th>Created</th></tr></thead>
-    <tbody>{runs?.filter((r:Row)=>!researchOnly||r.research_phase).map((r:Row)=><tr key={r.id} aria-selected={r.id===id}>
-     <td><button className="link" onClick={()=>setId(r.id)}>{r.prompt.slice(0,70)}</button></td><td>{r.project}<small className="block">{r.agent}</small></td>
-     <td>{r.model}</td><td><Status value={r.status}/></td><td>{when(r.created_at)}</td>
-    </tr>)}</tbody></table></div>
-   {runs&&!runs.some((r:Row)=>!researchOnly||r.research_phase)&&<Empty>No runs submitted.</Empty>}
-  </section>
   {id&&detail?.id===id&&<section className="box result"><header><span>Task result · <Status value={detail.status}/></span>
    <div className="actions">
     {['QUEUED','RUNNING','PAUSED','WAITING_REVIEW','SCHEDULED'].includes(detail.status)&&<button disabled={readonly||busy} onClick={()=>void action('cancel')}>Cancel task</button>}
@@ -241,6 +266,14 @@ function Tasks({tick,refresh,researchOnly=false}:{tick:number;refresh:()=>void;r
    <details><summary>Agent steps · {detail.steps?.length||0}</summary>{detail.steps?.map((s:Row)=><div className="log-line" key={s.id}><b>{s.step} · {s.kind} {s.tool}</b><details><summary>Input and result</summary><pre>{JSON.stringify({input:s.input,result:s.result},null,2)}</pre></details></div>)}</details>
    <details><summary>Execution timeline</summary>{detail.events?.map((e:Row)=><div className="log-line" key={e.id}><time>{when(e.created_at)}</time><b>{e.action}</b><code>{JSON.stringify(e.detail)}</code></div>)}</details>
   </section>}
+  <section className="box"><header>{researchOnly?'Research runs':'Recent tasks'} <span>Latest 100</span></header>
+   <div className="table-scroll"><table><thead><tr><th>Task</th><th>Project / agent</th><th>Model</th><th>Status</th><th>Created</th></tr></thead>
+    <tbody>{runs?.filter((r:Row)=>!researchOnly||r.research_phase).map((r:Row)=><tr key={r.id} aria-selected={r.id===id}>
+     <td><button className="link" onClick={()=>setId(r.id)}>{r.prompt.slice(0,70)}</button></td><td>{r.project}<small className="block">{r.agent}</small></td>
+     <td>{r.model}</td><td><Status value={r.status}/></td><td>{when(r.created_at)}</td>
+    </tr>)}</tbody></table></div>
+   {runs&&!runs.some((r:Row)=>!researchOnly||r.research_phase)&&<Empty>No runs submitted.</Empty>}
+  </section>
  </section>;
 
 }

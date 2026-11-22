@@ -210,6 +210,22 @@ For session clients, use `POST /api/v1/runs` with the existing `project_id`, `ag
 - Model metering displays provider-reported tokens accepted before each checkpoint. A call interrupted before receipt may still consume provider resources. A separate four-call attempt budget counts calls before contacting the provider.
 - The initial workflow uses project sources and private Ollama structured outputs. This release does not configure independent multi-agent hosts, remote model routing, recurring/event schedules, or external write tools. Verify the exact Ollama model and deployment for structured output support before relying on it operationally.
 
+## Set up and run an agent
+
+Open **Get started** in the Explorer to create an agent or choose an existing
+enabled agent. Select **International Forex**, **India F&O**, **Strategy
+validation**, or **Custom agent** for editable starting instructions. The skills
+step shows the suggested collection and lets you save assignments or continue with
+the agent's current collections. Administrators can open the import form directly
+from this step and return after approving the collection.
+
+**Open test chat** opens a new draft with the agent and sample prompt. **Open task
+form** carries them into Tasks, where you select a project and model before
+queuing. The dedicated Skills, Agents, Tasks, and Workflows screens still provide
+catalog maintenance, agent versions and tools, and advanced run controls. Market
+research templates use data you provide or connect. They do not fetch market data
+or send orders on their own.
+
 ## GitHub skill collections
 
 In **Build & automate → Skills**, an administrator can scan a public GitHub repository by

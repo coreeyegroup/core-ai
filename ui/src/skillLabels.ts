@@ -1,4 +1,7 @@
 const skillAliases: Record<string, [string, string]> = {
+ 'trading-fno': ['India and US F&O Analysis', 'Review option chains, open interest, Greeks, implied volatility, and multi-leg payoffs.'],
+ 'ml4t-walk-forward-cv': ['Walk-Forward Validation', 'Evaluate strategy or model results in time order and check for leakage.'],
+ 'ml4t-cost-model': ['Backtest Trading Costs', 'Review commissions, slippage, and market impact in a simulation.'],
  'brainstorming': ['Plan a Feature', 'Clarify the goal, compare approaches, and settle the design before building.'],
  'systematic-debugging': ['Find the Root Cause', 'Reproduce a bug, trace the failure, and verify the fix.'],
  'writing-plans': ['Write an Implementation Plan', 'Turn an agreed design into steps, with files to change and checks to run.'],
@@ -27,6 +30,9 @@ const skillAliases: Record<string, [string, string]> = {
 };
 
 const collectionAliases: Record<string, string> = {
+ 'marian2js/trading-skills': 'Market Research and Trade Review',
+ 'reddygopalkrishna/trading-skills': 'Market Analysis and Options Research',
+ 'ml4t/skills': 'Quantitative Strategy Validation',
  'obra/superpowers': 'Software Development Workflows',
  'mattpocock/skills': 'Product and Engineering Workflows',
  'anthropics/skills': 'Documents, Design and Development',
