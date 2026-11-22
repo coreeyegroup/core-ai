@@ -68,7 +68,8 @@ export default function Skills({tick,refreshWorkspace}: {tick: number; refreshWo
     <button className="primary" disabled={busy}>{busy ? 'Working…' : 'Scan GitHub'}</button>
    </div>
   </form>}
-  <div className="skill-workspace">
+  <div className="skill-workspace" data-inspecting={!!selection}>
+   <div className="skill-collection-list">
    <section className="box">
     <header>Collections</header>
     {rows.map(row => <button type="button" className="record" key={row.id} aria-current={selection?.id===row.id?'true':undefined} onClick={() => {
@@ -79,10 +80,11 @@ export default function Skills({tick,refreshWorkspace}: {tick: number; refreshWo
     </button>)}
     {rows.length===0 && <p className="empty">{data ? 'No collections yet.' : 'Loading collections…'}</p>}
    </section>
+   </div>
    {selection && <CollectionDetail key={selection.id} selection={selection} changeVersion={commit => setSelection({...selection,commit})}
      tick={tick+revision} editable={role==='ADMIN'} busy={busy} action={action}/>}
+   {role!=='VIEWER' && <Assignments rows={rows} tick={tick+revision} refreshWorkspace={refreshWorkspace}/>}
   </div>
-  {role!=='VIEWER' && <Assignments rows={rows} tick={tick+revision} refreshWorkspace={refreshWorkspace}/>}
  </section>;
 }
 
@@ -96,12 +98,12 @@ function CollectionDetail({selection,changeVersion,tick,editable,busy,action}: {
  const previewPanel = useRef<HTMLElement>(null);
  useEffect(() => {if (preview) previewPanel.current?.focus();},[preview]);
  const item: Detail | null = data?.commit===selection.commit ? data : null;
- if (!item) return <section className="box settings-content">{error ? <p role="alert">{error}</p> : 'Loading collection…'}</section>;
+ if (!item) return <section className="box settings-content skill-detail">{error ? <p role="alert">{error}</p> : 'Loading collection…'}</section>;
  const visible = item.skills.filter(skill => (skill.name+' '+skill.description).toLowerCase().includes(search.trim().toLowerCase()));
  const activate = () => void action(async () => {
   await api(`skills/collections/${item.id}/activate`,'PUT',{commit:item.commit,expected_commit:item.active_commit});
  });
- return <section className="box">
+ return <section className="box skill-detail">
   <header>{item.repository}</header>
   <div className="settings-content">
    {error && <p role="alert">{error}</p>}
@@ -168,7 +170,7 @@ function Assignments({rows,tick,refreshWorkspace}: {rows: Collection[];tick: num
   } catch (err) {setFailure((err as Error).message);}
   finally {setBusy(false);}
  }
- return <section className="box form">
+ return <section className="box form skill-assignments">
   <header className="skill-section-heading"><span>Assign collections to an agent</span>
    <button type="button" disabled={busy} aria-expanded={creating} onClick={()=>{setCreating(value=>!value);setFailure('');}}>{creating?'Cancel':'New agent'}</button>
   </header>
