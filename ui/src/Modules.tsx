@@ -114,7 +114,7 @@ function Agents({tick,refresh,go}:{tick:number;refresh:()=>void;go:(view:View)=>
     <header tabIndex={-1} ref={heading}>{selected?.name??'New agent'} {selected&&<span>Version {selected.version}</span>}</header>
     <nav className="skill-steps" aria-label="Agent setup">
      <button type="button" aria-current={section==='profile'?'step':undefined} onClick={()=>setSection('profile')}>1. Profile</button>
-     <button type="button" aria-current={section==='collections'?'step':undefined} disabled={!selected||busy} onClick={()=>setSection('collections')}>2. Collections</button>
+     <button type="button" aria-current={section==='collections'?'step':undefined} disabled={!selected||busy} onClick={()=>setSection('collections')}>2. Attach skills</button>
      <button type="button" disabled={!selected?.enabled||busy} onClick={()=>go('Chat')}>3. Open Chat</button>
     </nav>
     <ErrorNote error={err}/>
@@ -132,12 +132,12 @@ function Agents({tick,refresh,go}:{tick:number;refresh:()=>void;go:(view:View)=>
      </fieldset>
      <div className="actions">
       {!readonly&&<button className="primary" disabled={busy}>{busy?'Saving…':selected?'Save new version':'Create agent'}</button>}
-      {selected?<button type="button" disabled={busy} onClick={()=>setSection('collections')}>Continue to collections</button>
+      {selected?<button type="button" disabled={busy} onClick={()=>setSection('collections')}>Continue to skill setup</button>
        :<button type="button" disabled={busy} onClick={()=>open(null,false)}>Cancel</button>}
      </div>
     </form>
     {selected&&<div className="form" hidden={section!=='collections'}>
-     <p className="panel-note">Select active collections for this agent. In Chat, pick the agent under Advanced and choose Automatic or Manual under Skills.</p>
+     <p className="panel-note">A collection is a group of skills. Attach the groups this agent should be able to use. In Chat, choose this agent beside Skills, then use automatic matching or choose specific skills.</p>
      <ErrorNote error={catalogError}/>
      <AgentCollections key={selected.id} agent={selected.id} rows={collections} tick={tick} readonly={readonly} onDirtyChange={setCollectionsDirty} onSaved={selected.enabled?()=>go('Chat'):undefined} onReview={()=>go('Skills')}/>
     </div>}

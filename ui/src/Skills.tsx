@@ -3,6 +3,7 @@ import {api} from './api';
 import {useSession} from './Session';
 import {useResource} from './Workspace';
 import type {View} from './layout';
+import {collectionTitle,matchesSkill,skillPurpose,skillTitle} from './skillLabels';
 
 export type SkillVersion = {repository: string; commit: string; path: string; name: string; shortened: boolean};
 export type Collection = {id: string; repository: string; git_ref: string; active_commit: string | null; latest_commit: string; skill_count: number | null};
@@ -23,9 +24,9 @@ function sourceUrl(repository: string, commit: string, path: string) {
 export function SkillVersions({versions}: {versions?: SkillVersion[]}) {
  if (!versions?.length) return null;
  return <details className="skill-used">
-  <summary><strong>Skills used</strong> · {versions.map(skill => skill.name).join(', ')}</summary>
+  <summary><strong>Skills used</strong> · {versions.map(skill => skillTitle(skill.name)).join(', ')}</summary>
   <ul>{versions.map(skill => <li key={skill.repository + skill.commit + skill.path}>
-   <a href={sourceUrl(skill.repository,skill.commit,skill.path)} target="_blank" rel="noreferrer">{skill.name} · {skill.commit.slice(0,8)}</a>
+   <a href={sourceUrl(skill.repository,skill.commit,skill.path)} target="_blank" rel="noreferrer">{skillTitle(skill.name)} · {skill.commit.slice(0,8)}</a>
    {skill.shortened && ' · excerpt'}
   </li>)}</ul>
  </details>;
@@ -35,6 +36,7 @@ export default function Skills({tick,refreshWorkspace,go}: {tick: number; refres
  const {role} = useSession();
  const [step,setStep] = useState<'import'|'review'|'assign'|null>(null);
  const [query,setQuery] = useState('');
+ const [suggestedCollection,setSuggestedCollection] = useState('');
  const [pendingOnly,setPendingOnly] = useState(false);
  const [repository,setRepository] = useState('');
  const [ref,setRef] = useState('HEAD');
@@ -47,9 +49,11 @@ export default function Skills({tick,refreshWorkspace,go}: {tick: number; refres
  const rows: Collection[] = Array.isArray(data) ? data : [];
  const canImport = role==='ADMIN';
  const shown = step ?? (canImport && data && !rows.length ? 'import' : 'review');
+ const defaultCollection = rows.find(row=>row.active_commit) ?? rows[0];
+ const opened = selection ?? (defaultCollection ? {id:defaultCollection.id,commit:defaultCollection.active_commit??defaultCollection.latest_commit} : null);
  const activeCount = rows.filter(row=>row.active_commit).length;
  const pendingCount = rows.filter(row=>row.active_commit!==row.latest_commit).length;
- const filtered = rows.filter(row=>row.repository.toLowerCase().includes(query.trim().toLowerCase()) &&
+ const filtered = rows.filter(row=>(collectionTitle(row.repository)+' '+row.repository).toLowerCase().includes(query.trim().toLowerCase()) &&
   (!pendingOnly || row.active_commit!==row.latest_commit));
  async function action(operation: () => Promise<void>) {
   setBusy(true);setError('');
@@ -68,13 +72,17 @@ export default function Skills({tick,refreshWorkspace,go}: {tick: number; refres
   });
  }
  return <section className="page skills-page">
-  <header className="page-head"><div><h1>Skills</h1><p>Import a collection, review its skills, then attach it to an agent.</p></div>
-   <button type="button" onClick={()=>go('Agents')}>Open Agents</button>
+  <header className="page-head"><div><h1>Skills</h1><p>Find a skill by task. Open Chat for a one-time choice, or set up an agent with reusable collections.</p></div>
+   <div className="actions">
+    <button type="button" onClick={()=>go('Agents')}>Open Agents</button>
+    <button type="button" className="primary" onClick={()=>go('Chat')}>Open Chat</button>
+   </div>
   </header>
-  <nav className="skill-steps" aria-label="Skills workflow">
-   {canImport && <button type="button" aria-current={shown==='import'?'step':undefined} disabled={busy} onClick={()=>setStep('import')}>1. Import</button>}
-   <button type="button" aria-current={shown==='review'?'step':undefined} disabled={busy} onClick={()=>setStep('review')}>{canImport?'2. ':''}Review collections</button>
-   {role!=='VIEWER' && <button type="button" aria-current={shown==='assign'?'step':undefined} disabled={busy} onClick={()=>setStep('assign')}>{canImport?'3. ':''}Assign to an agent</button>}
+  <nav className="skill-steps" aria-label="Skills workspace options">
+   <button type="button" aria-current={shown==='review'?'step':undefined} disabled={busy} onClick={()=>setStep('review')}>Browse skills</button>
+   {role!=='VIEWER' && <button type="button" aria-current={shown==='assign'?'step':undefined} disabled={busy}
+    onClick={()=>setStep('assign')}>Assign to an agent</button>}
+   {canImport && <button type="button" aria-current={shown==='import'?'step':undefined} disabled={busy} onClick={()=>setStep('import')}>Import or update</button>}
   </nav>
   {(error || catalogError) && <p role="alert" className="error">{error || catalogError}</p>}
   {scan && shown==='review' && <div className="notice">
@@ -93,27 +101,28 @@ export default function Skills({tick,refreshWorkspace,go}: {tick: number; refres
   </form>}
   {shown==='review' && <div className="skill-workspace">
    <div className="skill-collection-list"><section className="box">
-    <header>Collections <span>{activeCount} active · {pendingCount} to review</span></header>
+    <header>Skill collections <span>{activeCount} active · {pendingCount} to review</span></header>
     <div className="skill-filters">
      <input type="search" aria-label="Find collections" value={query} onChange={event=>setQuery(event.target.value)} placeholder="Find collection…"/>
      <label><input type="checkbox" checked={pendingOnly} onChange={event=>setPendingOnly(event.target.checked)}/> Needs review</label>
     </div>
     <div className="skill-index">{filtered.map(row => <button type="button" className="record" key={row.id}
-     disabled={busy} aria-current={selection?.id===row.id?'true':undefined} onClick={() => {
-      setScan(null);setSelection({id:row.id,commit:row.latest_commit});
+     disabled={busy} aria-current={opened?.id===row.id?'true':undefined} onClick={() => {
+      setScan(null);setSelection({id:row.id,commit:pendingOnly?row.latest_commit:row.active_commit??row.latest_commit});
       setRepository(row.repository);setRef(row.git_ref);
-     }}><b>{row.repository}</b><span>{row.active_commit ? `${row.skill_count} active skills` : 'Awaiting approval'}</span>
+     }}><b>{collectionTitle(row.repository)}</b>{collectionTitle(row.repository)!==row.repository && <small>{row.repository}</small>}<span>{row.active_commit ? `${row.skill_count} active skills` : 'Awaiting approval'}</span>
      {row.active_commit && row.active_commit!==row.latest_commit && <small>Update awaiting review</small>}
     </button>)}</div>
     {filtered.length===0 && <p className="empty">{data ? rows.length ? 'No matching collections.' : 'No collections yet.' : 'Loading collections…'}</p>}
    </section></div>
-   {selection ? <CollectionDetail key={selection.id} selection={selection} changeVersion={commit => setSelection({...selection,commit})}
-    tick={tick+revision} editable={canImport} busy={busy} action={action} next={role==='VIEWER'?undefined:()=>setStep('assign')}
-    rescan={canImport?()=>{setRepository(rows.find(row=>row.id===selection.id)?.repository??repository);setRef(rows.find(row=>row.id===selection.id)?.git_ref??ref);setStep('import');}:undefined}/>
+   {opened ? <CollectionDetail key={opened.id} selection={opened} changeVersion={commit => setSelection({...opened,commit})}
+    tick={tick+revision} editable={canImport} busy={busy} action={action}
+    next={role==='VIEWER'?undefined:()=>{setSuggestedCollection(opened.id);setStep('assign');}}
+    rescan={canImport?()=>{setRepository(rows.find(row=>row.id===opened.id)?.repository??repository);setRef(rows.find(row=>row.id===opened.id)?.git_ref??ref);setStep('import');}:undefined}/>
     : <section className="box settings-content"><h2>Review a collection</h2><p>Select a collection to inspect its skills and version. Pending versions become available for use after activation.</p></section>}
   </div>}
   {role!=='VIEWER' && <div hidden={shown!=='assign'}>
-   <Assignments rows={rows} tick={tick+revision} refreshWorkspace={refreshWorkspace} go={go}/>
+   <Assignments suggestedCollection={suggestedCollection} rows={rows} tick={tick+revision} refreshWorkspace={refreshWorkspace} go={go}/>
   </div>}
  </section>;
 }
@@ -130,37 +139,40 @@ function CollectionDetail({selection,changeVersion,tick,editable,busy,action,nex
  useEffect(() => {if (preview) previewPanel.current?.focus();},[preview]);
  const item: Detail | null = data?.commit===selection.commit ? data : null;
  if (!item) return <section className="box settings-content skill-detail">{error ? <p role="alert">{error}</p> : 'Loading collection…'}</section>;
- const visible = item.skills.filter(skill => (skill.name+' '+skill.description).toLowerCase().includes(search.trim().toLowerCase()));
+ const visible = item.skills.filter(skill => matchesSkill(skill,search));
  const activate = () => void action(async () => {
   await api(`skills/collections/${item.id}/activate`,'PUT',{commit:item.commit,expected_commit:item.active_commit});
   setActivated(item.commit);
  });
  return <section className="box skill-detail">
-  <header>{item.repository}<span>{item.commit===item.active_commit?'Active version':'Review version'}</span></header>
+  <header>{collectionTitle(item.repository)}<span>{item.commit===item.active_commit?'Active version':'Review version'}</span></header>
   <div className="settings-content">
    {error && <p role="alert">{error}</p>}
    {activated===item.commit && item.commit===item.active_commit && <p role="status">Collection activated. Continue to assign it to an agent.</p>}
    <div className="actions skill-import">
+    {collectionTitle(item.repository)!==item.repository && <small>{item.repository}</small>}
     <label>Version<select aria-label="Collection version" value={item.commit} onChange={event => {setPreview('');changeVersion(event.target.value);}}>
      {item.releases.map(release => <option key={release.commit_sha} value={release.commit_sha}>{release.commit_sha.slice(0,8)} · {release.skill_count} skills{item.active_commit===release.commit_sha ? ' · active' : ''}</option>)}
     </select></label>
+    {editable && item.commit===item.active_commit && item.latest_commit!==item.active_commit &&
+     <button disabled={busy} onClick={()=>{setPreview('');changeVersion(item.latest_commit);}}>Review pending update</button>}
     {rescan && <button disabled={busy} onClick={rescan}>Check for updates</button>}
-    {next && item.commit===item.active_commit && <button className="primary" onClick={next}>Continue to assignment</button>}
+    {next && item.commit===item.active_commit && <button className="primary" onClick={next}>Assign this collection</button>}
     {editable && item.commit!==item.active_commit && <button disabled={busy} className="primary" onClick={activate}>Approve and activate</button>}
    </div>
    {item.commit!==item.active_commit && <details>
     <summary>{item.changes.added.length} added · {item.changes.changed.length} changed · {item.changes.removed.length} removed</summary>
     {Object.entries(item.changes).map(([label,paths]) => paths.length>0 && <p key={label}><b>{label}</b> {paths.join(', ')}</p>)}
    </details>}
-   <label>Filter skills<input type="search" value={search} onChange={event=>setSearch(event.target.value)} placeholder="Name or description"/></label>
+   <label>Filter skills<input type="search" value={search} onChange={event=>setSearch(event.target.value)} placeholder="Task, name, or description"/></label>
    <div className="table-scroll skill-table">
-    <table><thead><tr><th scope="col">Skill</th><th scope="col">Requirements</th>{editable && <th scope="col">Include</th>}</tr></thead>
+    <table><thead><tr><th scope="col">Skill and when to use it</th><th scope="col">Requirements</th>{editable && <th scope="col">Include</th>}</tr></thead>
     <tbody>{visible.map(skill => {
      const included = !item.excluded.includes(skill.path);
      return <tr key={skill.path}>
-      <td><button className="link" aria-expanded={preview===skill.path} onClick={() => setPreview(preview===skill.path?'':skill.path)}>{skill.name}</button><small className="skill-description">{skill.description}</small></td>
+      <td><button className="link" aria-expanded={preview===skill.path} onClick={() => setPreview(preview===skill.path?'':skill.path)}>{skillTitle(skill.name)}</button><small className="skill-description">{skillPurpose(skill.name,skill.description)}</small></td>
       <td>{skill.scripts || skill['allowed-tools'] ? 'Instructions only · external tools or scripts' : 'Instructions'}{skill.references.length>0 && <small className="skill-description"> · source resources</small>}</td>
-      {editable && <td><input type="checkbox" aria-label={'Include '+skill.name} checked={included} disabled={busy} onChange={event => {
+      {editable && <td><input type="checkbox" aria-label={'Include '+skillTitle(skill.name)} checked={included} disabled={busy} onChange={event => {
        const excluded = !event.target.checked;
        void action(async () => {await api(`skills/collections/${item.id}/exclusion`,'PUT',{path:skill.path,excluded});});
       }}/></td>}
@@ -169,7 +181,9 @@ function CollectionDetail({selection,changeVersion,tick,editable,busy,action,nex
    </div>
    {visible.length===0 && <p>No matching skills.</p>}
    {item.skills.filter(skill=>skill.path===preview).map(skill=><section key={skill.path} className="skill-preview" ref={previewPanel} tabIndex={-1}>
-    <h2>{skill.name}</h2>
+    <h2>{skillTitle(skill.name)}</h2>
+    <p>{skill.description}</p>
+    <p>Source name <code>{skill.name}</code></p>
     <p><a href={sourceUrl(item.repository,item.commit,skill.path)} target="_blank" rel="noreferrer">View pinned source</a> · License {skill.license || 'check repository'}</p>
     {skill.compatibility && <p>{skill.compatibility}</p>}
     {skill['allowed-tools'] && <p>Declared tools <code>{skill['allowed-tools']}</code></p>}
@@ -188,11 +202,12 @@ function SkillBody({path}: {path:string}) {
  return error ? <p role="alert">{error}</p> : <pre>{data?.body ?? 'Loading instructions…'}</pre>;
 }
 
-function Assignments({rows,tick,refreshWorkspace,go}: {rows: Collection[];tick: number;refreshWorkspace:()=>void;go:(view:View)=>void}) {
+function Assignments({rows,tick,refreshWorkspace,go,suggestedCollection}: {suggestedCollection:string;rows: Collection[];tick: number;refreshWorkspace:()=>void;go:(view:View)=>void}) {
  const [revision,refresh] = useState(0);
  const {data,error} = useResource('agents',tick+revision);
  const [agent,setAgent] = useState('');
  const chosen = Array.isArray(data)?data.find(item=>item.id===agent):undefined;
+ const suggested = rows.find(row=>row.id===suggestedCollection);
  const [creating,setCreating] = useState(false);
  const [dirty,setDirty] = useState(false);
  const [busy,setBusy] = useState(false);
@@ -219,17 +234,18 @@ function Assignments({rows,tick,refreshWorkspace,go}: {rows: Collection[];tick: 
    <button className="primary" disabled={busy}>{busy?'Creating…':'Create agent'}</button>
   </form>}
   {error && <p role="alert">{error}</p>}
+  {suggested && <p className="panel-note">Selected collection <strong>{collectionTitle(suggested.repository)}</strong>. Choose an agent and save the assignment.</p>}
   <label>Agent<select value={agent} onChange={event=>{if (!dirty || window.confirm('Discard unsaved collection changes?')) {setAgent(event.target.value);setDirty(false);}}}>
    <option value="">Select an agent</option>
    {Array.isArray(data) && data.map((item:{id:string;name:string})=><option key={item.id} value={item.id}>{item.name}</option>)}
   </select></label>
-  {agent && <AgentCollections key={agent} agent={agent} rows={rows} tick={tick} onDirtyChange={setDirty} onSaved={chosen?.enabled?()=>go('Chat'):undefined}/>}
+  {agent && <AgentCollections key={agent+':'+suggestedCollection} suggestedCollection={suggestedCollection} agent={agent} rows={rows} tick={tick} onDirtyChange={setDirty} onSaved={chosen?.enabled?()=>go('Chat'):undefined}/>}
   {!agent && <p className="panel-note">Choose an agent or create one. You can assign an active collection to more than one agent.</p>}
  </section>;
 }
 
-export function AgentCollections({agent,rows,tick,readonly=false,onDirtyChange,onSaved,onReview}: {
- agent:string;rows:Collection[];tick:number;readonly?:boolean;onDirtyChange:(dirty:boolean)=>void;onSaved?:()=>void;onReview?:()=>void;
+export function AgentCollections({agent,rows,tick,readonly=false,onDirtyChange,onSaved,onReview,suggestedCollection}: {
+ agent:string;rows:Collection[];tick:number;readonly?:boolean;suggestedCollection?:string;onDirtyChange:(dirty:boolean)=>void;onSaved?:()=>void;onReview?:()=>void;
 }) {
  const {data,error} = useResource('skills/agents/'+agent,tick);
  const [saved,setSaved] = useState<string[] | null>(null);
@@ -238,11 +254,23 @@ export function AgentCollections({agent,rows,tick,readonly=false,onDirtyChange,o
  const [busy,setBusy] = useState(false);
  const [status,setStatus] = useState('');
  const [failure,setFailure] = useState('');
- useEffect(() => {if (Array.isArray(data)) setSaved(data);},[data]);
+ const suggestedActive = rows.some(row=>row.id===suggestedCollection && row.active_commit);
+ const initialized = useRef(false);
+ useEffect(() => {
+  if (!Array.isArray(data)) return;
+  setSaved(data);
+  if (!initialized.current && suggestedCollection && suggestedActive && !readonly) {
+   initialized.current = true;
+   if (!data.includes(suggestedCollection)) {
+    setDraft([...data,suggestedCollection]);
+    onDirtyChange(true);
+   }
+  }
+ },[data,onDirtyChange,readonly,suggestedActive,suggestedCollection]);
  const selected = draft??saved;
  if (!selected) return <p role={error?'alert':undefined}>{error || 'Loading assignments…'}</p>;
  const active = rows.filter(row=>readonly?selected.includes(row.id):row.active_commit || selected.includes(row.id) || saved?.includes(row.id));
- const available = active.filter(row=>row.repository.toLowerCase().includes(filter.trim().toLowerCase()))
+ const available = active.filter(row=>(collectionTitle(row.repository)+' '+row.repository).toLowerCase().includes(filter.trim().toLowerCase()))
   .sort((a,b)=>Number(saved?.includes(b.id))-Number(saved?.includes(a.id)));
  return <form className="collection-assignment-form" onSubmit={async event => {
   event.preventDefault();
@@ -262,14 +290,14 @@ export function AgentCollections({agent,rows,tick,readonly=false,onDirtyChange,o
      const next = event.target.checked?[...selected,row.id]:selected.filter(id=>id!==row.id);
      const changed = next.length!==saved?.length || next.some(id=>!saved?.includes(id));
      setStatus('');setDraft(changed?next:null);onDirtyChange(changed);
-    }}/><span>{row.repository}<small>{row.git_ref}{!row.active_commit && ' · awaiting approval'}</small></span>
+    }}/><span>{collectionTitle(row.repository)}<small>{row.repository} · {row.git_ref}{!row.active_commit && ' · awaiting approval'}</small></span>
    </label>)}</div>
   </fieldset>
   {!readonly && <div className="actions">
    {active.length>0 && <button className="primary" disabled={busy||!draft}>{busy?'Saving…':'Save assignment'}</button>}
    {onReview && <button type="button" onClick={onReview}>Review collections in Skills</button>}
   </div>}
-  {status && <div className="actions"><p role="status">{status}{onSaved&&' Select this agent in Chat → Advanced.'}</p>
+  {status && <div className="actions"><p role="status">{status}{onSaved&&' Select this agent beside Skills in Chat.'}</p>
    {onSaved && <button type="button" onClick={onSaved}>Open Chat</button>}</div>}
   {(failure||error) && <p className="error" role="alert">{failure||error}</p>}
  </form>;

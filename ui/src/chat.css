@@ -109,3 +109,7 @@ select option{background-color:var(--input);color:var(--text)}
  .message-markdown :is(th,td){min-width:112px}
  .app .composer-submit .model-picker-trigger{max-width:min(140px,50vw)}
 }
+
+.app .composer-tools .composer-agent{max-width:min(100%,175px);text-overflow:ellipsis}
+.chat-skill-options strong{font-weight:600}
+.chat-skill-options small{line-height:1.4;margin-top:2px}
