@@ -130,6 +130,7 @@ export default function Skills({tick,refreshWorkspace,go,setup}: {tick: number; 
    {opened ? <CollectionDetail key={opened.id} selection={opened} changeVersion={commit => setSelection({...opened,commit})}
     tick={tick+revision} editable={canImport} busy={busy} action={action}
     next={role==='VIEWER'?undefined:()=>{setSuggestedCollection(opened.id);setStep('assign');}}
+    nextLabel={returnToSetup?'Continue setup':undefined} returnToSetup={returnToSetup?()=>{setReturnToSetup(false);go('Setup');}:undefined}
     rescan={canImport?()=>{setRepository(rows.find(row=>row.id===opened.id)?.repository??repository);setRef(rows.find(row=>row.id===opened.id)?.git_ref??ref);setStep('import');}:undefined}/>
     : <section className="box settings-content"><h2>Review a collection</h2><p>Select a collection to inspect its skills and version. Pending versions become available for use after activation.</p></section>}
   </div>}
@@ -139,9 +140,9 @@ export default function Skills({tick,refreshWorkspace,go,setup}: {tick: number; 
  </section>;
 }
 
-function CollectionDetail({selection,changeVersion,tick,editable,busy,action,next,rescan}: {
+function CollectionDetail({selection,changeVersion,tick,editable,busy,action,next,rescan,nextLabel,returnToSetup}: {
  selection: {id: string; commit: string}; changeVersion: (commit:string)=>void; tick:number;
- next?:()=>void; rescan?:()=>void; editable:boolean; busy:boolean; action:(operation:()=>Promise<void>)=>Promise<void>;
+ next?:()=>void; nextLabel?:string; returnToSetup?:()=>void; rescan?:()=>void; editable:boolean; busy:boolean; action:(operation:()=>Promise<void>)=>Promise<void>;
 }) {
  const {data,error} = useResource(`skills/collections/${selection.id}?commit=${encodeURIComponent(selection.commit)}`,tick);
  const [search,setSearch] = useState('');
@@ -160,7 +161,7 @@ function CollectionDetail({selection,changeVersion,tick,editable,busy,action,nex
   <header>{collectionTitle(item.repository)}<span>{item.commit===item.active_commit?'Active version':'Review version'}</span></header>
   <div className="settings-content">
    {error && <p role="alert">{error}</p>}
-   {activated===item.commit && item.commit===item.active_commit && <p role="status">Collection activated. Continue to assign it to an agent.</p>}
+   {activated===item.commit && item.commit===item.active_commit && <p role="status">Collection activated. {returnToSetup?'Continue setup to attach it.':'Assign it to an agent when ready.'}</p>}
    <div className="actions skill-import">
     {collectionTitle(item.repository)!==item.repository && <small>{item.repository}</small>}
     <label>Version<select aria-label="Collection version" value={item.commit} onChange={event => {setPreview('');changeVersion(event.target.value);}}>
@@ -169,7 +170,7 @@ function CollectionDetail({selection,changeVersion,tick,editable,busy,action,nex
     {editable && item.commit===item.active_commit && item.latest_commit!==item.active_commit &&
      <button disabled={busy} onClick={()=>{setPreview('');changeVersion(item.latest_commit);}}>Review pending update</button>}
     {rescan && <button disabled={busy} onClick={rescan}>Check for updates</button>}
-    {next && item.commit===item.active_commit && <button className="primary" onClick={next}>Assign this collection</button>}
+    {next && item.commit===item.active_commit && <button className="primary" onClick={returnToSetup??next}>{nextLabel??'Assign this collection'}</button>}
     {editable && item.commit!==item.active_commit && <button disabled={busy} className="primary" onClick={activate}>Approve and activate</button>}
    </div>
    {item.commit!==item.active_commit && <details>
@@ -256,10 +257,12 @@ function Assignments({rows,tick,refreshWorkspace,go,suggestedCollection}: {sugge
  </section>;
 }
 
-export function AgentCollections({agent,rows,tick,readonly=false,onDirtyChange,onSaved,onReview,suggestedCollection,onSelectionSaved}: {
- agent:string;rows:Collection[];tick:number;readonly?:boolean;suggestedCollection?:string;onSelectionSaved?:(ids:string[])=>void;onDirtyChange:(dirty:boolean)=>void;onSaved?:()=>void;onReview?:()=>void;
+export function AgentCollections({agent,rows,tick,readonly=false,onDirtyChange,onSaved,onReview,suggestedCollection,onSelectionSaved,recommendedCollection,onContinue,onBack}: {
+ agent:string;rows:Collection[];tick:number;readonly?:boolean;suggestedCollection?:string;onSelectionSaved?:(ids:string[])=>void;onDirtyChange?:(dirty:boolean)=>void;onSaved?:()=>void;onReview?:()=>void;
+ recommendedCollection?:string;onContinue?:()=>void;onBack?:()=>void;
 }) {
- const {data,error} = useResource('skills/agents/'+agent,tick);
+ const [revision,refresh]=useState(0);
+ const {data,error} = useResource('skills/agents/'+agent,tick+revision);
  const [saved,setSaved] = useState<string[] | null>(null);
  const [draft,setDraft] = useState<string[] | null>(null);
  const [filter,setFilter] = useState('');
@@ -275,41 +278,63 @@ export function AgentCollections({agent,rows,tick,readonly=false,onDirtyChange,o
    initialized.current = true;
    if (!data.includes(suggestedCollection)) {
     setDraft([...data,suggestedCollection]);
-    onDirtyChange(true);
+    onDirtyChange?.(true);
    }
   }
  },[data,onDirtyChange,onSelectionSaved,readonly,suggestedActive,suggestedCollection]);
  const selected = draft??saved;
- if (!selected) return <p role={error?'alert':undefined}>{error || 'Loading assignments…'}</p>;
+ if (!selected) return <div className="stack">
+  <p role={error?'alert':'status'}>{error || 'Loading assignments…'}</p>
+  <div className="actions">{onBack&&<button type="button" onClick={onBack}>Back</button>}
+   {error&&<button type="button" onClick={()=>refresh(value=>value+1)}>Retry assignments</button>}</div>
+ </div>;
  const active = rows.filter(row=>readonly?selected.includes(row.id):row.active_commit || selected.includes(row.id) || saved?.includes(row.id));
  const available = active.filter(row=>(collectionTitle(row.repository)+' '+row.repository).toLowerCase().includes(filter.trim().toLowerCase()))
   .sort((a,b)=>Number(saved?.includes(b.id))-Number(saved?.includes(a.id)));
+ function changeSelection(next:string[]){
+  const changed=next.length!==saved?.length||next.some(id=>!saved?.includes(id));
+  setStatus('');setDraft(changed?next:null);onDirtyChange?.(changed);
+ }
+ function back(){
+  if(draft&&!window.confirm('Discard unsaved collection selections?'))return;
+  if(draft){setDraft(null);onDirtyChange?.(false);}
+  onBack?.();
+ }
  return <form className="collection-assignment-form" onSubmit={async event => {
   event.preventDefault();
-  if (readonly || !draft) return;
+  if(readonly||busy)return;
+  if(!draft){onContinue?.();return;}
   setBusy(true);setStatus('');setFailure('');
   try {
    await api('skills/agents/'+agent,'PUT',{collections:draft});
-   setSaved(draft);setDraft(null);onDirtyChange(false);onSelectionSaved?.(draft);setStatus('Assignments saved.');
+   setSaved(draft);setDraft(null);onDirtyChange?.(false);onSelectionSaved?.(draft);setStatus('Assignments saved.');
+   refresh(value=>value+1);
+   onContinue?.();
   } catch (err) {setFailure((err as Error).message);}
   finally {setBusy(false);}
  }}>
   <fieldset className="tool-permissions" disabled={busy}><legend>Collections · {selected.length} selected</legend>
-   {active.length>0 && <input type="search" aria-label="Find assignable collections" placeholder="Find collection…" value={filter} onChange={event=>setFilter(event.target.value)}/>}
+   {active.length>0 && <div className="actions collection-filters">
+    <input type="search" aria-label="Find assignable collections" placeholder="Find collection…" value={filter} onChange={event=>setFilter(event.target.value)}/>
+    {recommendedCollection&&!selected.includes(recommendedCollection)&&!readonly&&<button type="button" onClick={()=>{
+     setFilter('');changeSelection([...selected,recommendedCollection]);
+    }}>Add recommended collection</button>}
+   </div>}
    {!available.length && <p>{active.length?'No matching collections.':readonly?'No collections assigned.':'Activate a collection in Skills before assigning it.'}</p>}
    <div className="skill-assignment">{available.map(row => <label key={row.id}>
-    <input type="checkbox" disabled={readonly} checked={selected.includes(row.id)} onChange={event=>{
-     const next = event.target.checked?[...selected,row.id]:selected.filter(id=>id!==row.id);
-     const changed = next.length!==saved?.length || next.some(id=>!saved?.includes(id));
-     setStatus('');setDraft(changed?next:null);onDirtyChange(changed);
-    }}/><span>{collectionTitle(row.repository)}<small>{row.repository} · {row.git_ref}{!row.active_commit && ' · awaiting approval'}</small></span>
+    <input type="checkbox" disabled={readonly} checked={selected.includes(row.id)} onChange={event=>
+     changeSelection(event.target.checked?[...selected,row.id]:selected.filter(id=>id!==row.id))}/><span>{collectionTitle(row.repository)}<small>{row.repository} · {row.git_ref}{!row.active_commit && ' · awaiting approval'}</small></span>
    </label>)}</div>
   </fieldset>
-  {!readonly && <div className="actions">
+  {onContinue&&!readonly?<div className="actions setup-footer">
+   <div className="actions"><button type="button" disabled={busy} onClick={back}>Back</button>
+    {onReview&&<button type="button" disabled={busy} onClick={onReview}>Browse skills catalog</button>}</div>
+   <button className="primary" disabled={busy}>{busy?'Saving…':draft?'Save and continue':selected.length?'Continue with saved skills':'Continue without skills'}</button>
+  </div>:!readonly && <div className="actions">
    {active.length>0 && <button className="primary" disabled={busy||!draft}>{busy?'Saving…':'Save assignment'}</button>}
    {onReview && <button type="button" onClick={onReview}>Review collections in Skills</button>}
   </div>}
-  {status && <div className="actions"><p role="status">{status}{onSaved&&' Select this agent beside Skills in Chat.'}</p>
+  {status && !onContinue && <div className="actions"><p role="status">{status}{onSaved&&' Select this agent beside Skills in Chat.'}</p>
    {onSaved && <button type="button" onClick={onSaved}>Open Chat</button>}</div>}
   {(failure||error) && <p className="error" role="alert">{failure||error}</p>}
  </form>;

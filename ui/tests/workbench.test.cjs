@@ -30,6 +30,13 @@ test('custom workbench navigates, splits and opens every implemented module',asy
    responses['skills/agents/'+result.id]=[];
    responses.agents=[...responses.agents,{...JSON.parse(options.body),id:result.id,enabled:true,version:1}];
   }
+  if(options.method==='POST'&&key==='projects'){
+   const body=JSON.parse(options.body);
+   assert.equal(body.name,'First Research Project');
+   const project={...body,id:'first-research-project',description:'',created_at:new Date().toISOString()};
+   responses.projects=[...responses.projects,project];
+   result={id:project.id};
+  }
   if(options.method==='POST'&&key==='skills/import'){
    const body=JSON.parse(options.body);
    if(body.repository===forexCollection.repository){
@@ -436,17 +443,33 @@ test('custom workbench navigates, splits and opens every implemented module',asy
   assert.equal(skillsPanel.querySelector('.skill-import-grid input').value,'marian2js/trading-skills');
   await act(async()=>{submit(skillsPanel);await wait();});
   await act(async()=>{button(skillsPanel,'Approve and activate').click();await wait();});
-  await act(async()=>{button(skillsPanel,'Back to setup').click();await wait();});
+  await act(async()=>{button(skillsPanel,'Continue setup').click();await wait();});
   const assignment=setup().querySelector('.collection-assignment-form');
-  assert.ok([...assignment.querySelectorAll('label')].find(label=>label.textContent.includes('marian2js/trading-skills')).querySelector('input').checked);
-  await act(async()=>{submit(setup());await wait();});
+  const forexCheckbox=()=>[...assignment.querySelectorAll('label')].find(label=>label.textContent.includes('marian2js/trading-skills')).querySelector('input');
+  assert.ok(!forexCheckbox().checked);
+  const oldAssignments=assignmentWrites.length;
+  await act(async()=>{button(setup(),'Continue without skills').click();await wait();});
+  assert.equal(assignmentWrites.length,oldAssignments);
+  assert.match(setup().querySelector('.setup-readiness').textContent,/0 assigned/);
+  await act(async()=>{button(setup(),'Back to skills').click();});
+  await act(async()=>{button(setup(),'Add recommended collection').click();});
+  assert.ok(forexCheckbox().checked);
+  await act(async()=>{button(setup(),'Save and continue').click();await wait();});
   assert.deepEqual(assignmentWrites.at(-1),['forex']);
-  await act(async()=>{button(setup(),'Continue to start work').click();});
+  assert.match(setup().querySelector('[aria-current=step]').textContent,/Start work/);
+  assert.match(setup().querySelector('.setup-readiness').textContent,/1 assigned/);
+  const closeGuide=[...document.querySelectorAll('button[aria-label="Close Get started"]')].find(control=>!control.closest('[hidden]'));
+  await act(async()=>{closeGuide.click();await wait();});
+  await navigate('Setup');
+  assert.match(setup().querySelector('[aria-current=step]').textContent,/Start work/);
+  assert.match(setup().querySelector('.setup-current').textContent,/International Forex Research/);
   const oldWrites=writes.length;
   await act(async()=>{button(setup(),'Open test chat').click();await wait();});
   assert.equal(chat().querySelector('[aria-label="Chat agent profile"]').value,'guided-agent');
   assert.match(chat().querySelector('[aria-label="Message CORE-AI"]').value,/EURUSD and USDJPY/);
   assert.equal(writes.length,oldWrites);
+  responses.projects=[];
+  await act(async()=>{button(document,'Refresh').click();await wait();});
   await navigate('Tasks');
   const taskPrompt=()=>task().querySelector('textarea[name=prompt]');
   taskPrompt().value='Keep this unfinished task';
@@ -456,9 +479,15 @@ test('custom workbench navigates, splits and opens every implemented module',asy
   await act(async()=>{button(task(),'Use setup draft').click();});
   assert.equal(task().querySelector('select[name=agent_id]').value,'guided-agent');
   assert.match(taskPrompt().value,/EURUSD and USDJPY/);
+  await act(async()=>{button(task(),'Create first project').click();});
+  const firstProject=task().querySelector('.task-project form');
+  firstProject.elements.namedItem('project_name').value='First Research Project';
+  await act(async()=>{firstProject.dispatchEvent(new dom.window.Event('submit',{bubbles:true,cancelable:true}));await wait();});
+  assert.equal(taskPrompt().value.includes('EURUSD'),true);
+  assert.equal(task().querySelector('select[name=project_id]').value,'first-research-project');
   change(task().querySelector('select[name=model]'),'test:latest');
   await act(async()=>{submit(task());await wait();});
-  assert.equal(responses['runs/guided-task'].project_id,'project');
+  assert.equal(responses['runs/guided-task'].project_id,'first-research-project');
   assert.equal(responses['runs/guided-task'].agent_id,'guided-agent');
   assert.match(task().querySelector('.result').textContent,/Task result.*QUEUED/);
  }finally{await act(async()=>root.unmount());global.fetch=fetchOld;delete global.IS_REACT_ACT_ENVIRONMENT;for(const k of Object.keys(old)){if(old[k])Object.defineProperty(global,k,old[k]);else delete global[k];}if(locationOld)Object.defineProperty(global,'location',locationOld);else delete global.location;dom.window.close();}

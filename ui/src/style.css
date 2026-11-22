@@ -258,23 +258,57 @@
 @container(max-width:680px){.settings-grid{grid-template-columns:minmax(0,1fr)}}
 
 /* Guided agent setup */
-.setup-steps{display:flex;flex-wrap:wrap;gap:4px;margin:0;padding:0;border-bottom:1px solid var(--line);list-style:none}
-.setup-steps li{padding:7px 10px;color:var(--muted);border-bottom:2px solid transparent;font-size:var(--label-size)}
+.setup-steps{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:4px;margin:0;padding:0;border-bottom:1px solid var(--line);list-style:none}
+.setup-steps li{display:flex;align-items:center;gap:6px;min-height:36px;padding:5px 8px;color:var(--muted);border-bottom:2px solid transparent;font-size:var(--label-size);line-height:1.3}
 .setup-steps li[aria-current=step]{border-color:var(--accent);background:var(--selection);color:var(--selected-text)}
-.setup-card{width:min(760px,100%);display:grid;gap:var(--space)}
-.setup-card h2,.setup-route h3{margin:0;font-size:calc(var(--ui-size) + 2px);font-weight:600}
+.setup-steps li[data-complete=true]{color:var(--text)}
+.setup-step-number{display:grid;place-items:center;min-width:19px;height:19px;border:1px solid var(--line);border-radius:50%;font-size:var(--meta-size)}
+.setup-steps,.setup-card{width:min(780px,100%)}
+.setup-card,.setup-skills{display:grid;grid-template-columns:minmax(0,1fr);gap:var(--section-gap)}
+.setup-skills[hidden]{display:none}
+.setup-card :is(h2,h3,p),.setup-card dl{margin:0}
+.setup-card h2{font-size:calc(var(--ui-size) + 2px);font-weight:650}
+.setup-route h3{font-size:var(--ui-size);font-weight:600}
 .setup-card :is(input:not([type=checkbox]):not([type=radio]),select,textarea){width:100%}
 .setup-card label{max-width:none}
+.setup-card form>.panel-note{margin:0 0 var(--space)}
 .setup-fieldset{display:flex;flex-wrap:wrap;gap:6px 16px;border:0;margin:0 0 8px;padding:0}
 .setup-fieldset legend{font-size:var(--label-size);margin-bottom:4px}
 .setup-fieldset label{margin:0}
-.setup-recommendation,.setup-route{display:flex;align-items:center;justify-content:space-between;gap:6px 12px;flex-wrap:wrap;padding:var(--panel-inset);border:1px solid var(--line);border-radius:4px}
-.setup-recommendation p,.setup-route p{margin:4px 0 0}
-.setup-footer{padding-top:var(--space);border-top:1px solid var(--line)}
-.setup-card>button{justify-self:start;margin:0}
+.setup-current{display:flex;align-items:baseline;justify-content:space-between;gap:4px 10px;flex-wrap:wrap;padding:6px 0;border-block:1px solid var(--line)}
+.setup-current b{overflow-wrap:anywhere}
+.setup-current span,.setup-readiness dt{font-size:var(--label-size);color:var(--muted)}
+.setup-readiness{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:0;border:1px solid var(--line);border-radius:4px}
+.setup-readiness div{min-width:0;padding:7px 8px;border-right:1px solid var(--line)}
+.setup-readiness div:last-child{border:0}
+.setup-readiness dd{margin:3px 0 0;font-size:var(--label-size);font-weight:600}
+.setup-recommendation,.setup-route{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:8px 12px;padding:var(--panel-inset);border:1px solid var(--line);border-radius:4px;overflow-wrap:anywhere}
+.setup-recommendation p,.setup-route p{margin-top:3px}
+.setup-route button,.setup-recommendation button{justify-self:start}
+.setup-footer{padding-top:var(--space);border-top:1px solid var(--line);justify-content:space-between}
 .setup-task-note p{margin:4px 0}
+.task-project{border-bottom:1px solid var(--line)}
+.task-project form{max-width:360px}
 .chat-setup-link{margin-bottom:8px}
-@container(max-width:450px){
+@container(max-width:535px){
+ .setup-recommendation,.setup-route{grid-template-columns:minmax(0,1fr)}
+ .setup-readiness{grid-template-columns:repeat(2,minmax(0,1fr))}
+ .setup-readiness div:nth-child(2){border-right:0}
+ .setup-readiness div:nth-child(-n+2){border-bottom:1px solid var(--line)}
+}
+@container(max-width:390px){
  .setup-steps{gap:2px}
- .setup-steps li{padding-inline:4px}
+ .setup-steps li{padding-inline:3px;gap:3px}
+}
+
+.setup-page>.page-head{width:min(780px,100%)}
+.collection-assignment-form .skill-assignment label{flex-direction:row;align-items:flex-start;padding:5px 4px;border-radius:3px;cursor:pointer}
+.collection-assignment-form .skill-assignment label:hover{background:var(--hover)}
+.collection-assignment-form .skill-assignment input{flex:none;margin:3px 0 0}
+.collection-assignment-form .skill-assignment label>span{margin:0;min-width:0}
+.setup-card .collection-filters{display:grid;grid-template-columns:minmax(0,260px) auto;justify-content:start}
+.setup-card .collection-filters input[type=search]{width:100%}
+@container(max-width:535px){
+ .setup-card .collection-filters{grid-template-columns:minmax(0,1fr);justify-content:stretch}
+ .setup-card .collection-filters button{justify-self:start}
 }

@@ -161,7 +161,22 @@ function Tasks({tick,refresh,go,researchOnly=false,setup}:{tick:number;refresh:(
  const detailsRef=useRef<HTMLDetailsElement>(null);
  const applied=useRef<RunSetup>(null);
  const [pendingSetup,setPendingSetup]=useState<RunSetup|null>(null);
- const availableProjects=projects?.filter((project:Row)=>!project.archived_at);
+ const [createdProject,setCreatedProject]=useState<{id:string;name:string}|null>(null);
+ const [selectProject,setSelectProject]=useState('');
+ const activeProjects=Array.isArray(projects)?projects.filter((project:Row)=>!project.archived_at):null;
+ const availableProjects=createdProject&&!projects?.some((project:Row)=>project.id===createdProject.id)?[...(activeProjects??[]),createdProject]:activeProjects;
+ useEffect(()=>{
+  if(createdProject&&projects?.some((project:Row)=>project.id===createdProject.id))setCreatedProject(null);
+ },[createdProject,projects]);
+ useEffect(()=>{
+  if(!selectProject||!formRef.current)return;
+  const field=formRef.current.elements.namedItem('project_id') as HTMLSelectElement;
+  if([...field.options].some(option=>option.value===selectProject)){
+   field.value=selectProject;
+   if(!field.closest('[hidden]'))field.focus();
+   setSelectProject('');
+  }
+ },[selectProject,availableProjects]);
  const enabled=agents?.filter((agent:Row)=>agent.enabled);
  function applySetup(value:RunSetup){
   const fields=formRef.current?.elements;
@@ -209,10 +224,11 @@ function Tasks({tick,refresh,go,researchOnly=false,setup}:{tick:number;refresh:(
   <PageHead title={researchOnly?'Workflows':'Tasks'} subtitle={researchOnly?'Project research with cited evidence, checkpoints, and review.':'Queue work and inspect the recorded result.'}>{!researchOnly&&<button onClick={()=>go('Setup')}>Guided setup</button>}</PageHead>
   <ErrorNote error={err||error||detailError}/>
   <details ref={detailsRef} className="box" open={!id}><summary>{researchOnly?'New research run':'New task'}</summary>
+   {!readonly&&Array.isArray(availableProjects)&&!availableProjects.length&&
+    <TaskProject go={go} onCreated={project=>{setCreatedProject(project);setSelectProject(project.id);refresh();}}/>}
    <form ref={formRef} className="form research-form" onSubmit={submit}>
     {pendingSetup&&<div className="actions setup-task-note"><p>Use the guided agent and sample prompt in this form?</p><button type="button" onClick={()=>applySetup(pendingSetup)}>Use setup draft</button><button type="button" onClick={()=>setPendingSetup(null)}>Keep current draft</button></div>}
     {setup&&!pendingSetup&&<p className="panel-note">Review the selected agent, choose a project and model, and add your inputs before queuing.</p>}
-    {!readonly&&Array.isArray(availableProjects)&&!availableProjects.length&&<div className="actions setup-task-note"><p>A task needs an active project.</p><button type="button" onClick={()=>go('Projects')}>Open Projects</button></div>}
     {!readonly&&Array.isArray(enabled)&&!enabled.length&&<div className="actions setup-task-note"><p>A task needs an enabled agent.</p><button type="button" onClick={()=>go('Setup')}>Set up an agent</button></div>}
     <div className="fields task-fields">
      <label>Project<select name="project_id" required defaultValue=""><option value="" disabled>Select project</option>{availableProjects?.map((p:Row)=><option key={p.id} value={p.id}>{p.name}</option>)}</select></label>
@@ -276,6 +292,34 @@ function Tasks({tick,refresh,go,researchOnly=false,setup}:{tick:number;refresh:(
   </section>
  </section>;
 
+}
+function TaskProject({go,onCreated}:{go:(view:View)=>void;onCreated:(project:{id:string;name:string})=>void}){
+ const [creating,setCreating]=useState(false);
+ const [busy,setBusy]=useState(false);
+ const [error,setError]=useState('');
+ async function create(event:FormEvent<HTMLFormElement>){
+  event.preventDefault();
+  if(busy)return;
+  const name=String(new FormData(event.currentTarget).get('project_name')??'').trim();
+  if(!name){setError('Enter a project name.');return;}
+  setError('');setBusy(true);
+  try{
+   const result=await api('projects','POST',{name});
+   onCreated({id:result.id,name});
+  }catch(failure){setError((failure as Error).message);}
+  finally{setBusy(false);}
+ }
+ return <div className="form task-project">
+  {!creating?<div className="actions setup-task-note"><p>A task needs an active project.</p>
+   <button type="button" className="primary" onClick={()=>setCreating(true)}>Create first project</button>
+   <button type="button" onClick={()=>go('Projects')}>Open Projects</button></div>
+  :<form onSubmit={create}>
+   <label>Project name<input name="project_name" required maxLength={120} placeholder="Market Research" autoFocus disabled={busy}/></label>
+   <ErrorNote error={error}/>
+   <div className="actions"><button className="primary" disabled={busy}>{busy?'Creating…':'Create and select project'}</button>
+    <button type="button" disabled={busy} onClick={()=>{setCreating(false);setError('');}}>Cancel</button></div>
+  </form>}
+ </div>;
 }
 function ResearchDetails({detail,readonly,action}:{detail:Row;readonly:boolean;action:(name:string,body:unknown)=>Promise<void>}){
  const run=detail.research;

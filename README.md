@@ -215,13 +215,17 @@ For session clients, use `POST /api/v1/runs` with the existing `project_id`, `ag
 Open **Get started** in the Explorer to create an agent or choose an existing
 enabled agent. Select **International Forex**, **India F&O**, **Strategy
 validation**, or **Custom agent** for editable starting instructions. The skills
-step shows the suggested collection and lets you save assignments or continue with
-the agent's current collections. Administrators can open the import form directly
-from this step and return after approving the collection.
+step shows the suggested collection and lets you explicitly add it or continue
+with the agent's current collections. Administrators can import and approve a
+collection, then choose **Continue setup**. After you select or create an agent,
+the guide remembers its current step in this browser.
 
-**Open test chat** opens a new draft with the agent and sample prompt. **Open task
-form** carries them into Tasks, where you select a project and model before
-queuing. The dedicated Skills, Agents, Tasks, and Workflows screens still provide
+The final step shows model, project, and worker availability. **Open test chat**
+opens a new draft with the agent and sample prompt. **Open task form** carries
+them into Tasks, where you select a project and model before queuing. If there
+are no active projects, create and select the first project inside the task form.
+
+The dedicated Skills, Agents, Tasks, and Workflows screens still provide
 catalog maintenance, agent versions and tools, and advanced run controls. Market
 research templates use data you provide or connect. They do not fetch market data
 or send orders on their own.
