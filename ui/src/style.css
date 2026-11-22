@@ -163,11 +163,22 @@
 .research-details dd{margin:0}
 .research-details blockquote{margin:6px 0 14px;padding-inline-start:12px;border-inline-start:2px solid var(--line)}
 
-.skill-workspace{display:grid;grid-template-columns:minmax(220px,.85fr) minmax(0,1.15fr);gap:var(--section-gap);align-items:start}
-.skill-workspace[data-inspecting=true]{grid-template-columns:minmax(260px,320px) minmax(0,1fr);grid-template-rows:auto 1fr}
-.skill-workspace[data-inspecting=true] .skill-detail{grid-area:1/2/span 2}
-.skill-workspace[data-inspecting=true] .skill-assignments{grid-column:1}
-.skill-workspace>.skill-collection-list:only-child{grid-column:1/-1}
+.skill-workspace,.agents-grid{display:grid;grid-template-columns:minmax(230px,clamp(230px,34%,325px)) minmax(0,1fr);gap:var(--section-gap);align-items:start}
+.skill-steps{display:flex;flex-wrap:wrap;gap:4px;border-bottom:1px solid var(--line)}
+.skill-steps button{min-height:34px;padding:5px 10px;background:transparent;border:0;border-radius:0;border-bottom:2px solid transparent;color:var(--muted)}
+.skill-steps button[aria-current=step]{border-bottom-color:var(--accent);background:var(--selection);color:var(--selected-text)}
+.skill-steps button:focus-visible{outline-offset:-2px}
+.skill-filters{display:grid;gap:6px;padding:var(--panel-inset);border-bottom:1px solid var(--line)}
+.skill-filters label{display:flex;gap:5px;align-items:center;color:var(--muted);font-size:var(--label-size)}
+.skill-index{max-height:52vh;overflow:auto}
+.skill-index .record{min-height:39px}
+.skill-index .record:last-child{border-bottom:0}
+.skill-index .record[aria-current=true]{background:var(--selection);color:var(--selected-text);box-shadow:inset 2px 0 var(--accent)}
+.skill-index .record:focus-visible{outline-offset:-2px}
+.agent-profile{border:0;padding:0;margin:0;min-width:0}
+.agent-detail>nav{padding-inline:var(--panel-inset)}
+.agent-detail>.panel-note,.agent-detail>.error{margin:var(--panel-inset) var(--panel-inset) 0}
+.agent-detail .skill-steps button{padding-inline:6px}
 .skill-import{align-items:end;flex-wrap:wrap}
 .skill-import label,.skills-page .settings-content>label{display:grid;gap:3px}
 .skill-description{display:block}
@@ -175,12 +186,14 @@
 .skill-preview pre{max-height:360px;overflow:auto;background:var(--canvas)}
 .skill-used{color:var(--muted);font-size:.9em;margin-top:6px}
 .skill-used ul{margin:4px 0}
-.skill-assignment{display:flex;gap:8px 14px;flex-wrap:wrap}
-.skill-assignment label{display:flex;align-items:center;gap:4px}
-@container(max-width:760px){
- .skill-workspace,.skill-workspace[data-inspecting=true]{grid-template-columns:minmax(0,1fr)}
- .skill-workspace[data-inspecting=true]{grid-template-rows:auto}
- .skill-workspace[data-inspecting=true] .skill-detail{grid-area:auto}
+.skill-assignment{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,205px),1fr));gap:4px 12px;max-height:36vh;overflow:auto;margin-top:5px}
+.skill-assignment label{display:flex;align-items:center;gap:6px;min-height:36px;overflow-wrap:anywhere}
+.skill-assignment small{display:block;color:var(--muted)}
+.collection-assignment-form .actions p{margin:6px 0}
+.collection-assignment-form input[type=search]{width:min(100%,320px)}
+@container(max-width:690px){
+ .skill-workspace,.agents-grid{grid-template-columns:minmax(0,1fr)}
+ .skill-index{max-height:28vh}
 }
 
 .skill-table{max-height:420px;overflow:auto}
@@ -224,17 +237,15 @@
 .readiness .dot{grid-area:1/1}
 .readiness button{grid-area:1/3/span 2;margin:0}
 .overview-notes p,.overview-notes .box>button,.box>.panel-note{margin:6px var(--panel-inset)}
-.agents-grid{grid-template-columns:minmax(0,1.6fr) minmax(220px,1fr)}
 .fields.task-fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,165px),1fr))}
 .task-fields :is(input,select){width:100%}
-.skill-workspace .record[aria-current=true]{background:var(--selection);color:var(--selected-text);box-shadow:inset 2px 0 var(--accent)}
 .box>header,.box>summary{min-height:var(--row);padding-inline:var(--panel-inset)}
 .record,.box>header,.box>summary{overflow-wrap:anywhere}
 .app .workspace-toolbar{gap:4px 10px;padding-inline:var(--page-inset)}
 .app .workspace-toolbar .actions{gap:4px}
 .workspace-toolbar .actions button{min-height:24px;padding-inline:6px}
 @container(max-width:680px){
- .overview-grid,.agents-grid{grid-template-columns:minmax(0,1fr)}
+ .overview-grid{grid-template-columns:minmax(0,1fr)}
 }
 
 

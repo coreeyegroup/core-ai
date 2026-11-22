@@ -6,7 +6,7 @@ import Connections from './Connections';
 import ProjectWorkspace,{type ProjectLocation} from './Projects';
 import Sources from './Sources';
 import Settings from './Settings';
-import Skills,{SkillVersions} from './Skills';
+import Skills,{AgentCollections,SkillVersions,type Collection} from './Skills';
 import {FilesPanel,ArtifactLibrary,AccessPanel,CapabilitiesPanel,useResource,openArtifact} from './Workspace';
 import {useSession} from './Session';
 import {views,type View} from './layout';
@@ -29,8 +29,8 @@ export function Module({view,tick,refresh,go,appearance,changeAppearance,visible
   case 'Chat':return <Chat tick={tick} visible={visible} sendKey={appearance.sendKey} chatDefaults={appearance.chatDefaults}/>;
   case 'Overview':return <Overview tick={tick} go={go}/>;
   case 'Projects':return <ProjectWorkspace tick={tick} refresh={refresh} location={projectLocation} changeLocation={changeProjectLocation}/>;
-  case 'Skills':return <Skills tick={tick} refreshWorkspace={refresh}/>;
-  case 'Agents':return <Agents tick={tick} refresh={refresh}/>;
+  case 'Skills':return <Skills tick={tick} refreshWorkspace={refresh} go={go}/>;
+  case 'Agents':return <Agents tick={tick} refresh={refresh} go={go}/>;
   case 'Tasks':return <Tasks tick={tick} refresh={refresh}/>;
   case 'Knowledge':return <Sources tick={tick} refresh={refresh}/>;
   case 'Artifacts':return <ArtifactLibrary tick={tick} refresh={refresh}/>;
@@ -51,12 +51,101 @@ function Overview({tick,go}:{tick:number;go:(v:View)=>void}){
  const pending=d?.runs.filter((r:Row)=>['QUEUED','RUNNING','CANCEL_REQUESTED'].includes(r.status)).reduce((n:number,r:Row)=>n+Number(r.n),0);
  return <section className="page"><PageHead title="Overview" subtitle="Workspace activity and service readiness."/><ErrorNote error={error}/><div className="metric-grid">{[['Projects',d?.projects,'Projects'],['Agents',d?.agents,'Agents'],['Active tasks',pending,'Tasks'],['Knowledge documents',d?.documents,'Knowledge']].map(([label,n,v])=><button className="metric" key={label} onClick={()=>go(v as View)}><small>{label}</small><strong>{n??'—'}</strong><ArrowUpRight className="metric-link" size={14} aria-hidden="true"/></button>)}</div><div className="overview-grid"><section className="box"><header>Runtime readiness</header><div className="readiness"><div><span className={'dot '+(d?.worker?.online?'ready':'')}/><b>Task worker</b><span>{d?d.worker?.online?'Online · one inference slot':'Offline or heartbeat stale':'Checking…'}</span></div><div><span className="dot"/><b>Model provider</b><span>{d?.inference.endpoint??'Checking…'}</span><button onClick={()=>go('Models')}>Inspect models</button></div><div><b>Product interfaces</b><span>Independent operation · no connectors required</span><button onClick={()=>go('Integrations')}>Interfaces</button></div></div></section><section className="box"><header>Your workspace</header><div className="pipeline">{(['Projects','Agents','Knowledge','Tasks','Artifacts'] as View[]).map((v,i)=><button key={v} onClick={()=>go(v)}><b>{v}</b><span>{['Define the work','Set instructions','Add project sources','Queue and inspect','Review outputs'][i]}</span></button>)}</div></section></div><div className="two-col overview-notes"><section className="box"><header>Execution boundary</header><p>This release supports local model generation and bounded project tools. Each task records its agent version, tool events and result. Host commands and product actions are unavailable.</p></section><section className="box"><header>Workspace controls</header><p>Use Ctrl K to find a panel or command. Open views together, split your workspace, pin tabs and detach a workspace into its own window.</p><button onClick={()=>go('Tasks')}>Create a task →</button></section></div></section>;
 }
-function Agents({tick,refresh}:{tick:number;refresh:()=>void}){
- const readonly=useSession().role==='VIEWER';
- const {data,error}=useData('agents',tick),[selected,setSelected]=useState<Row|null>(null),[name,setName]=useState(''),[instructions,setInstructions]=useState(''),[enabled,setEnabled]=useState(true),[runtime,setRuntime]=useState('analysis'),[tools,setTools]=useState<string[]>(['knowledge.search','project.inspect']),[err,setErr]=useState(''),[busy,setBusy]=useState(false);
- const reset=()=>{setSelected(null);setName('');setInstructions('');setEnabled(true);setRuntime('analysis');setTools(['knowledge.search','project.inspect']);};
- async function submit(e:FormEvent){e.preventDefault();setBusy(true);try{await api('agents'+(selected?'/'+selected.id:''),selected?'PUT':'POST',{name,instructions,enabled,runtime_mode:runtime,tools});reset();setErr('');refresh();}catch(e){setErr((e as Error).message);}finally{setBusy(false);}}
- return <section className="page"><PageHead title="Agents" subtitle="Versioned instructions · changes apply to new tasks"/><ErrorNote error={err||error}/><div className="two-col agents-grid"><form className="box form" onSubmit={submit}><header>{selected?'Edit agent · version '+selected.version:'New agent'}</header><label>Name<input required maxLength={120} value={name} onChange={e=>setName(e.target.value)}/></label><label>Instructions<textarea required rows={10} maxLength={16000} value={instructions} onChange={e=>setInstructions(e.target.value)} placeholder="Define the role, purpose and expected output…"/></label><label>Execution mode<select value={runtime} onChange={e=>setRuntime(e.target.value)}><option value="analysis">Analysis · retrieve and answer</option><option value="tools">Tools · bounded model-directed execution</option></select></label>{runtime==='tools'&&<fieldset className="tool-permissions"><legend>Permitted tools</legend>{['knowledge.search','project.inspect','artifact.create'].map(t=><label className="checkbox-label" key={t}><input type="checkbox" checked={tools.includes(t)} onChange={e=>setTools(x=>e.target.checked?[...x,t]:x.filter(v=>v!==t))}/>{t}</label>)}<small>Requires verified model tool support. Maximum six model steps and eight tool calls; no host commands.</small></fieldset>}<label><input type="checkbox" checked={enabled} onChange={e=>setEnabled(e.target.checked)}/>Enabled for new tasks</label><div className="actions"><button className="primary" disabled={busy||readonly}>{selected?'Save new version':'Create agent'}</button>{selected&&<button type="button" onClick={reset}>Cancel edit</button>}</div></form><section className="box"><header>Agent registry</header>{data?.map((r:Row)=><button className="record" key={r.id} onClick={()=>{setSelected(r);setName(r.name);setInstructions(r.instructions);setEnabled(r.enabled);setRuntime(r.runtime_mode||'analysis');setTools(r.tools||[]);}}><b>{r.name}</b><span>v{r.version} · {r.enabled?'Enabled':'Disabled'}</span><small>{r.instructions.slice(0,160)}</small></button>)}{data?.length===0&&<Empty>No agents yet. Define the first agent.</Empty>}</section></div></section>;
+type AgentProfile = {name:string;instructions:string;enabled:boolean;runtime_mode:string;tools:string[]};
+type AgentRecord = AgentProfile & {id:string;version:number};
+const agentTools = ['knowledge.search','project.inspect','artifact.create'];
+const initialProfile: AgentProfile = {name:'',instructions:'',enabled:true,runtime_mode:'analysis',tools:agentTools.slice(0,2)};
+
+function Agents({tick,refresh,go}:{tick:number;refresh:()=>void;go:(view:View)=>void}){
+ const readonly = useSession().role==='VIEWER';
+ const {data,error} = useData('agents',tick);
+ const {data:catalog,error:catalogError} = useResource('skills',tick);
+ const rows: AgentRecord[] = Array.isArray(data)?data:[];
+ const collections: Collection[] = Array.isArray(catalog)?catalog:[];
+ const [selected,setSelected] = useState<AgentRecord|null>(null);
+ const [section,setSection] = useState<'profile'|'collections'|null>(null);
+ const [profile,setProfile] = useState(initialProfile);
+ const [dirty,setDirty] = useState(false);
+ const [collectionsDirty,setCollectionsDirty] = useState(false);
+ const [err,setErr] = useState('');
+ const [notice,setNotice] = useState('');
+ const [busy,setBusy] = useState(false);
+ const heading = useRef<HTMLElement>(null);
+
+ function open(agent:AgentRecord|null,editing=true){
+  if ((dirty || collectionsDirty) && !window.confirm('Discard unsaved changes to this agent?')) return;
+  setSelected(agent);
+  setProfile(agent?{name:agent.name,instructions:agent.instructions,enabled:agent.enabled,runtime_mode:agent.runtime_mode||'analysis',tools:agent.tools||[]}:initialProfile);
+  setSection(editing?'profile':null);setErr('');setNotice('');setDirty(false);setCollectionsDirty(false);
+  if (editing) window.requestAnimationFrame(()=>heading.current?.focus());
+ }
+ function edit(change:Partial<AgentProfile>){
+  setProfile(current=>({...current,...change}));setDirty(true);setNotice('');
+ }
+ async function submit(event:FormEvent){
+  event.preventDefault();
+  if (readonly) return;
+  setBusy(true);setErr('');
+  try {
+   const result = await api(selected?'agents/'+selected.id:'agents',selected?'PUT':'POST',profile);
+   setSelected({...profile,id:selected?.id??result.id,version:selected?result.version:1});
+   setDirty(false);
+   setNotice(selected?'Profile saved.':'Agent created. Choose collections to use with it.');
+   if (!selected) setSection('collections');
+   refresh();
+  } catch (failure) {setErr((failure as Error).message);}
+  finally {setBusy(false);}
+ }
+ return <section className="page agents-page">
+  <PageHead title="Agents" subtitle="Set up an agent, attach skill collections, and use it in Chat.">
+   <div className="actions"><button type="button" onClick={()=>go('Skills')}>Open Skills</button>
+    {!readonly&&<button type="button" className="primary" disabled={busy} onClick={()=>open(null)}>New agent</button>}</div>
+  </PageHead>
+  <ErrorNote error={error}/>
+  <div className="two-col agents-grid">
+   <section className="box"><header>Agent registry <span>{data&&rows.length+(rows.length===1?' agent':' agents')}</span></header>
+    <div className="skill-index">{rows.map(agent=><button type="button" className="record" key={agent.id}
+     aria-current={selected?.id===agent.id?'true':undefined} disabled={busy} onClick={()=>open(agent)}>
+     <b>{agent.name}</b><span>v{agent.version} · {agent.enabled?'Enabled':'Disabled'}</span>
+    </button>)}</div>
+    {rows.length===0&&<Empty>{data?'No agents yet.':'Loading agents…'}</Empty>}
+   </section>
+   {section ? <section className="box agent-detail">
+    <header tabIndex={-1} ref={heading}>{selected?.name??'New agent'} {selected&&<span>Version {selected.version}</span>}</header>
+    <nav className="skill-steps" aria-label="Agent setup">
+     <button type="button" aria-current={section==='profile'?'step':undefined} onClick={()=>setSection('profile')}>1. Profile</button>
+     <button type="button" aria-current={section==='collections'?'step':undefined} disabled={!selected||busy} onClick={()=>setSection('collections')}>2. Collections</button>
+     <button type="button" disabled={!selected?.enabled||busy} onClick={()=>go('Chat')}>3. Open Chat</button>
+    </nav>
+    <ErrorNote error={err}/>
+    {notice&&<p role="status" className="panel-note">{notice}</p>}
+    <form hidden={section!=='profile'} className="form" onSubmit={submit}>
+     <fieldset className="agent-profile" disabled={busy||readonly}>
+      <label>Agent name<input required maxLength={120} value={profile.name} onChange={event=>edit({name:event.target.value})}/></label>
+      <label>Instructions<textarea required rows={7} maxLength={16000} value={profile.instructions} onChange={event=>edit({instructions:event.target.value})} placeholder="Define the role, purpose, and expected output."/></label>
+      <label>Execution mode<select value={profile.runtime_mode} onChange={event=>edit({runtime_mode:event.target.value})}><option value="analysis">Analysis · retrieve and answer</option><option value="tools">Tools · bounded model-directed execution</option></select></label>
+      {profile.runtime_mode==='tools'&&<fieldset className="tool-permissions"><legend>Permitted tools</legend>
+       {agentTools.map(tool=><label className="checkbox-label" key={tool}><input type="checkbox" checked={profile.tools.includes(tool)} onChange={event=>edit({tools:event.target.checked?[...profile.tools,tool]:profile.tools.filter(value=>value!==tool)})}/>{tool}</label>)}
+       <small>Requires model tool support. Up to six model steps and eight tool calls.</small>
+      </fieldset>}
+      <label><input type="checkbox" checked={profile.enabled} onChange={event=>edit({enabled:event.target.checked})}/>Enabled for new tasks</label>
+     </fieldset>
+     <div className="actions">
+      {!readonly&&<button className="primary" disabled={busy}>{busy?'Saving…':selected?'Save new version':'Create agent'}</button>}
+      {selected?<button type="button" disabled={busy} onClick={()=>setSection('collections')}>Continue to collections</button>
+       :<button type="button" disabled={busy} onClick={()=>open(null,false)}>Cancel</button>}
+     </div>
+    </form>
+    {selected&&<div className="form" hidden={section!=='collections'}>
+     <p className="panel-note">Select active collections for this agent. In Chat, pick the agent under Advanced and choose Automatic or Manual under Skills.</p>
+     <ErrorNote error={catalogError}/>
+     <AgentCollections key={selected.id} agent={selected.id} rows={collections} tick={tick} readonly={readonly} onDirtyChange={setCollectionsDirty} onSaved={selected.enabled?()=>go('Chat'):undefined} onReview={()=>go('Skills')}/>
+    </div>}
+   </section> : <section className="box settings-content"><h2>Start with an agent</h2>
+    <p>{readonly?'Select an agent to see its profile and collections.':'Select an agent from the registry or choose New agent to start. Save the profile, attach collections, then open Chat.'}</p>
+   </section>}
+  </div>
+ </section>;
 }
 function Tasks({tick,refresh,researchOnly=false}:{tick:number;refresh:()=>void;researchOnly?:boolean}){
  const readonly=useSession().role==='VIEWER';

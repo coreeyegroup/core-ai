@@ -6,7 +6,7 @@ test('custom workbench navigates, splits and opens every implemented module',asy
  const fetched=[];const overview={projects:1,agents:1,documents:0,runs:[],worker:{online:true},inference:{endpoint:'http://127.0.0.1:11434',model:'test:latest'},release:'test'};
  const responses={'chat/conversations?archived=false&q=':[],session:{username:'test-admin',role:'ADMIN',csrf:'csrf-test'},overview,projects:[{id:'project',name:'Project one',description:'',created_at:new Date().toISOString()}],agents:[{id:'agent',name:'Analyst',instructions:'Test',version:1,enabled:true}],models:{available:true,models:[{name:'test:latest',size:1000000},{name:'editor:latest',size:1000000}],config:overview.inference},runs:[],events:[],documents:[],artifacts:[],files:[],'library/artifacts':[],'access/users':[],capabilities:{features:[]},'operations/metrics':{tasks:[],chat:[],files:[]},tools:[],connections:[],'connections/webhook-destinations':[],'connections/key-storage':{available:true}};
   const catalogCommit='a'.repeat(40);
-  const catalogRow={id:'collection',repository:'example/skills',git_ref:'HEAD',active_commit:null,latest_commit:catalogCommit};
+  const catalogRow={id:'collection',repository:'example/skills',git_ref:'HEAD',active_commit:null,latest_commit:catalogCommit,skill_count:1};
   responses.skills=[catalogRow];
   responses['skills/collections/collection?commit='+catalogCommit]={
    ...catalogRow,commit:catalogCommit,releases:[{commit_sha:catalogCommit,skill_count:1}],
@@ -17,10 +17,25 @@ test('custom workbench navigates, splits and opens every implemented module',asy
   const chatSkill={name:'review',description:'Review evidence',repository:'example/skills',collection_id:'collection',commit:catalogCommit,path:'review/SKILL.md'};
   responses['skills/chat/preview']={available:[chatSkill],automatic:[chatSkill],error:''};
   responses['skills/agents/new-agent']=[];
- let conversationCount=0;const writes=[],connectionWrites=[],researchWrites=[];const fetchOld=global.fetch;global.fetch=async(path,options={})=>{fetched.push(path);const key=path.replace('/api/v1/','');let result=responses[key==='models?catalog=true'?'models':key]??{};
+ let conversationCount=0,agentCount=0;const writes=[],connectionWrites=[],researchWrites=[],assignmentWrites=[];const fetchOld=global.fetch;global.fetch=async(path,options={})=>{fetched.push(path);const key=path.replace('/api/v1/','');let result=responses[key==='models?catalog=true'?'models':key]??{};
   if(options.method==='POST'&&key==='agents'){
-   result={id:'new-agent'};
-   responses.agents=[...responses.agents,{...JSON.parse(options.body),id:result.id,enabled:true}];
+   result={id:++agentCount===1?'new-agent':'studio-agent'};
+   responses['skills/agents/'+result.id]=[];
+   responses.agents=[...responses.agents,{...JSON.parse(options.body),id:result.id,enabled:true,version:1}];
+  }
+  if(options.method==='POST'&&key==='skills/import'){
+   assert.deepEqual(JSON.parse(options.body),{repository:'example/skills',ref:'HEAD'});
+   result={id:'collection',commit:catalogCommit,count:1,invalid:['draft/SKILL.md']};
+  }
+  if(options.method==='PUT'&&key==='skills/collections/collection/activate'){
+   assert.deepEqual(JSON.parse(options.body),{commit:catalogCommit,expected_commit:null});
+   catalogRow.active_commit=catalogCommit;
+   responses['skills/collections/collection?commit='+catalogCommit].active_commit=catalogCommit;
+  }
+  if(options.method==='PUT'&&key.startsWith('skills/agents/')){
+   const body=JSON.parse(options.body);
+   assignmentWrites.push(body.collections);
+   responses[key]=body.collections;
   }
   if(options.method==='POST'&&key==='runs'){
    const body=JSON.parse(options.body),id='research-1';
@@ -297,23 +312,58 @@ test('custom workbench navigates, splits and opens every implemented module',asy
   assert.equal(connections().querySelector('.connection-status').dataset.status,'Revoked');
   await act(async()=>{window.dispatchEvent(new CustomEvent('core-ai-goto',{detail:{view:'Skills'}}));await wait();});
   const skillsPanel=document.querySelector('.view:not([hidden]) .skills-page');
-  await act(async()=>{skillsPanel.querySelector('.record').click();await wait();});
-  const approve=[...skillsPanel.querySelectorAll('button')].find(button=>button.textContent==='Approve and activate');
+  const button=(panel,label)=>[...panel.querySelectorAll('button')].find(control=>control.textContent===label);
+  const input=(element,value)=>{
+   const proto=Object.getPrototypeOf(element);
+   Object.getOwnPropertyDescriptor(proto,'value').set.call(element,value);
+   element.dispatchEvent(new dom.window.Event('input',{bubbles:true}));
+  };
+  assert.match(skillsPanel.querySelector('[aria-current=step]').textContent,/Review collections/);
+  await act(async()=>{button(skillsPanel,'1. Import').click();});
+  assert.ok(!skillsPanel.querySelector('.skill-workspace'));
+  await act(async()=>{input(skillsPanel.querySelector('.skill-import-grid input'),'example/skills');});
+  await act(async()=>{submit(skillsPanel);await wait();});
+  assert.match(skillsPanel.querySelector('.notice').textContent,/Scanned 1 skill.*1 skipped files/);
+  assert.match(skillsPanel.querySelector('[aria-current=step]').textContent,/Review collections/);
+  const approve=button(skillsPanel,'Approve and activate');
   assert.ok(approve);
   await act(async()=>{approve.click();await wait();});
   assert.ok(fetched.includes('/api/v1/skills/collections/collection/activate'));
+  await act(async()=>{button(skillsPanel,'Continue to assignment').click();await wait();});
+  assert.match(skillsPanel.querySelector('[aria-current=step]').textContent,/Assign to an agent/);
   await act(async()=>{change(skillsPanel.querySelector('section.form select'),'agent');await wait();});
   await act(async()=>{skillsPanel.querySelector('.skill-assignment input').click();await wait();});
-  const assign=skillsPanel.querySelector('fieldset').closest('form');
-  await act(async()=>{assign.dispatchEvent(new dom.window.Event('submit',{bubbles:true,cancelable:true}));await wait();});
-  assert.equal(fetched.filter(path=>path==='/api/v1/skills/agents/agent').length,2);
-  await act(async()=>{[...skillsPanel.querySelectorAll('button')].find(button=>button.textContent==='New agent').click();});
+  await act(async()=>{submit(skillsPanel);await wait();});
+  assert.deepEqual(assignmentWrites,[['collection']]);
+  await act(async()=>{button(skillsPanel,'New agent').click();});
   const createAgent=skillsPanel.querySelector('.skill-agent-form');
   createAgent.elements.namedItem('name').value='Evidence Reviewer';
   createAgent.elements.namedItem('instructions').value='Review evidence.';
   await act(async()=>{createAgent.dispatchEvent(new dom.window.Event('submit',{bubbles:true,cancelable:true}));await wait();});
   assert.equal(skillsPanel.querySelector('section.form select').value,'new-agent');
-  await act(async()=>{window.dispatchEvent(new CustomEvent('core-ai-goto',{detail:{view:'Chat'}}));await wait();});
+  await act(async()=>{button(skillsPanel,'Open Agents').click();await wait();});
+  const agentsPanel=document.querySelector('.view:not([hidden]) .agents-page');
+  assert.match(agentsPanel.textContent,/Start with an agent/);
+  await act(async()=>{agentsPanel.querySelector('.record').click();await wait();});
+  assert.match(agentsPanel.querySelector('[aria-current=step]').textContent,/Profile/);
+  await act(async()=>{button(agentsPanel,'Continue to collections').click();await wait();});
+  assert.match(agentsPanel.querySelector('[aria-current=step]').textContent,/Collections/);
+  const agentAssignment=agentsPanel.querySelector('.collection-assignment-form');
+  assert.ok(agentAssignment.querySelector('.skill-assignment input').checked);
+  await act(async()=>{agentAssignment.querySelector('.skill-assignment input').click();});
+  await act(async()=>{button(agentsPanel,'1. Profile').click();button(agentsPanel,'2. Collections').click();});
+  assert.ok(!agentAssignment.querySelector('.skill-assignment input').checked);
+  await act(async()=>{agentAssignment.dispatchEvent(new dom.window.Event('submit',{bubbles:true,cancelable:true}));await wait();});
+  assert.deepEqual(assignmentWrites,[['collection'],[]]);
+  await act(async()=>{button(agentsPanel,'New agent').click();});
+  await act(async()=>{
+   input(agentsPanel.querySelector('.agent-profile input'),'Studio Agent');
+   input(agentsPanel.querySelector('.agent-profile textarea'),'Explain the evidence.');
+  });
+  await act(async()=>{submit(agentsPanel);await wait();});
+  assert.match(agentsPanel.querySelector('.agent-detail > header').textContent,/Studio Agent.*Version 1/);
+  assert.match(agentsPanel.querySelector('[aria-current=step]').textContent,/Collections/);
+  await act(async()=>{button(agentsPanel,'3. Open Chat').click();await wait();});
   await act(async()=>{chat().querySelector('.chat-skills-trigger').click();});
   await act(async()=>{await new Promise(resolve=>setTimeout(resolve,230));});
   const skillPicker=document.querySelector('.chat-skills-picker');
