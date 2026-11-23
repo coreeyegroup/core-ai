@@ -350,3 +350,41 @@
 .external-saved-request > button {
   justify-self: start;
 }
+
+.agents-page .agents-grid,.skills-page .skill-workspace{
+ grid-template-columns:minmax(185px,245px) minmax(0,1fr);
+}
+.catalog-heading{display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:10px}
+.catalog-heading>div:first-child{min-width:0;overflow-wrap:anywhere}
+.catalog-heading small{display:block;margin-top:3px;color:var(--muted);font-weight:400}
+.catalog-heading .actions,.catalog-record-actions{margin:0}
+.catalog-nav{display:flex;gap:6px;padding-block:6px;border-bottom:0}
+.agent-detail>.catalog-nav{border-bottom:1px solid var(--line)}
+.catalog-nav button,.agent-detail .catalog-nav button{
+ min-height:36px;border:1px solid var(--line);border-radius:5px;padding:6px 12px;
+}
+.catalog-nav button[aria-current=step]{border-color:var(--accent)}
+.catalog-records{list-style:none;margin:6px 0 12px;padding:0}
+.catalog-records>li{border-top:1px solid var(--line)}
+.catalog-record{
+ display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:8px 16px;padding:10px 0;
+}
+.catalog-record-copy{min-width:0;overflow-wrap:anywhere}
+.catalog-record-copy .link{text-align:start;padding:0;max-width:100%;white-space:normal}
+.catalog-record-copy p{margin:3px 0;line-height:1.45}
+.catalog-record-copy small{display:block;color:var(--muted)}
+.catalog-record-actions{justify-content:flex-end;flex-wrap:wrap}
+.catalog-record .catalog-record-actions button,.catalog-heading button{min-height:34px}
+.catalog-records .skill-preview,.catalog-inline-editor,.catalog-profile{
+ border:1px solid var(--line);background:var(--canvas);padding:var(--panel-inset);margin:0 0 10px;
+ overflow-wrap:anywhere;
+}
+.catalog-records .skill-preview h2,.catalog-inline-editor h3{margin-top:0}
+.catalog-danger{color:var(--danger,var(--text))}
+@container(max-width:690px){
+ .agents-page .agents-grid,.skills-page .skill-workspace{grid-template-columns:minmax(0,1fr)}
+}
+@container(max-width:470px){
+ .catalog-record{grid-template-columns:minmax(0,1fr)}
+ .catalog-record-actions{justify-content:flex-start}
+}

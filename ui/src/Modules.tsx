@@ -57,7 +57,7 @@ function Overview({tick,go}:{tick:number;go:(v:View)=>void}){
  return <section className="page"><PageHead title="Overview" subtitle="Workspace activity and service readiness."><button onClick={()=>go('Setup')}>Get started</button></PageHead><ErrorNote error={error}/><div className="metric-grid">{[['Projects',d?.projects,'Projects'],['Agents',d?.agents,'Agents'],['Active tasks',pending,'Tasks'],['Knowledge documents',d?.documents,'Knowledge']].map(([label,n,v])=><button className="metric" key={label} onClick={()=>go(v as View)}><small>{label}</small><strong>{n??'—'}</strong><ArrowUpRight className="metric-link" size={14} aria-hidden="true"/></button>)}</div><div className="overview-grid"><section className="box"><header>Runtime readiness</header><div className="readiness"><div><span className={'dot '+(d?.worker?.online?'ready':'')}/><b>Task worker</b><span>{d?d.worker?.online?'Online · one inference slot':'Offline or heartbeat stale':'Checking…'}</span></div><div><span className="dot"/><b>Model provider</b><span>{d?.inference.endpoint??'Checking…'}</span><button onClick={()=>go('Models')}>Inspect models</button></div><div><b>Product interfaces</b><span>Independent operation · no connectors required</span><button onClick={()=>go('Integrations')}>Interfaces</button></div></div></section><section className="box"><header>Your workspace</header><div className="pipeline">{(['Projects','Agents','Knowledge','Tasks','Artifacts'] as View[]).map((v,i)=><button key={v} onClick={()=>go(v)}><b>{v}</b><span>{['Define the work','Set instructions','Add project sources','Queue and inspect','Review outputs'][i]}</span></button>)}</div></section></div><div className="two-col overview-notes"><section className="box"><header>Execution boundary</header><p>This release supports local model generation and bounded project tools. Each task records its agent version, tool events and result. Host commands and product actions are unavailable.</p></section><section className="box"><header>Workspace controls</header><p>Use Ctrl K to find a panel or command. Open views together, split your workspace, pin tabs and detach a workspace into its own window.</p><button onClick={()=>go('Tasks')}>Create a task →</button></section></div></section>;
 }
 type AgentProfile = {name:string;instructions:string;enabled:boolean;runtime_mode:string;tools:string[]};
-type AgentRecord = AgentProfile & {id:string;version:number};
+type AgentRecord = AgentProfile & {id:string;version:number;deleted_at?:string|null};
 const agentTools = ['knowledge.search','project.inspect','artifact.create'];
 const initialProfile: AgentProfile = {name:'',instructions:'',enabled:true,runtime_mode:'analysis',tools:agentTools.slice(0,2)};
 
@@ -66,9 +66,12 @@ function Agents({tick,refresh,go,handoff,openSkills,openTask,openChat}:{
  openSkills:(setup:SkillSetup)=>void;openTask:(setup:RunSetup)=>void;openChat:(setup:RunSetup)=>boolean;
 }){
  const readonly = useSession().role==='VIEWER';
- const {data,error} = useData('agents',tick);
+ const [showDeleted,setShowDeleted]=useState(false);
+ const [query,setQuery]=useState('');
+ const {data,error} = useData(showDeleted?'agents?include_deleted=true':'agents',tick);
  const {data:catalog,error:catalogError} = useResource('skills',tick);
  const rows: AgentRecord[] = Array.isArray(data)?data:[];
+ const visible=rows.filter(row=>(!row.deleted_at||showDeleted)&&row.name.toLowerCase().includes(query.trim().toLowerCase()));
  const collections: Collection[] = Array.isArray(catalog)?catalog:[];
  const [selected,setSelected] = useState<AgentRecord|null>(null);
  const [section,setSection] = useState<'profile'|'collections'|'run'|null>(null);
@@ -116,35 +119,60 @@ function Agents({tick,refresh,go,handoff,openSkills,openTask,openChat}:{
   } catch (failure) {setErr((failure as Error).message);}
   finally {setBusy(false);}
  }
+ async function changeAgentStatus(){
+  if(!selected||busy)return;
+  const restore=!!selected.deleted_at;
+  if(!restore&&!window.confirm(`Delete ${selected.name}? You can restore this agent from the registry.`))return;
+  setBusy(true);setErr('');
+  try{
+   await api('agents/'+selected.id+(restore?'/restore':''),restore?'POST':'DELETE');
+   setSelected(null);setSection(null);setDirty(false);setCollectionsDirty(false);
+   setNotice(restore?'Agent restored. Enable it in Profile when ready.':'Agent deleted.');
+   refresh();
+  }catch(failure){setErr((failure as Error).message);}
+  finally{setBusy(false);}
+ }
  return <section className="page agents-page">
   <PageHead title="Agents" subtitle="Create an agent, manage its skills, and run it in Chat or Tasks.">
    <div className="actions"><button type="button" onClick={()=>go('Setup')}>Guided setup</button>
     {!readonly&&<button type="button" className="primary" disabled={busy} onClick={()=>open(null)}>New agent</button>}</div>
   </PageHead>
   <ErrorNote error={error}/>
+  {!section&&notice&&<p role="status" className="panel-note">{notice}</p>}
+  {!section&&<ErrorNote error={err}/>}
   {requested&&<div className="box settings-content agent-handoff">
    <div><strong>Attach a collection</strong><p>{requested.repository} · {requested.git_ref}. Choose a target agent or create one.</p></div>
    <button type="button" onClick={()=>setCollectionId('')}>Clear collection</button>
   </div>}
   <div className="two-col agents-grid">
    <section className="box"><header>Agent registry <span>{data&&rows.length+(rows.length===1?' agent':' agents')}</span></header>
-    <div className="skill-index">{rows.map(agent=><button type="button" className="record" key={agent.id}
+    <div className="skill-filters">
+     <input type="search" aria-label="Find agents" placeholder="Find agents…" value={query} onChange={e=>setQuery(e.target.value)}/>
+     <label className="checkbox-label"><input type="checkbox" checked={showDeleted} onChange={e=>setShowDeleted(e.target.checked)}/> Show deleted</label>
+    </div>
+    <div className="skill-index">{visible.map(agent=><button type="button" className="record" key={agent.id}
      aria-current={selected?.id===agent.id?'true':undefined} disabled={busy} onClick={()=>open(agent,true,requested?'collections':'profile')}>
-     <b>{agent.name}</b><span>v{agent.version} · {agent.enabled?'Enabled':'Disabled'}</span>
+     <b>{agent.name}</b><span>v{agent.version} · {agent.deleted_at?'Deleted':agent.enabled?'Enabled':'Disabled'}</span>
     </button>)}</div>
-    {rows.length===0&&<Empty>{data?'No agents yet.':'Loading agents…'}</Empty>}
+    {visible.length===0&&<Empty>{data?rows.length?'No agents match your search.':'No agents yet.':'Loading agents…'}</Empty>}
    </section>
    {section ? <section className="box agent-detail">
-    <header tabIndex={-1} ref={heading}>{selected?.name??'New agent'} {selected&&<span>Version {selected.version}</span>}</header>
-    <nav className="skill-steps" aria-label="Agent setup">
+    <header className="catalog-heading" tabIndex={-1} ref={heading}>
+     <div><strong>{selected?.name??'New agent'}</strong>{selected&&<small>Version {selected.version} · {selected.deleted_at?'Deleted':selected.enabled?'Enabled':'Disabled'}</small>}</div>
+     {selected&&!readonly&&<div className="actions">
+      {!selected.deleted_at&&section!=='profile'&&<button type="button" disabled={busy} onClick={()=>setSection('profile')}>Edit profile</button>}
+      <button type="button" className={selected.deleted_at?'':'catalog-danger'} disabled={busy} onClick={()=>void changeAgentStatus()}>{selected.deleted_at?'Restore agent':'Delete agent'}</button>
+     </div>}
+    </header>
+    {!selected?.deleted_at&&<nav className="skill-steps catalog-nav" aria-label="Agent setup">
      <button type="button" aria-current={section==='profile'?'step':undefined} onClick={()=>setSection('profile')}>1. Profile</button>
      <button type="button" aria-current={section==='collections'?'step':undefined} disabled={!selected||busy} onClick={()=>setSection('collections')}>2. Attach skills</button>
      <button type="button" aria-current={section==='run'?'step':undefined} disabled={!selected?.enabled||busy} onClick={()=>setSection('run')}>3. Run agent</button>
-    </nav>
+    </nav>}
     <ErrorNote error={err}/>
     {notice&&<p role="status" className="panel-note">{notice}</p>}
-    <form hidden={section!=='profile'} className="form" onSubmit={submit}>
-     <fieldset className="agent-profile" disabled={busy||readonly}>
+    <form hidden={section!=='profile'||!!selected?.deleted_at} className="form" onSubmit={submit}>
+     <fieldset className="agent-profile" disabled={busy||readonly||!!selected?.deleted_at}>
       <label>Agent name<input required maxLength={120} value={profile.name} onChange={event=>edit({name:event.target.value})}/></label>
       <label>Instructions<textarea required rows={7} maxLength={16000} value={profile.instructions} onChange={event=>edit({instructions:event.target.value})} placeholder="Define the role, purpose, and expected output."/></label>
       <label>Execution mode<select value={profile.runtime_mode} onChange={event=>edit({runtime_mode:event.target.value})}><option value="analysis">Analysis · retrieve and answer</option><option value="tools">Tools · bounded model-directed execution</option></select></label>
@@ -160,12 +188,12 @@ function Agents({tick,refresh,go,handoff,openSkills,openTask,openChat}:{
        :<button type="button" disabled={busy} onClick={()=>open(null,false)}>Cancel</button>}
      </div>
     </form>
-    {selected&&<div className="form" hidden={section!=='collections'}>
+    {selected&&!selected.deleted_at&&<div className="form" hidden={section!=='collections'}>
      <p className="panel-note">Choose the collections this agent can use, then save the assignment.</p>
      <ErrorNote error={catalogError}/>
      <AgentCollections key={selected.id} agent={selected.id} rows={collections} tick={tick} readonly={readonly} onDirtyChange={setCollectionsDirty} onAssignmentSaved={ids=>{if(ids.includes(collectionId))setCollectionId('');}} recommendedCollection={requested?.active_commit?requested.id:undefined} onReview={()=>openSkills({agentId:selected.id})}/>
     </div>}
-    {selected&&section==='run'&&<div className="settings-content agent-run">
+    {selected&&!selected.deleted_at&&section==='run'&&<div className="settings-content agent-run">
      <p>Uses the saved profile and skill assignments for <strong>{selected.name}</strong>.</p>
      {(dirty||collectionsDirty)&&<p role="status">Save your changes in Profile or Attach skills to include them in the run.</p>}
      <div className="actions">

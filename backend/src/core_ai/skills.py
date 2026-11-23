@@ -121,14 +121,56 @@ def fetch_collection(repository, ref):
 
 
 @router.get('')
-def catalog(user: User):
-    return db.query('''
-        SELECT c.*, (SELECT jsonb_array_length(r.skills) FROM skill_releases r
-            WHERE r.collection_id=c.id AND r.commit_sha=c.active_commit) AS skill_count,
+def catalog(user: User, include_deleted: bool = False):
+    return db.query("""
+        SELECT c.*, (SELECT count(*) FROM skill_releases r
+            CROSS JOIN LATERAL jsonb_array_elements(r.skills) AS s
+            WHERE r.collection_id=c.id AND r.commit_sha=c.active_commit
+              AND NOT EXISTS (SELECT 1 FROM skill_exclusions e WHERE e.collection_id=c.id AND e.path=s->>'path')) AS skill_count,
             (SELECT r.commit_sha FROM skill_releases r WHERE r.collection_id=c.id
              ORDER BY imported_at DESC LIMIT 1) AS latest_commit
-        FROM skill_collections c ORDER BY repository,git_ref
-    ''')
+        FROM skill_collections c WHERE c.deleted_at IS NULL OR %s ORDER BY repository,git_ref
+    """, (include_deleted and user['role']=='ADMIN',))
+
+
+class CollectionProfile(BaseModel):
+    title: str = Field(max_length=120)
+    description: str = Field(max_length=2000)
+
+
+@router.put('/collections/{ident}')
+def edit_collection(ident: uuid.UUID, body: CollectionProfile, user: User):
+    access.admin(user)
+    with db.connect() as conn:
+        row = conn.execute("""UPDATE skill_collections SET title=%s,description=%s
+            WHERE id=%s AND deleted_at IS NULL RETURNING id""",
+            (body.title.strip(),body.description.strip(),ident)).fetchone()
+        if not row:
+            raise HTTPException(404, 'Active collection not found.')
+        db.event('skills.collection_updated', user['id'], {'collection':str(ident)}, conn=conn)
+    return {'ok':True}
+
+
+@router.delete('/collections/{ident}')
+def delete_collection(ident: uuid.UUID, user: User):
+    return set_collection_deleted(ident, user, True)
+
+
+@router.post('/collections/{ident}/restore')
+def restore_collection(ident: uuid.UUID, user: User):
+    return set_collection_deleted(ident, user, False)
+
+
+def set_collection_deleted(ident, user, deleted):
+    access.admin(user)
+    with db.connect() as conn:
+        row = conn.execute("""UPDATE skill_collections SET deleted_at=CASE WHEN %s THEN COALESCE(deleted_at,now()) END
+            WHERE id=%s RETURNING id""", (deleted,ident)).fetchone()
+        if not row:
+            raise HTTPException(404, 'Collection not found.')
+        db.event('skills.collection_deleted' if deleted else 'skills.collection_restored', user['id'],
+                 {'collection':str(ident)}, conn=conn)
+    return {'ok':True}
 
 
 def repository_name(value):
@@ -246,7 +288,7 @@ def reset_collection_skill(ident: uuid.UUID, user: User, commit: str, path: str)
 def activate(ident: uuid.UUID, body: Activation, user: User):
     access.admin(user)
     with db.connect() as conn:
-        row = conn.execute('SELECT active_commit FROM skill_collections WHERE id=%s FOR UPDATE', (ident,)).fetchone()
+        row = conn.execute('SELECT active_commit FROM skill_collections WHERE id=%s AND deleted_at IS NULL FOR UPDATE', (ident,)).fetchone()
         if not row:
             raise HTTPException(404, 'Collection not found.')
         if row['active_commit'] != body.expected_commit:
@@ -289,7 +331,9 @@ def assign(ident: uuid.UUID, body: Assignment, user: User):
         access.agent(conn, user, ident)
         conn.execute('SELECT id FROM agents WHERE id=%s FOR UPDATE', (ident,))
         ids = set(body.collections)
-        rows = conn.execute('SELECT id FROM skill_collections WHERE id=ANY(%s)', (list(ids),)).fetchall()
+        rows = conn.execute('''SELECT id FROM skill_collections c WHERE id=ANY(%s) AND
+            (deleted_at IS NULL OR EXISTS (SELECT 1 FROM agent_skill_collections a
+             WHERE a.agent_id=%s AND a.collection_id=c.id)) FOR SHARE''', (list(ids),ident)).fetchall()
         if len(rows) != len(ids):
             raise HTTPException(422, 'One or more collections are unavailable.')
         conn.execute('DELETE FROM agent_skill_collections WHERE agent_id=%s', (ident,))
@@ -373,7 +417,7 @@ def skill_rows(conn, agent_id=None, collection_id=None, commit=None, *, path=Non
         SELECT s.name, s.path, COALESCE(ae.description, ce.description, s.description) AS description,
             c.repository, c.git_ref, c.id AS collection_id, r.commit_sha AS commit,
             ce.path IS NOT NULL AS customized, ae.path IS NOT NULL AS agent_customized,
-            gx.path IS NOT NULL AS collection_removed, ax.path IS NOT NULL AS agent_removed {body}
+            (gx.path IS NOT NULL OR c.deleted_at IS NOT NULL) AS collection_removed, ax.path IS NOT NULL AS agent_removed {body}
         FROM skill_collections c
         JOIN skill_releases r ON r.collection_id=c.id AND r.commit_sha=COALESCE(%(commit)s, c.active_commit)
         CROSS JOIN LATERAL jsonb_to_recordset(r.skills) AS s(name text,description text,path text,body text)
@@ -386,7 +430,7 @@ def skill_rows(conn, agent_id=None, collection_id=None, commit=None, *, path=Non
             SELECT 1 FROM agent_skill_collections a WHERE a.collection_id=c.id AND a.agent_id=%(agent)s))
         AND (%(collection)s::uuid IS NULL OR c.id=%(collection)s)
         AND (%(path)s::text IS NULL OR s.path=%(path)s)
-        AND (NOT %(enabled_only)s OR (gx.path IS NULL AND ax.path IS NULL))
+        AND (NOT %(enabled_only)s OR (c.deleted_at IS NULL AND gx.path IS NULL AND ax.path IS NULL))
         ORDER BY c.repository,s.name,s.path,c.id
     """, dict(agent=agent_id, collection=collection_id, commit=commit, path=path, enabled_only=enabled_only)).fetchall()
 

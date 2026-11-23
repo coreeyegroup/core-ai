@@ -5,7 +5,7 @@ import pytest
 from fastapi import HTTPException
 from psycopg.types.json import Jsonb
 
-from core_ai import db, skills
+from core_ai import api, db, skills
 
 
 @pytest.mark.skipif(not os.getenv('CORE_AI_TEST_SKILLS_DB'), reason='Requires a disposable PostgreSQL database')
@@ -61,3 +61,26 @@ def test_collection_and_agent_skill_edits_and_deletion(monkeypatch):
     assert 'Collection instructions' in guidance(first)[0]
     skills.reset_collection_skill(collection, admin, commit, path)
     assert 'Imported instructions' in guidance(first)[0]
+
+
+    renamed = skills.CollectionProfile(title='Market Research Toolkit', description='Shared research skills')
+    skills.edit_collection(collection, renamed, admin)
+    assert next(row for row in skills.catalog(admin) if row['id']==collection)['title'] == renamed.title
+    skills.delete_collection(collection, admin)
+    assert collection not in {row['id'] for row in skills.catalog(admin)}
+    assert collection in {row['id'] for row in skills.catalog(admin, include_deleted=True)}
+    assert guidance(first) == ('', [])
+    assert skills.agent_collections(first, owner) == [collection]
+    skills.restore_collection(collection, admin)
+    assert 'Imported instructions' in guidance(first)[0]
+
+    api.delete_agent(first, owner)
+    assert first not in {row['id'] for row in api.agents(owner)}
+    archived = next(row for row in api.agents(owner, include_deleted=True) if row['id']==first)
+    assert archived['deleted_at'] is not None and not archived['enabled']
+    with pytest.raises(HTTPException):
+        api.update_agent(first, api.Agent(name='Archived', instructions='Fixture'), owner)
+    api.restore_agent(first, owner)
+    restored = next(row for row in api.agents(owner) if row['id']==first)
+    assert restored['deleted_at'] is None and not restored['enabled']
+    assert skills.agent_collections(first, owner) == [collection]

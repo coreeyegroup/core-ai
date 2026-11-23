@@ -146,11 +146,14 @@ class Agent(BaseModel):
     tools: list[str] = Field(default_factory=lambda:['knowledge.search','project.inspect'],max_length=3)
 
 @app.get('/api/v1/agents')
-def agents(user: User):
-    return db.query("SELECT * FROM agents WHERE owner_id=%s OR %s='ADMIN' ORDER BY created_at",(user['id'],user['role']))
+def agents(user: User, include_deleted: bool = False):
+    return db.query("""SELECT * FROM agents
+        WHERE (owner_id=%s OR %s='ADMIN') AND (%s OR deleted_at IS NULL) ORDER BY created_at""",
+        (user['id'],user['role'],include_deleted))
 
 @app.post('/api/v1/agents', status_code=201)
 def create_agent(body: Agent, user: User):
+    access.writer(user)
     ident = uuid.uuid4()
     from psycopg.types.json import Jsonb
     if any(t not in ('knowledge.search','project.inspect','artifact.create') for t in body.tools):raise HTTPException(422,'Unsupported agent tool.')
@@ -162,14 +165,35 @@ def create_agent(body: Agent, user: User):
 @app.put('/api/v1/agents/{ident}')
 def update_agent(ident: uuid.UUID, body: Agent, user: User):
     from psycopg.types.json import Jsonb
+    access.writer(user)
     with db.connect() as conn:access.agent(conn,user,ident)
     if any(t not in ('knowledge.search','project.inspect','artifact.create') for t in body.tools):raise HTTPException(422,'Unsupported agent tool.')
-    row = db.query('UPDATE agents SET name=%s,instructions=%s,enabled=%s,runtime_mode=%s,tools=%s,version=version+1 WHERE id=%s RETURNING version',
+    row = db.query('UPDATE agents SET name=%s,instructions=%s,enabled=%s,runtime_mode=%s,tools=%s,version=version+1 WHERE id=%s AND deleted_at IS NULL RETURNING version',
                    (body.name, body.instructions, body.enabled,body.runtime_mode,Jsonb(body.tools),ident), one=True)
     if not row:
         raise HTTPException(404, 'Agent not found.')
     db.event('agent.updated', user['id'], {'id': str(ident), **row})
     return row
+
+@app.delete('/api/v1/agents/{ident}')
+def delete_agent(ident: uuid.UUID, user: User):
+    return set_agent_deleted(ident, user, True)
+
+
+@app.post('/api/v1/agents/{ident}/restore')
+def restore_agent(ident: uuid.UUID, user: User):
+    return set_agent_deleted(ident, user, False)
+
+
+def set_agent_deleted(ident, user, deleted):
+    access.writer(user)
+    with db.connect() as conn:
+        access.agent(conn, user, ident)
+        conn.execute("""UPDATE agents SET deleted_at=CASE WHEN %s THEN COALESCE(deleted_at,now()) END,
+            enabled=false,version=version+1 WHERE id=%s AND (deleted_at IS NULL)=%s""", (deleted,ident,deleted))
+        db.event('agent.deleted' if deleted else 'agent.restored', user['id'], {'id':str(ident)}, conn=conn)
+    return {'ok': True}
+
 
 @app.get('/api/v1/models')
 def model_list(user: User, catalog: bool = False):

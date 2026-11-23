@@ -1,0 +1,4 @@
+ALTER TABLE agents ADD COLUMN deleted_at TIMESTAMPTZ;
+ALTER TABLE skill_collections ADD COLUMN deleted_at TIMESTAMPTZ,
+    ADD COLUMN title TEXT NOT NULL DEFAULT '',
+    ADD COLUMN description TEXT NOT NULL DEFAULT '';
