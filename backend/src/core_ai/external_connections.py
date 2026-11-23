@@ -28,6 +28,12 @@ MAX_SOURCE = 48_000
 SENSITIVE = re.compile(r'(?i)(token|password|authorization|secret|cookie|api[-_]?key|signature|credential|private[-_]?key)')
 HEADER = re.compile(r'[A-Za-z][A-Za-z0-9-]{0,63}')
 GRAPH = r'/v\d+\.\d+/'
+UPSTOX_DATA_PATH = (
+    r'/(?:v2/(?:option/(?:chain|contract)|market-quote/(?:quotes|ltp)|'
+    r'order/(?:retrieve-all|details|history|trades(?:/get-trades-for-day)?)|'
+    r'portfolio/(?:short-term-positions|long-term-holdings)|user/(?:profile|get-funds-and-margin|ip))|'
+    r'v3/(?:market-quote/(?:ltp|quotes|ohlc|option-greek)|historical-candle/[A-Za-z0-9|_. &%/-]+))'
+)
 PROVIDERS = {
     'http': ('Custom HTTPS API', '', '', 'none', 'GET'),
     'n8n': ('n8n webhook', '', '/webhook/', 'header', 'POST'),
@@ -35,7 +41,7 @@ PROVIDERS = {
     'facebook': ('Facebook Pages', 'graph.facebook.com', GRAPH+r'(?:me/accounts|\d+(?:/posts|/feed)?)', 'bearer', 'GET'),
     'whatsapp': ('WhatsApp Business', 'graph.facebook.com', GRAPH+r'\d+(?:/phone_numbers)?', 'bearer', 'GET'),
     'twelvedata': ('Twelve Data · International Forex', 'api.twelvedata.com', r'/(?:time_series|quote|price|forex_pairs)', 'apikey', 'GET'),
-    'upstox': ('Upstox · India market data', 'api.upstox.com', r'/(?:v2/(?:option/(?:chain|contract)|market-quote/(?:quotes|ltp))|v3/historical-candle/[A-Za-z0-9|_. &%/-]+)', 'bearer', 'GET'),
+    'upstox': ('Upstox · India market data', 'api.upstox.com', UPSTOX_DATA_PATH, 'bearer', 'GET'),
     'corei': ('Corei OS Mini · Market data', '', r'/api/research/v1/(?:capabilities|bars)', 'bearer', 'GET'),
 }
 Provider = Literal['http', 'n8n', 'instagram', 'facebook', 'whatsapp', 'twelvedata', 'upstox', 'corei']

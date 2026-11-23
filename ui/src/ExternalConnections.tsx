@@ -9,9 +9,85 @@ const providers = {
  facebook: {label:'Facebook Pages', endpoint:'https://graph.facebook.com/v<version>/<page-id>/posts?fields=id,message,created_time,permalink_url&limit=10', method:'GET', auth:'bearer', hint:'Use a Page token and account permissions for the Page and fields you are reading. Replace the version and Page ID.'},
  whatsapp: {label:'WhatsApp Business', endpoint:'https://graph.facebook.com/v<version>/<phone-number-id>?fields=id,display_phone_number,verified_name', method:'GET', auth:'bearer', hint:'Use a WhatsApp Business access token and your phone number ID to verify the connection. For incoming messages or sending replies, use a WhatsApp workflow in n8n.'},
  twelvedata: {label:'Twelve Data · Forex', endpoint:'https://api.twelvedata.com/time_series?symbol=EUR%2FUSD&interval=1h&outputsize=50', method:'GET', auth:'apikey', hint:'Use your Twelve Data API key. Change symbol, interval and output size to suit the instrument and your plan.'},
- upstox: {label:'Upstox · India markets', endpoint:'https://api.upstox.com/v2/option/chain?instrument_key=NSE_INDEX%7CNifty%2050&expiry_date=YYYY-MM-DD', method:'GET', auth:'bearer', hint:'Use an Upstox OAuth access token and replace the expiry with an available expiry. Replace the token when it expires.'},
+ upstox: {label:'Upstox · India markets', endpoint:'', method:'GET', auth:'bearer', hint:'Use a current Upstox OAuth access token. Choose a data request or enter a supported endpoint.'},
  corei: {label:'Corei OS Mini', endpoint:'https://corei-os-mini.coreeye.in/api/research/v1/capabilities', method:'GET', auth:'bearer', hint:'Use the dedicated market research credential. Test capabilities first. For bars, use /api/research/v1/bars with account_id, symbol, timeframe and limit.'},
 } as const;
+
+const upstoxRequests = {
+ ltp: {label:'Last traded price (V3)', path:'/v3/market-quote/ltp', input:'keys'},
+ quotes: {label:'Full market quotes (V3)', path:'/v3/market-quote/quotes', input:'keys'},
+ ohlc: {label:'OHLC market quote (V3)', path:'/v3/market-quote/ohlc', input:'ohlc'},
+ greeks: {label:'Option Greeks (V3)', path:'/v3/market-quote/option-greek', input:'keys'},
+ chain: {label:'Options chain', path:'/v2/option/chain', input:'expiry'},
+ contracts: {label:'Options contracts', path:'/v2/option/contract', input:'keys'},
+ intraday: {label:'Intraday candles (V3)', path:'/v3/historical-candle/intraday', input:'intraday'},
+ historical: {label:'Historical candles (V3)', path:'/v3/historical-candle', input:'history'},
+ orders: {label:'Order book', path:'/v2/order/retrieve-all', input:''},
+ trades: {label:'Trade book', path:'/v2/order/trades/get-trades-for-day', input:''},
+ positions: {label:'Positions', path:'/v2/portfolio/short-term-positions', input:''},
+ holdings: {label:'Holdings', path:'/v2/portfolio/long-term-holdings', input:''},
+ funds: {label:'Funds and margin', path:'/v2/user/get-funds-and-margin', input:''},
+ profile: {label:'Account profile', path:'/v2/user/profile', input:''},
+} as const;
+type UpstoxRequest = keyof typeof upstoxRequests | 'custom';
+
+function UpstoxRequestFields({operation,choose,change}:{operation:UpstoxRequest;choose:(value:UpstoxRequest)=>void;change:(endpoint:string)=>void}){
+ const [key,setKey]=useState('');
+ const [expiry,setExpiry]=useState('');
+ const [unit,setUnit]=useState('minutes');
+ const [interval,setInterval]=useState('1');
+ const [ohlc,setOhlc]=useState('1d');
+ const [from,setFrom]=useState('');
+ const [to,setTo]=useState('');
+ const spec=operation==='custom'?null:upstoxRequests[operation];
+ const candle=spec?.input==='intraday'||spec?.input==='history';
+ const unitMax:Record<string,number>={minutes:300,hours:5,days:1,weeks:1,months:1};
+ function endpoint(next:UpstoxRequest, values={key,expiry,unit,interval,ohlc,from,to}){
+  if(next==='custom')return;
+  const request=upstoxRequests[next];
+  const base='https://api.upstox.com'+request.path;
+  if(request.input==='intraday'||request.input==='history'){
+   const dates=request.input==='history'?'/'+values.to+(values.from?'/'+values.from:''):'';
+   change(base+'/'+encodeURIComponent(values.key.trim())+'/'+values.unit+'/'+values.interval+dates);
+   return;
+  }
+  const params=new URLSearchParams();
+  if(request.input)params.set('instrument_key',values.key.trim());
+  if(request.input==='expiry')params.set('expiry_date',values.expiry);
+  if(request.input==='ohlc')params.set('interval',values.ohlc);
+  change(base+(params.size?'?'+params.toString():''));
+ }
+ const defaults={key,expiry,unit,interval,ohlc,from,to};
+ return <div className="upstox-fields">
+  <label>Upstox data request<select value={operation} onChange={event=>{
+   const next=event.target.value as UpstoxRequest;choose(next);
+   if(next==='intraday'&&['weeks','months'].includes(unit)){
+    setUnit('minutes');setInterval('1');endpoint(next,{...defaults,unit:'minutes',interval:'1'});
+   }else endpoint(next);
+  }}>
+   <option value="custom">Custom Upstox endpoint</option>
+   {Object.entries(upstoxRequests).map(([id,request])=><option key={id} value={id}>{request.label}</option>)}
+  </select></label>
+  {spec?.input&&<label>Instrument key<input required value={key} placeholder="NSE_INDEX|Nifty 50" onChange={event=>{
+   const key=event.target.value;setKey(key);endpoint(operation,{...defaults,key});
+  }}/></label>}
+  {spec?.input==='ohlc'&&<label>Quote interval<select value={ohlc} onChange={event=>{const ohlc=event.target.value;setOhlc(ohlc);endpoint(operation,{...defaults,ohlc});}}>
+   {['1d','I1','I30'].map(value=><option key={value}>{value}</option>)}
+  </select></label>}
+  {spec?.input==='expiry'&&<label>Expiry date<input type="date" required value={expiry} onChange={event=>{const expiry=event.target.value;setExpiry(expiry);endpoint(operation,{...defaults,expiry});}}/></label>}
+  {candle&&<div className="external-fields">
+   <label>Candle unit<select value={unit} onChange={event=>{const unit=event.target.value;setUnit(unit);setInterval('1');endpoint(operation,{...defaults,unit,interval:'1'});}}>
+    {(spec?.input==='history'?['minutes','hours','days','weeks','months']:['minutes','hours','days']).map(value=><option key={value}>{value}</option>)}
+   </select></label>
+   <label>Candle interval<input type="number" min={1} max={unitMax[unit]} required value={interval}
+    onChange={event=>{const interval=event.target.value;setInterval(interval);endpoint(operation,{...defaults,interval});}}/></label>
+  </div>}
+  {spec?.input==='history'&&<div className="external-fields">
+   <label>From date (optional)<input type="date" max={to||undefined} value={from} onChange={event=>{const from=event.target.value;setFrom(from);endpoint(operation,{...defaults,from});}}/></label>
+   <label>To date<input type="date" required min={from||undefined} value={to} onChange={event=>{const to=event.target.value;setTo(to);endpoint(operation,{...defaults,to});}}/></label>
+  </div>}
+ </div>;
+}
 
 type Provider = keyof typeof providers;
 type Method = 'GET'|'POST'|'PUT'|'PATCH';
@@ -88,6 +164,7 @@ export default function ExternalConnections({tick}:{tick:number}){
 function ConnectionEditor({row,busy,save,cancel}:{row:Connection|null;busy:boolean;save:(value:Settings&{secret?:string})=>Promise<void>;cancel:()=>void}){
  const [fields,setFields]=useState<Settings>(row??blank);
  const [secret,setSecret]=useState('');
+ const [upstoxOperation,setUpstoxOperation]=useState<UpstoxRequest>('custom');
  const {provider,auth}=fields;
  const preset=providers[provider];
  const patch=(change:Partial<Settings>)=>setFields(current=>({...current,...change}));
@@ -102,12 +179,13 @@ function ConnectionEditor({row,busy,save,cancel}:{row:Connection|null;busy:boole
    <div className="external-fields">
     <label>Platform<select value={provider} onChange={e=>{
      const provider=e.target.value as Provider, entry=providers[provider];
-     setSecret('');patch({provider,name:entry.label,endpoint:entry.endpoint,method:entry.method,auth:entry.auth,header_name:provider==='n8n'?'X-N8N-Webhook-Key':''});
+     setSecret('');setUpstoxOperation(provider==='upstox'?'ltp':'custom');patch({provider,name:entry.label,endpoint:provider==='upstox'?'https://api.upstox.com/v3/market-quote/ltp?instrument_key=':entry.endpoint,method:entry.method,auth:entry.auth,header_name:provider==='n8n'?'X-N8N-Webhook-Key':''});
     }}>{Object.entries(providers).map(([key,entry])=><option key={key} value={key}>{entry.label}</option>)}</select></label>
     <label>Connection name<input required maxLength={100} value={fields.name} onChange={e=>patch({name:e.target.value})}/></label>
    </div>
    <p className="panel-note">{preset.hint}</p>
-   <label>HTTPS endpoint<input required maxLength={2048} placeholder="https://api.example.com/resource" value={fields.endpoint} onChange={e=>patch({endpoint:e.target.value})}/></label>
+   {provider==='upstox'&&<UpstoxRequestFields operation={upstoxOperation} choose={setUpstoxOperation} change={endpoint=>patch({endpoint})}/>}
+   <label>HTTPS endpoint<input readOnly={provider==='upstox'&&upstoxOperation!=='custom'} required maxLength={2048} placeholder="https://api.example.com/resource" value={fields.endpoint} onChange={e=>patch({endpoint:e.target.value})}/></label>
    <div className="external-fields">
     <label>Method<select value={fields.method} disabled={provider!=='http'} onChange={e=>patch({method:e.target.value as Method})}>
      {['GET','POST','PUT','PATCH'].map(value=><option key={value}>{value}</option>)}</select></label>
@@ -162,6 +240,10 @@ function ConnectionRun({row,tick,busy,edit,remove}:{row:Connection;tick:number;b
   <header>{row.name}<span>{row.paused?'Paused':row.method+' · '+providers[row.provider].label}</span></header>
   <div className="settings-content">
    <div className="external-endpoint"><code>{row.endpoint}</code></div>
+   {row.provider==='upstox'&&<div className="actions upstox-order-link">
+    <a href="https://corei-os-mini.coreeye.in/" target="_blank" rel="noreferrer">Open Corei OS Mini order desk ↗</a>
+    <small>Execution → Orders. Use the Upstox account configured in Corei.</small>
+   </div>}
    <div className="actions"><button disabled={busy||running} onClick={edit}>Edit connection</button>
     <button disabled={busy||running} onClick={remove}>Delete connection</button></div>
    {row.paused&&<p role="status">Open Edit connection to resume requests.</p>}

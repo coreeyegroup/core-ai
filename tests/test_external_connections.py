@@ -68,3 +68,16 @@ def test_snapshot_selector_limits_a_nested_array():
         external.source_payload(data, 'payload.missing', 1)
     with pytest.raises(ValueError, match='array'):
         external.source_payload(data, 'payload', 1)
+
+
+@pytest.mark.parametrize('path', [
+    '/v3/market-quote/ltp?instrument_key=NSE_INDEX%7CNifty%2050',
+    '/v3/market-quote/quotes?instrument_key=NSE_EQ%7CTEST',
+    '/v3/market-quote/option-greek?instrument_key=NSE_FO%7C123',
+    '/v3/historical-candle/intraday/NSE_INDEX%7CNifty%2050/minutes/5',
+    '/v3/historical-candle/NSE_EQ%7CTEST/days/1/2026-11-23',
+    '/v2/order/retrieve-all', '/v2/portfolio/short-term-positions',
+])
+def test_upstox_read_recipes(path):
+    result = external.validated_url('upstox', 'https://api.upstox.com'+path, 'GET', 'bearer', '')
+    assert result.host == 'api.upstox.com'

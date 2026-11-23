@@ -46,7 +46,7 @@ when adding imported responses to projects shared with other users.
 | Facebook | Page token; GET the Page's posts endpoint on graph.facebook.com | Fetch authorized Page posts. Use an n8n workflow for write operations that need Meta approval. |
 | WhatsApp | WhatsApp Business token; GET the phone-number metadata endpoint | Verify the authorized business number. Use n8n's WhatsApp trigger/actions for incoming messages and approved replies. |
 | Twelve Data | API key in Authorization; GET /time_series | Start with EUR/USD, 1h, and 50 rows. Set symbols and intervals according to the provider plan. |
-| Upstox | Current bearer access token; GET /v2/option/chain | Use the supported instrument key and expiry. Use V3 Historical Candle Data for bars. Renew the token with Upstox's login flow. |
+| Upstox | Current OAuth bearer token; choose an Upstox data request | Use V3 quotes, OHLC, Greeks and candles, options chain and contracts, or account data such as orders, trades, positions, holdings, and funds. |
 | Corei OS Mini | Dedicated research bearer token; GET /api/research/v1/capabilities | Verify accounts, then create or edit a connection for /api/research/v1/bars. |
 | Other HTTPS API | Custom GET, POST, PUT, or PATCH; none, bearer, header, or Basic authentication | Set one endpoint and method for each action. Use n8n for other auth schemes and scheduled or multi-node workflows. |
 
@@ -61,6 +61,22 @@ applicable.
 - [Twelve Data API](https://twelvedata.com/docs)
 - [Upstox authentication](https://upstox.com/developer/api-documentation/authentication/)
 - [Upstox option chain](https://upstox.com/developer/api-documentation/get-pc-option-chain/)
+
+## Upstox data and order execution
+
+1. In Core AI, add an **Upstox · India markets** connection and select the data
+   request. Enter the instrument key, expiry, or candle settings when applicable.
+   The form builds the HTTPS endpoint. Save the connection with a current Upstox
+   access token. A separate connection per recurring request is supported.
+2. Test the connection and fetch a preview. Save market data to a project only
+   when its membership is appropriate. Keep account, order, and portfolio
+   snapshots in an appropriately restricted project.
+3. For broker orders, use the **Open Corei OS Mini order desk** link. Sign into
+   Corei and open **Execution → Order ticket**. Corei manages its own Upstox
+   login, order authorizations, risk checks, release, and reconciliation.
+4. Test the ticket with **Paper** first. For a broker order, use a properly
+   configured Upstox LIVE account and follow Corei's live controls. Core AI's
+   Upstox data token is separate from the Corei order connection.
 
 ## n8n or another app → Core AI
 

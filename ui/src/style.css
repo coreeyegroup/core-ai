@@ -339,3 +339,5 @@
 
 .external-snapshot{margin-bottom:var(--space)}
 .external-snapshot summary,.external-history summary{cursor:pointer}
+
+.upstox-order-link small{color:var(--muted);font-size:var(--label-size)}
