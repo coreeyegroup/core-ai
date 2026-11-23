@@ -3,13 +3,16 @@ import {api} from './api';
 import {useResource} from './Workspace';
 
 const providers = {
- http: {label:'Custom HTTPS API', endpoint:'', method:'GET', auth:'none', hint:'Enter a public HTTPS endpoint. Use a separate connection per operation.'},
+ http: {label:'Custom HTTPS API', endpoint:'', method:'GET', auth:'none', hint:'Enter a public HTTPS JSON endpoint. A read connection can reuse its credential for more requests on the same host.'},
  n8n: {label:'n8n webhook', endpoint:'', method:'POST', auth:'header', hint:'Use the production HTTPS URL from an active n8n Webhook node. Copy its header-auth credential into this connection.'},
  instagram: {label:'Instagram', endpoint:'https://graph.instagram.com/v<version>/me/media?fields=id,caption,media_type,permalink,timestamp&limit=10', method:'GET', auth:'bearer', hint:'Use an Instagram professional account and an access token obtained through Instagram Login. Replace <version> with your app’s Graph API version.'},
  facebook: {label:'Facebook Pages', endpoint:'https://graph.facebook.com/v<version>/<page-id>/posts?fields=id,message,created_time,permalink_url&limit=10', method:'GET', auth:'bearer', hint:'Use a Page token and account permissions for the Page and fields you are reading. Replace the version and Page ID.'},
  whatsapp: {label:'WhatsApp Business', endpoint:'https://graph.facebook.com/v<version>/<phone-number-id>?fields=id,display_phone_number,verified_name', method:'GET', auth:'bearer', hint:'Use a WhatsApp Business access token and your phone number ID to verify the connection. For incoming messages or sending replies, use a WhatsApp workflow in n8n.'},
  twelvedata: {label:'Twelve Data · Forex', endpoint:'https://api.twelvedata.com/time_series?symbol=EUR%2FUSD&interval=1h&outputsize=50', method:'GET', auth:'apikey', hint:'Use your Twelve Data API key. Change symbol, interval and output size to suit the instrument and your plan.'},
  upstox: {label:'Upstox · India markets', endpoint:'', method:'GET', auth:'bearer', hint:'Use a current Upstox OAuth access token. Choose a data request or enter a supported endpoint.'},
+ zerodha: {label:'Zerodha · Kite Connect', endpoint:'https://api.kite.trade/user/profile', method:'GET', auth:'kite', hint:'Use your Kite app API key and current session access token. Add multiple market or account requests to this connection.'},
+ angelone: {label:'Angel One · SmartAPI', endpoint:'https://apiconnect.angelone.in/rest/secure/angelbroking/user/v1/getProfile', method:'GET', auth:'angel', hint:'Use your SmartAPI app API key and current JWT. Configure the workstation network settings before testing.'},
+ mt5: {label:'MT5 EA · HTTPS bridge', endpoint:'', method:'GET', auth:'bearer', hint:'Enter the public HTTPS JSON endpoint and token of your EA bridge. The bridge must already be running.'},
  corei: {label:'Corei OS Mini', endpoint:'https://corei-os-mini.coreeye.in/api/research/v1/capabilities', method:'GET', auth:'bearer', hint:'Use the dedicated market research credential. Test capabilities first. For bars, use /api/research/v1/bars with account_id, symbol, timeframe and limit.'},
 } as const;
 
@@ -91,19 +94,23 @@ function UpstoxRequestFields({operation,choose,change}:{operation:UpstoxRequest;
 
 type Provider = keyof typeof providers;
 type Method = 'GET'|'POST'|'PUT'|'PATCH';
-type Auth = 'none'|'bearer'|'header'|'basic'|'apikey';
-type Settings = {name:string;provider:Provider;endpoint:string;method:Method;auth:Auth;header_name:string;paused:boolean};
+type Auth = 'none'|'bearer'|'header'|'basic'|'apikey'|'kite'|'angel';
+type SavedRequest = {name:string;endpoint:string;body?:Record<string,unknown>|null};
+type DraftRequest = {name:string;endpoint:string;json:string};
+type Settings = {name:string;provider:Provider;endpoint:string;method:Method;auth:Auth;header_name:string;paused:boolean;requests:SavedRequest[]};
+type ConnectionInput = Settings & {secret?:string;api_key?:string};
 type Connection = Settings & {id:string;version:number;has_secret:boolean};
-type Result = {outcome:string;upstream_status:number|null;elapsed_ms:number;method:string;data:unknown;source_id:string|null};
+type Result = {outcome:string;upstream_status:number|null;elapsed_ms:number;method:string;data:unknown;source_id:string|null;request_name?:string|null};
 type Activity = Pick<Result,'outcome'|'upstream_status'|'elapsed_ms'> & {id:number;occasion:string;occurred_at:string};
 type Project = {id:string;name:string;archived_at?:string|null};
-const blank:Settings={name:'',provider:'http',endpoint:'',method:'GET',auth:'none',header_name:'',paused:false};
+const blank:Settings={name:'',provider:'http',endpoint:'',method:'GET',auth:'none',header_name:'',paused:false,requests:[]};
 const outcomes:Record<string,string> = {
  ok:'Request succeeded', dns_unavailable:'Hostname could not be resolved', destination_blocked:'Destination is outside the public HTTPS policy',
  upstream_rejected:'The external API rejected the request', provider_error:'The provider returned an application error',
  timeout:'The external API timed out', transport_error:'HTTPS connection failed', unsupported_encoding:'The provider returned an unsupported encoding',
  invalid_json:'The provider did not return valid JSON', response_too_large:'The response exceeded 512 KB',
  source_too_large:'The response is too large for a project source', source_unavailable:'The result could not be saved to the project',
+ incompatible_contract:'This endpoint does not expose the supported Corei research API contract',
  invalid_source_options:'Check the JSON path. A row limit requires an array at that path.',
 };
 
@@ -119,7 +126,7 @@ export default function ExternalConnections({tick}:{tick:number}){
  const [busy,setBusy]=useState(false);
  const [failed,fail]=useState('');
  const selected=rows.find(row=>row.id===selection);
- async function save(values:Settings&{secret?:string}){
+ async function save(values:ConnectionInput){
   setBusy(true);fail('');
   try{
    const result=await api(form?'external-connections/'+form.id:'external-connections',form?'PUT':'POST',
@@ -161,17 +168,35 @@ export default function ExternalConnections({tick}:{tick:number}){
  </section>;
 }
 
-function ConnectionEditor({row,busy,save,cancel}:{row:Connection|null;busy:boolean;save:(value:Settings&{secret?:string})=>Promise<void>;cancel:()=>void}){
+function ConnectionEditor({row,busy,save,cancel}:{row:Connection|null;busy:boolean;save:(value:ConnectionInput)=>Promise<void>;cancel:()=>void}){
  const [fields,setFields]=useState<Settings>(row??blank);
  const [secret,setSecret]=useState('');
+ const [apiKey,setApiKey]=useState('');
+ const [failed,fail]=useState('');
+ const [requests,setRequests]=useState<DraftRequest[]>(()=> (row?.requests??[]).map(request=>(
+  {name:request.name,endpoint:request.endpoint,json:request.body?JSON.stringify(request.body,null,2):''})));
+ const updateRequest=(index:number,change:Partial<DraftRequest>)=>setRequests(items=>items.map((item,i)=>i===index?{...item,...change}:item));
  const [upstoxOperation,setUpstoxOperation]=useState<UpstoxRequest>('custom');
  const {provider,auth}=fields;
  const preset=providers[provider];
+ const paired=auth==='kite'||auth==='angel';
  const patch=(change:Partial<Settings>)=>setFields(current=>({...current,...change}));
  function submit(event:FormEvent){
   event.preventDefault();
   if(busy)return;
-  void save({...fields,secret:auth!=='none'&&secret?secret:undefined});
+  fail('');
+  const saved:SavedRequest[]=[];
+  for(const request of fields.method==='GET'?requests:[]){
+   let body:Record<string,unknown>|undefined;
+   if(request.json.trim()){
+    try{
+     body=JSON.parse(request.json);
+     if(!body||typeof body!=='object'||Array.isArray(body))throw new Error();
+    }catch{fail('Enter a JSON object for the saved request body.');return;}
+   }
+   saved.push({name:request.name,endpoint:request.endpoint,body});
+  }
+  void save({...fields,requests:fields.method==='GET'?saved:[],secret:auth!=='none'&&secret?secret:undefined,api_key:paired&&apiKey?apiKey:undefined});
  }
  return <form className="box form external-editor" onSubmit={submit}>
   <header>{row?'Edit external connection':'New external connection'}</header>
@@ -179,7 +204,7 @@ function ConnectionEditor({row,busy,save,cancel}:{row:Connection|null;busy:boole
    <div className="external-fields">
     <label>Platform<select value={provider} onChange={e=>{
      const provider=e.target.value as Provider, entry=providers[provider];
-     setSecret('');setUpstoxOperation(provider==='upstox'?'ltp':'custom');patch({provider,name:entry.label,endpoint:provider==='upstox'?'https://api.upstox.com/v3/market-quote/ltp?instrument_key=':entry.endpoint,method:entry.method,auth:entry.auth,header_name:provider==='n8n'?'X-N8N-Webhook-Key':''});
+     setSecret('');setApiKey('');setRequests([]);setUpstoxOperation(provider==='upstox'?'ltp':'custom');patch({provider,name:entry.label,endpoint:provider==='upstox'?'https://api.upstox.com/v3/market-quote/ltp?instrument_key=':entry.endpoint,method:entry.method,auth:entry.auth,header_name:provider==='n8n'?'X-N8N-Webhook-Key':''});
     }}>{Object.entries(providers).map(([key,entry])=><option key={key} value={key}>{entry.label}</option>)}</select></label>
     <label>Connection name<input required maxLength={100} value={fields.name} onChange={e=>patch({name:e.target.value})}/></label>
    </div>
@@ -191,12 +216,28 @@ function ConnectionEditor({row,busy,save,cancel}:{row:Connection|null;busy:boole
      {['GET','POST','PUT','PATCH'].map(value=><option key={value}>{value}</option>)}</select></label>
     <label>Authentication<select value={auth} disabled={provider!=='http'&&provider!=='n8n'} onChange={e=>{setSecret('');patch({auth:e.target.value as Auth});}}>
      <option value="none">None</option><option value="bearer">Bearer token</option><option value="header">API key in header</option>
-     <option value="basic">Basic authentication</option>{provider==='twelvedata'&&<option value="apikey">Twelve Data API key</option>}
+     <option value="basic">Basic authentication</option>{paired&&<option value={auth}>{auth==='kite'?'Kite session token':'SmartAPI JWT'}</option>}{provider==='twelvedata'&&<option value="apikey">Twelve Data API key</option>}
     </select></label>
    </div>
    {auth==='header'&&<label>Header name<input maxLength={64} required value={fields.header_name} onChange={e=>patch({header_name:e.target.value})}/></label>}
-   {auth!=='none'&&<label>{auth==='basic'?'Credential (username:password)':'Token or API key'}<input type="password" autoComplete="new-password" maxLength={4096}
+   {paired&&<label>App API key<input type="password" autoComplete="new-password" maxLength={128}
+    value={apiKey} required={!row?.has_secret} placeholder={row?.has_secret?'Leave blank to keep the current key':undefined} onChange={e=>setApiKey(e.target.value)}/></label>}
+   {auth!=='none'&&<label>{auth==='basic'?'Credential (username:password)':provider==='angelone'?'Session access token (JWT)':auth==='bearer'||auth==='kite'?'Access token':'Token or API key'}<input type="password" autoComplete="new-password" maxLength={4096}
     value={secret} required={!row?.has_secret} placeholder={row?.has_secret?'Leave blank to keep current credential':undefined} onChange={e=>setSecret(e.target.value)}/></label>}
+   {fields.method==='GET'&&<section className="external-snapshot">
+    <h3>Additional saved requests</h3>
+    <p className="panel-note">Use the same account and hostname for market, history, or account requests.</p>
+    {requests.map((request,index)=><div className="external-saved-request" key={index}>
+     <div className="external-fields">
+      <label>Request name<input required maxLength={80} value={request.name} onChange={e=>updateRequest(index,{name:e.target.value})}/></label>
+      <label>Request HTTPS endpoint<input required maxLength={2048} value={request.endpoint} onChange={e=>updateRequest(index,{endpoint:e.target.value})}/></label>
+     </div>
+     {provider==='angelone'&&<label>JSON body for quotes or candles<textarea rows={3} maxLength={32768} value={request.json} onChange={e=>updateRequest(index,{json:e.target.value})}/></label>}
+     <button type="button" onClick={()=>setRequests(items=>items.filter((_,i)=>i!==index))}>Remove request</button>
+    </div>)}
+    <button type="button" disabled={requests.length>=20} onClick={()=>setRequests(items=>[...items,{name:'',endpoint:'',json:''}])}>Add saved request</button>
+   </section>}
+   {failed&&<p className="error" role="alert">{failed}</p>}
    <label className="checkbox-label"><input type="checkbox" checked={fields.paused} onChange={e=>patch({paused:e.target.checked})}/> Pause this connection</label>
   </fieldset>
   <div className="actions"><button className="primary" disabled={busy}>{busy?'Saving…':'Save connection'}</button>
@@ -212,6 +253,9 @@ function ConnectionRun({row,tick,busy,edit,remove}:{row:Connection;tick:number;b
  const [sourcePath,setSourcePath]=useState('');
  const [rowLimit,setRowLimit]=useState('');
  const [body,setBody]=useState('');
+ const [request,setRequest]=useState('');
+ const requests=row.requests??[];
+ const currentRequest=request===''?undefined:requests[Number(request)];
  const [result,setResult]=useState<Result|null>(null);
  const [failed,fail]=useState('');
  const [running,setRunning]=useState(false);
@@ -230,7 +274,7 @@ function ConnectionRun({row,tick,busy,edit,remove}:{row:Connection;tick:number;b
   }
   setRunning(true);
   try{setResult(await api('external-connections/'+row.id+'/'+occasion,'POST',{
-   body:json,project_id:destination||undefined,confirmed,
+   body:json,project_id:destination||undefined,confirmed,connection_version:row.version,request_index:request===''?undefined:Number(request),
    source_path:destination?sourcePath.trim():undefined,row_limit:destination&&rowLimit?Number(rowLimit):undefined,
   },40_000));}
   catch(error){fail(message(error));}
@@ -239,11 +283,12 @@ function ConnectionRun({row,tick,busy,edit,remove}:{row:Connection;tick:number;b
  return <section className="box external-run">
   <header>{row.name}<span>{row.paused?'Paused':row.method+' · '+providers[row.provider].label}</span></header>
   <div className="settings-content">
-   <div className="external-endpoint"><code>{row.endpoint}</code></div>
-   {row.provider==='upstox'&&<div className="actions upstox-order-link">
-    <a href="https://corei-os-mini.coreeye.in/" target="_blank" rel="noreferrer">Open Corei OS Mini order desk ↗</a>
-    <small>Execution → Orders. Use the Upstox account configured in Corei.</small>
-   </div>}
+   {requests.length>0&&<label>Data request<select value={request} disabled={running} onChange={e=>{
+    setRequest(e.target.value);setResult(null);fail('');
+   }}><option value="">Primary request</option>
+    {requests.map((entry,index)=><option key={entry.name} value={index}>{entry.name}</option>)}
+   </select></label>}
+   <div className="external-endpoint"><code>{currentRequest?.endpoint??row.endpoint}</code></div>
    <div className="actions"><button disabled={busy||running} onClick={edit}>Edit connection</button>
     <button disabled={busy||running} onClick={remove}>Delete connection</button></div>
    {row.paused&&<p role="status">Open Edit connection to resume requests.</p>}
@@ -278,6 +323,7 @@ function ConnectionRun({row,tick,busy,edit,remove}:{row:Connection;tick:number;b
    </div></div>}
    {failed&&<p className="error" role="alert">{failed}</p>}
    {result&&<section className="external-result" aria-label="Connection result">
+    {result.request_name&&<p>{result.request_name}</p>}
     <p role="status"><b>{outcomes[result.outcome]??result.outcome}</b> · {result.method}{result.upstream_status!==null?' · HTTP '+result.upstream_status:''} · {result.elapsed_ms} ms</p>
     {result.source_id&&<div className="actions">
      <p>Snapshot saved to the project.</p>

@@ -81,3 +81,85 @@ def test_snapshot_selector_limits_a_nested_array():
 def test_upstox_read_recipes(path):
     result = external.validated_url('upstox', 'https://api.upstox.com'+path, 'GET', 'bearer', '')
     assert result.host == 'api.upstox.com'
+
+
+def test_saved_requests_share_one_encrypted_token_and_can_rotate_it(monkeypatch):
+    monkeypatch.setenv(external.key_storage.ENV_KEY, base64.b64encode(b'fixture encryption key' * 4).decode())
+    ident = uuid4()
+    body = external.ExternalConnection(
+        name='Trading data', provider='upstox', auth='bearer',
+        endpoint='https://api.upstox.com/v2/user/profile', secret='fixture-upstox-access',
+        requests=[
+            {'name': 'LTP', 'endpoint': 'https://api.upstox.com/v3/market-quote/ltp?instrument_key=NSE_EQ%7CTEST'},
+            {'name': 'Positions', 'endpoint': 'https://api.upstox.com/v2/portfolio/short-term-positions'},
+        ],
+    )
+    original = external.save_fields(ident, body)
+    assert [row['name'] for row in original[-1].obj] == ['LTP', 'Positions']
+    assert external.decrypt(ident, original[6]) == 'fixture-upstox-access'
+    previous = dict(zip(('name', 'provider', 'endpoint', 'method', 'auth', 'header_name', 'secret', 'paused'), original))
+    previous['requests'] = original[-1].obj
+    replacement = body.model_copy(update={'secret': external.SecretStr('new-upstox-access'), 'requests': None})
+    rotated = external.save_fields(ident, replacement, previous)
+    assert rotated[-1].obj == original[-1].obj
+    assert external.decrypt(ident, rotated[6]) == 'new-upstox-access'
+
+
+def test_generic_read_credential_is_not_shared_with_other_hosts(monkeypatch):
+    monkeypatch.setenv(external.key_storage.ENV_KEY, base64.b64encode(b'fixture encryption key' * 4).decode())
+    body = external.ExternalConnection(
+        name='Public service', provider='http', auth='bearer',
+        endpoint='https://api.example.org/read', secret='fixture-access-token',
+        requests=[{'name': 'Other service', 'endpoint': 'https://other.example.org/read'}],
+    )
+    with pytest.raises(HTTPException, match='hostname'):
+        external.save_fields(uuid4(), body)
+
+
+def test_kite_key_and_token_match_provider_contract():
+    url = external.validated_url('zerodha', 'https://api.kite.trade/quote?i=NSE%3AINFY', 'GET', 'kite', '')
+    assert url.host == 'api.kite.trade'
+    headers = external.request_headers('kite', '', '["fixture-api-key","fixture-access"]')
+    assert headers['Authorization'] == 'token fixture-api-key:fixture-access'
+    assert headers['X-Kite-Version'] == '3'
+    with pytest.raises(HTTPException):
+        external.validated_url('zerodha', 'https://api.kite.trade/orders/regular', 'POST', 'kite', '')
+
+
+def test_angel_read_post_and_network_headers_are_explicit(monkeypatch):
+    for key, value in {'LOCAL_IP': '192.0.2.2', 'PUBLIC_IP': '198.51.100.5', 'MAC': '02:00:00:00:01:03'}.items():
+        monkeypatch.setenv('CORE_AI_ANGEL_' + key, value)
+    endpoint = 'https://apiconnect.angelone.in/rest/secure/angelbroking/market/v1/quote'
+    assert external.request_method('angelone', endpoint) == 'POST'
+    assert external.validated_url('angelone', endpoint, 'POST', 'angel', '').host == 'apiconnect.angelone.in'
+    headers = external.request_headers('angel', '', '["fixture-api-key","fixture-access"]')
+    assert headers['X-PrivateKey'] == 'fixture-api-key'
+    assert headers['Authorization'] == 'Bearer fixture-access'
+    assert headers['X-ClientPublicIP'] == '198.51.100.5'
+    order_endpoint = 'https://apiconnect.angelone.in/rest/secure/angelbroking/order/v1/placeOrder'
+    with pytest.raises(HTTPException):
+        external.validated_url('angelone', order_endpoint, 'POST', 'angel', '')
+
+
+def test_mt5_bridge_is_an_independent_read_provider():
+    endpoint = 'https://bridge.example.org/bars'
+    assert external.validated_url('mt5', endpoint, 'GET', 'bearer', '').host == 'bridge.example.org'
+    with pytest.raises(HTTPException):
+        external.validated_url('mt5', endpoint, 'POST', 'bearer', '')
+
+
+
+def test_angel_quote_body_keeps_exchange_instrument_tokens(monkeypatch):
+    monkeypatch.setenv(external.key_storage.ENV_KEY, base64.b64encode(b'fixture encryption key' * 4).decode())
+    request = {
+        'name': 'NSE quote', 'endpoint': 'https://apiconnect.angelone.in/rest/secure/angelbroking/market/v1/quote',
+        'body': {'mode': 'FULL', 'exchangeTokens': {'NSE': ['123']}},
+    }
+    profile = external.ExternalConnection(
+        name='Angel data', provider='angelone', auth='angel',
+        endpoint='https://apiconnect.angelone.in/rest/secure/angelbroking/user/v1/getProfile',
+        api_key='fixture-app-key', secret='fixture-session-token', requests=[request],
+    )
+    assert external.save_fields(uuid4(), profile)[-1].obj == [request]
+    result = {'data': {'symbolToken': '123'}, 'accessToken': 'not-an-instrument'}
+    assert external.redact(result, '') == {'data': {'symbolToken': '123'}, 'accessToken': '[redacted]'}

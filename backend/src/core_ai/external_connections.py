@@ -18,6 +18,7 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, SecretStr
+from psycopg.types.json import Jsonb
 
 from . import access, auth, db, key_storage
 
@@ -26,6 +27,8 @@ User = Annotated[dict, Depends(auth.session)]
 MAX_RESPONSE = 512 * 1024
 MAX_SOURCE = 48_000
 SENSITIVE = re.compile(r'(?i)(token|password|authorization|secret|cookie|api[-_]?key|signature|credential|private[-_]?key)')
+# These broker fields identify instruments, rather than authenticating a request.
+INSTRUMENT_IDENTIFIERS = frozenset({'exchangetokens', 'symboltoken', 'instrument_token', 'exchange_token'})
 HEADER = re.compile(r'[A-Za-z][A-Za-z0-9-]{0,63}')
 GRAPH = r'/v\d+\.\d+/'
 UPSTOX_DATA_PATH = (
@@ -42,12 +45,27 @@ PROVIDERS = {
     'whatsapp': ('WhatsApp Business', 'graph.facebook.com', GRAPH+r'\d+(?:/phone_numbers)?', 'bearer', 'GET'),
     'twelvedata': ('Twelve Data · International Forex', 'api.twelvedata.com', r'/(?:time_series|quote|price|forex_pairs)', 'apikey', 'GET'),
     'upstox': ('Upstox · India market data', 'api.upstox.com', UPSTOX_DATA_PATH, 'bearer', 'GET'),
+    'zerodha': ('Zerodha Kite Connect', 'api.kite.trade',
+                r'/(?:user/(?:profile|margins(?:/(?:equity|commodity))?)|quote(?:/ltp|/ohlc)?|'
+                r'instruments/historical/\d+/(?:minute|day|\d+minute)|portfolio/(?:positions|holdings)|orders|trades)',
+                'kite', 'GET'),
+    'angelone': ('Angel One SmartAPI', 'apiconnect.angelone.in',
+                 r'/rest/secure/angelbroking/(?:user/v1/getProfile|order/v1/(?:getOrderBook|getTradeBook|getPosition)|'
+                 r'portfolio/v1/(?:getHolding|getAllHolding)|user/v1/getRMS|market/v1/quote/?|historical/v1/getCandleData)',
+                 'angel', 'GET'),
+    'mt5': ('MT5 EA HTTPS bridge', '', r'/[^/].*', 'bearer', 'GET'),
     'corei': ('Corei OS Mini · Market data', '', r'/api/research/v1/(?:capabilities|bars)', 'bearer', 'GET'),
 }
-Provider = Literal['http', 'n8n', 'instagram', 'facebook', 'whatsapp', 'twelvedata', 'upstox', 'corei']
-Authentication = Literal['none', 'bearer', 'header', 'basic', 'apikey']
+Provider = Literal['http', 'n8n', 'instagram', 'facebook', 'whatsapp', 'twelvedata', 'upstox', 'zerodha', 'angelone', 'mt5', 'corei']
+Authentication = Literal['none', 'bearer', 'header', 'basic', 'apikey', 'kite', 'angel']
 PUBLIC_COLUMNS = '''id,name,provider,endpoint,method,auth,header_name,paused,version,created_at,
-                    secret IS NOT NULL AS has_secret,last_started_at'''
+                    secret IS NOT NULL AS has_secret,last_started_at,requests'''
+
+
+class SavedRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+    endpoint: str = Field(min_length=1, max_length=2048)
+    body: dict | None = None
 
 
 class ExternalConnection(BaseModel):
@@ -58,6 +76,8 @@ class ExternalConnection(BaseModel):
     auth: Authentication = 'none'
     header_name: str = Field(default='', max_length=64)
     secret: SecretStr | None = Field(default=None, max_length=4096)
+    api_key: SecretStr | None = Field(default=None, max_length=128)
+    requests: list[SavedRequest] | None = Field(default=None, max_length=20)
     paused: bool = False
     version: int | None = Field(default=None, ge=1)
 
@@ -65,6 +85,8 @@ class ExternalConnection(BaseModel):
 class RequestOptions(BaseModel):
     body: dict | list | None = None
     confirmed: bool = False
+    request_index: int | None = Field(default=None, ge=0, le=19)
+    connection_version: int | None = Field(default=None, ge=1)
     project_id: uuid.UUID | None = None
     source_path: str = Field(default="", max_length=200, pattern=r"^[A-Za-z0-9_.-]*$")
     row_limit: int | None = Field(default=None, ge=1, le=500)
@@ -73,6 +95,18 @@ class RequestOptions(BaseModel):
 class UpstreamError(Exception):
     def __init__(self, outcome, status=None):
         self.outcome, self.status = outcome, status
+
+
+def request_method(provider, endpoint):
+    if provider == 'angelone':
+        try:
+            path = httpx.URL(endpoint).path
+        except httpx.InvalidURL:
+            path = ''
+        if path in ('/rest/secure/angelbroking/market/v1/quote', '/rest/secure/angelbroking/market/v1/quote/',
+                    '/rest/secure/angelbroking/historical/v1/getCandleData'):
+            return 'POST'
+    return 'GET'
 
 
 def validated_url(provider, value, method, mode, header):
@@ -94,10 +128,12 @@ def validated_url(provider, value, method, mode, header):
         if provider == 'n8n' and (not path.startswith(allowed_path) or path == allowed_path or method != 'POST'):
             raise ValueError
         if provider not in ('http', 'n8n') and (
-                method != expected_method or mode != expected_auth or not re.fullmatch(allowed_path, path)):
+                method != (request_method(provider, value) if provider == 'angelone' else expected_method) or mode != expected_auth or not re.fullmatch(allowed_path, path)):
             raise ValueError
         if mode == 'header' and (not HEADER.fullmatch(header) or re.match(
                 r'(?i)^(host|connection|content-|transfer-|cookie|set-cookie|forwarded|x-forwarded-|accept|proxy-|x-core-ai-)', header)):
+            raise ValueError
+        if mode in ('kite', 'angel') and mode != expected_auth:
             raise ValueError
         if mode == 'apikey' and provider != 'twelvedata':
             raise ValueError
@@ -141,6 +177,26 @@ def request_headers(mode, header, secret):
         headers['Authorization'] = 'Basic ' + base64.b64encode(secret.encode()).decode()
     elif mode == 'header':
         headers[header] = secret
+    elif mode in ('kite', 'angel'):
+        key, token = json.loads(secret)
+        if mode == 'kite':
+            headers.update({'Authorization': f'token {key}:{token}', 'X-Kite-Version': '3'})
+        else:
+            metadata = {
+                'X-ClientLocalIP': os.environ.get('CORE_AI_ANGEL_LOCAL_IP', ''),
+                'X-ClientPublicIP': os.environ.get('CORE_AI_ANGEL_PUBLIC_IP', ''),
+                'X-MACAddress': os.environ.get('CORE_AI_ANGEL_MAC', ''),
+            }
+            try:
+                ipaddress.IPv4Address(metadata['X-ClientLocalIP'])
+                ipaddress.IPv4Address(metadata['X-ClientPublicIP'])
+                if not re.fullmatch(r'(?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}', metadata['X-MACAddress']):
+                    raise ValueError
+            except ValueError:
+                raise HTTPException(503, 'Configure the Angel One workstation IP and MAC settings before connecting.') from None
+            headers.update(metadata)
+            headers.update({'Authorization': 'Bearer ' + token, 'X-PrivateKey': key,
+                            'X-UserType': 'USER', 'X-SourceID': 'WEB'})
     return headers
 
 
@@ -158,7 +214,7 @@ def public_address(host):
 
 def redact(value, credential):
     if isinstance(value, dict):
-        return {str(redact(key, credential)): '[redacted]' if SENSITIVE.search(key) else redact(item, credential)
+        return {str(redact(key, credential)): '[redacted]' if key.lower() not in INSTRUMENT_IDENTIFIERS and SENSITIVE.search(key) else redact(item, credential)
                 for key, item in value.items()}
     if isinstance(value, list):
         return [redact(item, credential) for item in value]
@@ -201,9 +257,10 @@ def send(url, method, headers, credential, body, *, probe=False):
                 if not raw:
                     return status, None
                 document = json.loads(raw, parse_constant=reject_json_constant)
-                if isinstance(document, dict) and (document.get('error') or document.get('status') in ('error', 'failed')):
+                if isinstance(document, dict) and (document.get('error') or document.get('status') in ('error', 'failed') or document.get('status') is False):
                     raise UpstreamError('provider_error', status)
-                document = redact(document, credential)
+                for value in (credential if isinstance(credential, tuple) else (credential,)):
+                    document = redact(document, value)
                 json.dumps(document, ensure_ascii=False, allow_nan=False).encode()
                 return status, document
     except httpx.TimeoutException:
@@ -219,25 +276,63 @@ def save_fields(ident, body, previous=None):
     if not name:
         raise HTTPException(422, 'Enter a connection name.')
     url = validated_url(body.provider, body.endpoint.strip(), body.method, body.auth, body.header_name)
+    if body.provider == 'angelone' and body.method != 'GET':
+        raise HTTPException(422, 'Save an Angel One GET endpoint as the primary request.')
     supplied = body.secret.get_secret_value() if body.secret is not None else ''
+    api_key = body.api_key.get_secret_value() if body.api_key is not None else ''
+    paired = body.auth in ('kite', 'angel')
+    if api_key and not paired:
+        raise HTTPException(422, 'This connection does not accept a separate API key.')
     encrypted = None
     header = body.header_name if body.auth == 'header' else ''
+    requests = body.requests
+    if requests is None:
+        requests = [SavedRequest(**item) for item in previous.get('requests', [])] if previous else []
+    if requests and body.method != 'GET':
+        raise HTTPException(422, 'Additional saved requests require a read connection.')
+    entries = []
+    for request in requests:
+        endpoint = request.endpoint.strip()
+        method = request_method(body.provider, endpoint)
+        destination = validated_url(body.provider, endpoint, method, body.auth, header)
+        if destination.host != url.host:
+            raise HTTPException(422, 'Saved requests must use the connection hostname.')
+        label = request.name.strip()
+        if not label or any(label.casefold() == entry['name'].casefold() for entry in entries):
+            raise HTTPException(422, 'Give each saved request a unique name.')
+        if (method == 'POST') != (request.body is not None):
+            raise HTTPException(422, 'Only the Angel One quote and candle requests require a JSON body.')
+        if request.body is not None:
+            try:
+                if (len(json.dumps(request.body, allow_nan=False).encode()) > 32768
+                        or redact(request.body, '') != request.body):
+                    raise ValueError
+            except (ValueError, RecursionError):
+                raise HTTPException(422, 'Enter a valid saved JSON object up to 32 KB and keep credentials out of it.') from None
+        entries.append({'name': label, 'endpoint': str(destination), 'body': request.body})
+    prior_values = ()
+    if previous and previous['secret']:
+        prior_url = httpx.URL(previous['endpoint'])
+        if (previous['auth'], previous['provider'], previous['header_name'], previous['method'],
+                prior_url.host, prior_url.path) == (body.auth, body.provider, header, body.method, url.host, url.path):
+            encrypted = previous['secret']
+            prior = decrypt(ident, encrypted)
+            prior_values = tuple(json.loads(prior)) if paired else (prior,)
     if body.auth != 'none':
-        if supplied:
-            if any(not 32 <= ord(char) <= 126 for char in supplied) or not supplied.strip() or (
-                    body.auth == 'basic' and ':' not in supplied):
-                raise HTTPException(422, 'Enter a credential in the required format.')
-            if supplied in str(url) or supplied in name:
-                raise HTTPException(422, 'Keep the credential only in the credential field.')
-            encrypted = encrypt(ident, supplied)
-        elif previous:
-            prior_url = httpx.URL(previous['endpoint'])
-            if (previous['auth'], previous['provider'], previous['header_name'], previous['method'],
-                    prior_url.host, prior_url.path) == (body.auth, body.provider, header, body.method, url.host, url.path):
-                encrypted = previous['secret']
-        if not encrypted:
-            raise HTTPException(422, 'Enter a credential for this connection. Endpoint or authentication changes require re-entry.')
-    return name, body.provider, str(url), body.method, body.auth, header, encrypted, body.paused
+        values = (api_key or (prior_values[0] if prior_values else ''),
+                  supplied or (prior_values[1] if prior_values else '')) if paired else (supplied or (prior_values[0] if prior_values else ''),)
+        for value in values:
+            if (not value.strip() or any(not 32 <= ord(char) <= 126 for char in value)
+                    or (paired and (':' in value or ' ' in value)) or (body.auth == 'basic' and ':' not in value)):
+                raise HTTPException(422, 'Enter the required credential. Endpoint or authentication changes require re-entry.')
+            hidden = (value, quote(value, safe=''))
+            visible = [str(url), name, *(entry['endpoint'] for entry in entries),
+                       *(entry['name'] for entry in entries), *(json.dumps(entry['body']) for entry in entries if entry['body'])]
+            if any(candidate in field for candidate in hidden for field in visible):
+                raise HTTPException(422, 'Keep credentials only in the credential fields.')
+        if supplied or api_key or not encrypted:
+            encrypted = encrypt(ident, json.dumps(values) if paired else values[0])
+    return name, body.provider, str(url), body.method, body.auth, header, encrypted, body.paused, Jsonb(entries)
 
 
 @router.get('')
@@ -253,8 +348,8 @@ def create_external(body: ExternalConnection, user: User):
     fields = save_fields(ident, body)
     with db.connect() as conn:
         conn.execute('''INSERT INTO external_api_connections
-            (id,name,provider,endpoint,method,auth,header_name,secret,paused,created_by)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)''', (ident, *fields, user['id']))
+            (id,name,provider,endpoint,method,auth,header_name,secret,paused,requests,created_by)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)''', (ident, *fields, user['id']))
         db.event('external_connection.created', user['id'], {'id':str(ident)}, conn=conn)
     return {'id': ident}
 
@@ -270,7 +365,7 @@ def update_external(ident: uuid.UUID, body: ExternalConnection, user: User):
             raise HTTPException(409, 'The connection changed. Refresh and edit it again.')
         fields = save_fields(ident, body, row)
         conn.execute('''UPDATE external_api_connections SET name=%s,provider=%s,endpoint=%s,method=%s,auth=%s,
-                     header_name=%s,secret=%s,paused=%s,version=version+1 WHERE id=%s''', (*fields, ident))
+                     header_name=%s,secret=%s,paused=%s,requests=%s,version=version+1 WHERE id=%s''', (*fields, ident))
         db.event('external_connection.updated', user['id'], {'id':str(ident)}, conn=conn)
     return {'id': ident}
 
@@ -312,38 +407,57 @@ def execute_external(ident: uuid.UUID, occasion: Literal['test', 'run'], options
         row = conn.execute('SELECT * FROM external_api_connections WHERE id=%s FOR UPDATE', (ident,)).fetchone()
         if not row:
             raise HTTPException(404, 'Connection not found.')
+        if options.connection_version is not None and options.connection_version != row['version']:
+            raise HTTPException(409, 'The connection changed. Refresh before sending another request.')
         if row['paused']:
             raise HTTPException(409, 'Resume the connection before using it.')
+        endpoint, configured_method, request_name, saved_body = row['endpoint'], row['method'], None, None
+        if options.request_index is not None:
+            requests = row['requests']
+            if options.request_index >= len(requests):
+                raise HTTPException(404, 'Saved request not found.')
+            selected = requests[options.request_index]
+            endpoint, request_name, saved_body = selected['endpoint'], selected['name'], selected['body']
+            configured_method = request_method(row['provider'], endpoint)
+        read_only = configured_method == 'GET' or (row['provider'] == 'angelone' and request_name is not None)
         if (options.source_path or options.row_limit) and not options.project_id:
             raise HTTPException(422, 'Choose a project before setting snapshot options.')
-        if options.project_id and (probe or row['method'] != 'GET'):
+        if options.project_id and (probe or not read_only):
             raise HTTPException(422, 'Only a GET run can save a project source.')
         if options.project_id:
             access.project(conn, user, options.project_id, True)
-        if not probe and row['method'] != 'GET' and not options.confirmed:
+        if not probe and not read_only and not options.confirmed:
             raise HTTPException(422, 'Confirm the external action before sending the request.')
-        if options.body is not None and (probe or row['method'] == 'GET'):
+        if options.body is not None and (probe or read_only):
             raise HTTPException(422, 'The selected request does not accept a JSON body.')
         try:
-            payload = None if options.body is None else json.dumps(options.body, allow_nan=False).encode()
+            request_body = saved_body if read_only else options.body
+            payload = None if request_body is None else json.dumps(request_body, allow_nan=False).encode()
         except (ValueError, RecursionError):
             raise HTTPException(422, 'Enter a valid JSON object or array.') from None
         if payload and len(payload) > 32_768:
             raise HTTPException(413, 'Request body exceeds 32 KB.')
-        url = validated_url(row['provider'], row['endpoint'], row['method'], row['auth'], row['header_name'])
+        url = validated_url(row['provider'], endpoint, configured_method, row['auth'], row['header_name'])
         credential = decrypt(ident, row['secret']) if row['secret'] else ''
+        headers = request_headers(row['auth'], row['header_name'], credential)
         if row['last_started_at'] and (datetime.now(timezone.utc)-row['last_started_at']).total_seconds() < 2:
             raise HTTPException(429, 'Wait two seconds before running this connection again.', headers={'Retry-After':'2'})
         conn.execute('UPDATE external_api_connections SET last_started_at=now() WHERE id=%s', (ident,))
-    headers = request_headers(row['auth'], row['header_name'], credential)
+    secrets = tuple(json.loads(credential)) if row['auth'] in ('kite', 'angel') else credential
     if payload is not None:
         headers['Content-Type'] = 'application/json'
     start = time.monotonic()
     # A write connection's test uses HEAD and cannot trigger its configured method.
-    method = 'HEAD' if probe and row['method'] != 'GET' else row['method']
+    method = 'HEAD' if probe and not read_only else configured_method
     try:
-        status, data = send(url, method, headers, credential, payload, probe=(method == 'HEAD'))
+        status, data = send(url, method, headers, secrets, payload, probe=(method == 'HEAD'))
         outcome = 'ok'
+        if row['provider'] == 'corei' and url.path.endswith('/capabilities') and (
+                not isinstance(data, dict) or data.get('product') != 'corei-os-mini'
+                or data.get('contract_version') != 1 or data.get('access') != 'market-data:read'
+                or not isinstance(data.get('operations'), list) or 'bars' not in data['operations']
+                or not isinstance(data.get('account_ids'), list)):
+            status, data, outcome = status, None, 'incompatible_contract'
     except UpstreamError as exc:
         status, data, outcome = exc.status, None, exc.outcome
     elapsed = int((time.monotonic()-start)*1000)
@@ -366,7 +480,7 @@ def execute_external(ident: uuid.UUID, occasion: Literal['test', 'run'], options
                 outcome = 'source_too_large'
             else:
                 source_id = uuid.uuid4()
-                title = 'API snapshot · ' + row['name']
+                title = 'API snapshot · ' + row['name'] + (' · ' + request_name if request_name else '')
                 conn.execute('INSERT INTO documents(id,project_id,title,content) VALUES (%s,%s,%s,%s)',
                              (source_id, options.project_id, title, content))
                 conn.execute('INSERT INTO document_versions(document_id,project_id,version,title,content) VALUES (%s,%s,1,%s,%s)',
@@ -379,4 +493,4 @@ def execute_external(ident: uuid.UUID, occasion: Literal['test', 'run'], options
                          VALUES (%s,%s,%s,%s,%s)''', (ident, occasion, outcome, status, elapsed))
             conn.execute('''DELETE FROM external_api_activity WHERE connection_id=%s AND id NOT IN
                          (SELECT id FROM external_api_activity WHERE connection_id=%s ORDER BY id DESC LIMIT 100)''', (ident,ident))
-    return {'outcome':outcome,'upstream_status':status,'elapsed_ms':elapsed,'method':method,'data':None if probe else data,'source_id':source_id}
+    return {'outcome':outcome,'upstream_status':status,'elapsed_ms':elapsed,'method':method,'data':None if probe else data,'source_id':source_id,'request_name':request_name}

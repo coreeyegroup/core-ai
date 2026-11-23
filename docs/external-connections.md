@@ -2,26 +2,31 @@
 
 Core AI supports two directions. **API keys** lets an external app submit Core AI
 jobs and read results. **External connections** lets a Core AI administrator call
-a saved HTTPS API or webhook. Each connection defines one endpoint and method.
+a saved HTTPS API or webhook. Core AI works with direct providers independently
+of Corei OS Mini. Only the optional Corei connection talks to Corei.
 
 ## Connect and use an external API
 
 1. Open **Connections → External connections → Add external connection**.
 2. Choose a platform. Enter the connection name and the endpoint for a single
    operation. Replace placeholders in the endpoint. Enter the token or key only
-   in the credential field and save.
-3. Select the connection and click **Test connection**. A read test makes a GET.
+   in the credential field. On a read connection, use **Add saved request**
+   to keep up to 20 named operations on the same HTTPS hostname. The requests
+   share one encrypted account credential. Save, then select the operation from
+   **Data request** before testing, previewing, or saving.
+3. Select the connection and click **Test connection**. This calls the selected
+   read operation. The documented Angel One quote and candle reads use POST.
    A write test checks the route with HEAD and never calls its write method.
    For POST-only webhook endpoints, a HEAD response may be 404 or 405. Test the
    real method with an intentionally configured test workflow and sample input.
-4. Click **Fetch preview** for a GET request. Use **View JSON response** to review
+4. Click **Fetch preview** for a read request. Use **View JSON response** to review
    results. To capture a new snapshot for an agent, choose an active project
    and click **Fetch and save**. Select **Open saved source** to check the
    captured data, then select
    that project in Chat or Tasks. For large option chains, open **Snapshot options**
    and select an array such as `data` with a row limit. This preserves the
    upstream ordering and records the applied limit.
-5. For POST, PUT, and PATCH, enter the optional JSON body, click **Review and
+5. For a custom write or webhook, enter the optional JSON body, click **Review and
    send**, then **Confirm and send**. Core AI does not retry these requests
    automatically. Configure idempotency in the receiving workflow if a resend is
    possible. For an ambiguous timeout, check upstream activity before sending again.
@@ -47,8 +52,11 @@ when adding imported responses to projects shared with other users.
 | WhatsApp | WhatsApp Business token; GET the phone-number metadata endpoint | Verify the authorized business number. Use n8n's WhatsApp trigger/actions for incoming messages and approved replies. |
 | Twelve Data | API key in Authorization; GET /time_series | Start with EUR/USD, 1h, and 50 rows. Set symbols and intervals according to the provider plan. |
 | Upstox | Current OAuth bearer token; choose an Upstox data request | Use V3 quotes, OHLC, Greeks and candles, options chain and contracts, or account data such as orders, trades, positions, holdings, and funds. |
-| Corei OS Mini | Dedicated research bearer token; GET /api/research/v1/capabilities | Verify accounts, then create or edit a connection for /api/research/v1/bars. |
-| Other HTTPS API | Custom GET, POST, PUT, or PATCH; none, bearer, header, or Basic authentication | Set one endpoint and method for each action. Use n8n for other auth schemes and scheduled or multi-node workflows. |
+| Zerodha | Kite API key and current access token | Start with the profile. Add quotes, candles, holdings, positions, margins, orders or trades as needed. |
+| Angel One | SmartAPI API key and current JWT; workstation IP and MAC settings | Start with the profile. Add positions, holdings, funds and order or trade books. Add quotes or candles with the documented JSON body. |
+| MT5 EA | Public HTTPS bridge URL and bearer token | Fetch account or market data exposed by your bridge. Alternatively, submit selected data from an EA to the Core AI job API. |
+| Corei OS Mini | Dedicated research bearer token; GET /api/research/v1/capabilities | Verify the v1 research contract and authorized accounts. Add saved bars requests referencing those accounts. |
+| Other HTTPS API | Custom GET, POST, PUT, or PATCH; none, bearer, header, or Basic authentication | Save additional reads on the same host or save one endpoint per write action. Use n8n for other auth schemes and scheduled or multi-node workflows. |
 
 Meta examples require the Graph API version and app/account permissions you use.
 Core AI accepts provider-issued tokens. Configure OAuth login, token refresh,
@@ -62,21 +70,40 @@ applicable.
 - [Upstox authentication](https://upstox.com/developer/api-documentation/authentication/)
 - [Upstox option chain](https://upstox.com/developer/api-documentation/get-pc-option-chain/)
 
-## Upstox data and order execution
+## Independent providers and optional Corei synchronization
 
-1. In Core AI, add an **Upstox · India markets** connection and select the data
-   request. Enter the instrument key, expiry, or candle settings when applicable.
-   The form builds the HTTPS endpoint. Save the connection with a current Upstox
-   access token. A separate connection per recurring request is supported.
-2. Test the connection and fetch a preview. Save market data to a project only
-   when its membership is appropriate. Keep account, order, and portfolio
-   snapshots in an appropriately restricted project.
-3. For broker orders, use the **Open Corei OS Mini order desk** link. Sign into
-   Corei and open **Execution → Order ticket**. Corei manages its own Upstox
-   login, order authorizations, risk checks, release, and reconciliation.
-4. Test the ticket with **Paper** first. For a broker order, use a properly
-   configured Upstox LIVE account and follow Corei's live controls. Core AI's
-   Upstox data token is separate from the Corei order connection.
+- **Upstox** runs directly from Core AI with a current OAuth access token. Use
+  your Upstox app to obtain the token, then rotate it in the saved Core AI
+  connection. Enter the raw token without the Bearer prefix.
+- **Zerodha** runs directly with the Kite app API key and session access token.
+  Generate the session in your Kite login integration. The API secret is used
+  for generating the session there. Rotate just the access token in Core AI.
+- **Angel One** runs directly with the SmartAPI app API key and JWT from
+  your SmartAPI login. Set `CORE_AI_ANGEL_LOCAL_IP`,
+  `CORE_AI_ANGEL_PUBLIC_IP` and `CORE_AI_ANGEL_MAC` in the
+  `core-ai-api` systemd service environment to match your actual workstation
+  network identity. Enter the raw JWT. Add the full endpoint for quotes or candles
+  under **Additional saved requests**. For a quote, the JSON body is shaped like
+  `{"mode":"FULL","exchangeTokens":{"NSE":["<instrument-token>"]}}`.
+- **MT5** requires an already-running bridge if Core AI is to fetch data from
+  it. If your EA calls Core AI directly, allow the Core AI HTTPS origin under
+  **Tools → Options → Expert Advisors** and use a scoped Core AI job key.
+- **Corei OS Mini** stays optional. Configure its dedicated research credential,
+  open its Core AI connection, then fetch **Capabilities** to see allowed account
+  IDs. Add a named request to the same connection for
+  `/api/research/v1/bars?account_id=<account-uuid>&symbol=EURUSD&timeframe=H1&limit=100`.
+  Each fetch reads the current stored bars from Corei. Saved project snapshots
+  represent the response at fetch time. Both products keep independent logins and
+  credentials, and this integration does not synchronize orders or portfolios.
+
+These broker presets collect data. Native direct broker order submission is
+outside the presets. Use each broker's own order workflow, the optional Corei
+order desk, or an explicitly configured external action endpoint with its own
+approval and reconciliation controls.
+
+- [Kite Connect authentication](https://kite.trade/docs/connect/v3/user/)
+- [Angel One SmartAPI reference](https://smartapi.angelone.in/docs)
+- [MT5 EA WebRequest](https://www.mql5.com/en/docs/network/webrequest)
 
 ## n8n or another app → Core AI
 
