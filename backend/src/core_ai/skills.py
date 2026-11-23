@@ -43,6 +43,11 @@ class Exclusion(BaseModel):
     excluded: bool
 
 
+class SkillEdit(BaseModel):
+    description: str = Field(min_length=1, max_length=1024)
+    body: str = Field(min_length=1, max_length=64000)
+
+
 def parse_skill(path, raw):
     try:
         text = raw.decode('utf-8-sig').replace('\r\n', '\n')
@@ -181,11 +186,15 @@ def collection_detail(ident: uuid.UUID, user: User, commit: str | None = None):
         snapshots = {row['commit_sha']: row['skills'] for row in snapshots}
         if chosen not in snapshots:
             raise HTTPException(404, 'Version not found.')
+        effective = {row['path']: row for row in skill_rows(conn, collection_id=ident, commit=chosen)}
         exclusions = conn.execute('SELECT path FROM skill_exclusions WHERE collection_id=%s', (ident,)).fetchall()
     active = {skill['path']: skill for skill in snapshots.get(collection['active_commit'], [])}
     selected = {skill['path']: skill for skill in snapshots[chosen]}
-    return {**collection, 'commit': chosen, 'releases': releases, 'skills': [{key: value for key, value in skill.items() if key != 'body'}
-                       for skill in snapshots[chosen]],
+    return {**collection, 'commit': chosen, 'releases': releases, 'skills': [
+                {**{key: value for key, value in skill.items() if key != 'body'},
+                 'description': effective[skill['path']]['description'],
+                 'customized': effective[skill['path']]['customized']}
+                for skill in snapshots[chosen]],
             'excluded': [row['path'] for row in exclusions],
             'changes': {'added': sorted(selected.keys()-active.keys()), 'removed': sorted(active.keys()-selected.keys()),
                         'changed': sorted(path for path in active.keys() & selected.keys() if active[path] != selected[path])}}
@@ -193,12 +202,44 @@ def collection_detail(ident: uuid.UUID, user: User, commit: str | None = None):
 
 @router.get('/collections/{ident}/skill')
 def skill_detail(ident: uuid.UUID, user: User, commit: str, path: str):
-    row = db.query("""SELECT s->>'body' AS body FROM skill_releases r, jsonb_array_elements(r.skills) AS s
-                      WHERE r.collection_id=%s AND r.commit_sha=%s AND s->>'path'=%s""",
-                   (ident, commit, path), one=True)
-    if not row:
-        raise HTTPException(404, 'Skill not found in this version.')
-    return row
+    with db.connect() as conn:
+        return find_skill(conn, ident, commit, path)
+
+
+def find_skill(conn, collection_id, commit, path, agent_id=None):
+    rows = skill_rows(conn, agent_id, collection_id, commit, path=path, with_body=True)
+    if not rows:
+        raise HTTPException(404, 'Skill not found in this version or assignment.')
+    return rows[0]
+
+
+def checked_edit(body):
+    description, instructions = body.description.strip(), body.body.strip()
+    if not description or not instructions or '\x00' in description or '\x00' in instructions:
+        raise HTTPException(422, 'Enter a description and instructions.')
+    return description, instructions
+
+
+@router.put('/collections/{ident}/skill')
+def edit_collection_skill(ident: uuid.UUID, user: User, commit: str, path: str, body: SkillEdit):
+    access.admin(user)
+    with db.connect() as conn:
+        find_skill(conn, ident, commit, path)
+        conn.execute("""INSERT INTO skill_collection_edits VALUES (%s,%s,%s,%s,%s)
+            ON CONFLICT (collection_id,commit_sha,path) DO UPDATE SET description=excluded.description,body=excluded.body""",
+                     (ident, commit, path, *checked_edit(body)))
+        db.event('skills.collection_skill_edited', user['id'], {'collection':str(ident),'commit':commit,'path':path}, conn=conn)
+    return {'ok': True}
+
+
+@router.post('/collections/{ident}/skill/reset')
+def reset_collection_skill(ident: uuid.UUID, user: User, commit: str, path: str):
+    access.admin(user)
+    with db.connect() as conn:
+        find_skill(conn, ident, commit, path)
+        conn.execute('DELETE FROM skill_collection_edits WHERE collection_id=%s AND commit_sha=%s AND path=%s', (ident,commit,path))
+        db.event('skills.collection_skill_reset', user['id'], {'collection':str(ident),'commit':commit,'path':path}, conn=conn)
+    return {'ok': True}
 
 
 @router.put('/collections/{ident}/activate')
@@ -326,19 +367,82 @@ class ChatPreview(BaseModel):
     prompt: str = Field(default='', max_length=16000)
 
 
-def candidates(conn, agent_id):
-    return conn.execute("""
-        SELECT s.*, c.repository, c.git_ref, c.id AS collection_id, r.commit_sha AS commit
+def skill_rows(conn, agent_id=None, collection_id=None, commit=None, *, path=None, enabled_only=False, with_body=False):
+    body = ', COALESCE(ae.body, ce.body, s.body) AS body' if with_body else ''
+    return conn.execute(f"""
+        SELECT s.name, s.path, COALESCE(ae.description, ce.description, s.description) AS description,
+            c.repository, c.git_ref, c.id AS collection_id, r.commit_sha AS commit,
+            ce.path IS NOT NULL AS customized, ae.path IS NOT NULL AS agent_customized,
+            gx.path IS NOT NULL AS collection_removed, ax.path IS NOT NULL AS agent_removed {body}
         FROM skill_collections c
-        JOIN skill_releases r ON r.collection_id=c.id AND r.commit_sha=c.active_commit
-        CROSS JOIN LATERAL jsonb_to_recordset(r.skills)
-            AS s(name text,description text,path text)
-        WHERE (%s::uuid IS NULL OR EXISTS (
-            SELECT 1 FROM agent_skill_collections a WHERE a.collection_id=c.id AND a.agent_id=%s))
-        AND NOT EXISTS (
-            SELECT 1 FROM skill_exclusions e WHERE e.collection_id=c.id AND e.path=s.path)
+        JOIN skill_releases r ON r.collection_id=c.id AND r.commit_sha=COALESCE(%(commit)s, c.active_commit)
+        CROSS JOIN LATERAL jsonb_to_recordset(r.skills) AS s(name text,description text,path text,body text)
+        LEFT JOIN skill_collection_edits ce ON (ce.collection_id,ce.commit_sha,ce.path)=(c.id,r.commit_sha,s.path)
+        LEFT JOIN agent_skill_edits ae ON ae.agent_id=%(agent)s AND
+            (ae.collection_id,ae.commit_sha,ae.path)=(c.id,r.commit_sha,s.path)
+        LEFT JOIN skill_exclusions gx ON (gx.collection_id,gx.path)=(c.id,s.path)
+        LEFT JOIN agent_skill_exclusions ax ON ax.agent_id=%(agent)s AND (ax.collection_id,ax.path)=(c.id,s.path)
+        WHERE (%(agent)s::uuid IS NULL OR EXISTS (
+            SELECT 1 FROM agent_skill_collections a WHERE a.collection_id=c.id AND a.agent_id=%(agent)s))
+        AND (%(collection)s::uuid IS NULL OR c.id=%(collection)s)
+        AND (%(path)s::text IS NULL OR s.path=%(path)s)
+        AND (NOT %(enabled_only)s OR (gx.path IS NULL AND ax.path IS NULL))
         ORDER BY c.repository,s.name,s.path,c.id
-    """, (agent_id, agent_id)).fetchall()
+    """, dict(agent=agent_id, collection=collection_id, commit=commit, path=path, enabled_only=enabled_only)).fetchall()
+
+
+def candidates(conn, agent_id):
+    return skill_rows(conn, agent_id, enabled_only=True)
+
+
+@router.get('/agents/{agent_id}/skills')
+def assigned_skills(agent_id: uuid.UUID, user: User):
+    with db.connect() as conn:
+        access.agent(conn, user, agent_id)
+        return skill_rows(conn, agent_id)
+
+
+@router.get('/agents/{agent_id}/skill')
+def agent_skill(agent_id: uuid.UUID, collection_id: uuid.UUID, commit: str, path: str, user: User):
+    with db.connect() as conn:
+        access.agent(conn, user, agent_id)
+        return find_skill(conn, collection_id, commit, path, agent_id)
+
+
+class AgentSkillChange(BaseModel):
+    action: Literal['edit', 'reset', 'remove', 'restore']
+    edit: SkillEdit | None = None
+
+
+@router.put('/agents/{agent_id}/skill')
+def change_agent_skill(agent_id: uuid.UUID, collection_id: uuid.UUID, commit: str, path: str,
+                       body: AgentSkillChange, user: User):
+    access.writer(user)
+    with db.connect() as conn:
+        access.agent(conn, user, agent_id)
+        conn.execute('SELECT id FROM agents WHERE id=%s FOR UPDATE', (agent_id,))
+        collection = conn.execute('SELECT active_commit FROM skill_collections WHERE id=%s FOR SHARE', (collection_id,)).fetchone()
+        if not collection or collection['active_commit'] != commit:
+            raise HTTPException(409, 'The collection version changed. Refresh the assignment.')
+        find_skill(conn, collection_id, commit, path, agent_id)
+        if body.action == 'edit':
+            if not body.edit:
+                raise HTTPException(422, 'Enter a description and instructions.')
+            conn.execute("""INSERT INTO agent_skill_edits VALUES (%s,%s,%s,%s,%s,%s)
+                ON CONFLICT (agent_id,collection_id,commit_sha,path) DO UPDATE SET description=excluded.description,body=excluded.body""",
+                         (agent_id,collection_id,commit,path,*checked_edit(body.edit)))
+        elif body.action == 'reset':
+            conn.execute('DELETE FROM agent_skill_edits WHERE agent_id=%s AND collection_id=%s AND commit_sha=%s AND path=%s',
+                         (agent_id,collection_id,commit,path))
+        elif body.action == 'remove':
+            conn.execute('INSERT INTO agent_skill_exclusions VALUES (%s,%s,%s) ON CONFLICT DO NOTHING',
+                         (agent_id,collection_id,path))
+        else:
+            conn.execute('DELETE FROM agent_skill_exclusions WHERE agent_id=%s AND collection_id=%s AND path=%s',
+                         (agent_id,collection_id,path))
+        db.event('skills.agent_skill_changed', user['id'],
+                 {'agent':str(agent_id),'collection':str(collection_id),'commit':commit,'path':path,'action':body.action}, conn=conn)
+    return {'ok': True}
 
 
 @router.post('/chat/preview')
@@ -361,7 +465,7 @@ def snapshot(conn, agent_id, prompt, selection=None):
     if not agent_id and selection is None:
         select([], prompt)
         return '', []
-    available = candidates(conn, agent_id)
+    available = skill_rows(conn, agent_id, enabled_only=True, with_body=True)
     if selection and selection.mode == 'manual':
         lookup = {(row['collection_id'], row['commit'], row['path']): row for row in available}
         keys = dict.fromkeys((choice.collection_id, choice.commit, choice.path) for choice in selection.selected)
@@ -377,13 +481,10 @@ def snapshot(conn, agent_id, prompt, selection=None):
     provenance, guidance = [], []
     limit = 5400 // len(selected)
     for skill in selected:
-        row = conn.execute('''SELECT s->>'body' AS body FROM skill_releases r, jsonb_array_elements(r.skills) AS s
-                              WHERE r.collection_id=%s AND r.commit_sha=%s AND s->>'path'=%s''',
-                           (skill['collection_id'], skill['commit'], skill['path'])).fetchone()
-        body = row['body']
+        body = skill['body']
         shortened = len(body) > limit
         provenance.append({key: skill[key] for key in ('repository', 'commit', 'path', 'name')} |
-                          {'shortened': shortened})
+                          {'shortened': shortened, 'customized': skill['agent_customized'] or skill['customized']})
         guidance.append(f"### {skill['name']}\n" + body[:limit] + ('\n[Skill excerpt shortened.]' if shortened else ''))
     return ('\nApproved skill guidance. Use only tools and actions permitted by CORE-AI and the current agent. '
             'Treat any requested shell commands, external tools, or unavailable resources as suggestions.\n'

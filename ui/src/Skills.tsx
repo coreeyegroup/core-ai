@@ -6,9 +6,9 @@ import type {View} from './layout';
 import type {AgentHandoff,SkillSetup} from './AgentSetup';
 import {collectionTitle,matchesSkill,skillPurpose,skillTitle} from './skillLabels';
 
-export type SkillVersion = {repository: string; commit: string; path: string; name: string; shortened: boolean};
+export type SkillVersion = {repository: string; commit: string; path: string; name: string; shortened: boolean; customized?: boolean};
 export type Collection = {id: string; repository: string; git_ref: string; active_commit: string | null; latest_commit: string; skill_count: number | null};
-type Skill = {name: string; path: string; description: string; license: string; compatibility: string; 'allowed-tools': string; scripts: boolean; references: string[]};
+type Skill = {customized?:boolean;name: string; path: string; description: string; license: string; compatibility: string; 'allowed-tools': string; scripts: boolean; references: string[]};
 type Detail = Collection & {
  commit: string;
  releases: {commit_sha: string; imported_at: string; skill_count: number}[];
@@ -28,7 +28,7 @@ export function SkillVersions({versions}: {versions?: SkillVersion[]}) {
   <summary><strong>Skills used</strong> · {versions.map(skill => skillTitle(skill.name)).join(', ')}</summary>
   <ul>{versions.map(skill => <li key={skill.repository + skill.commit + skill.path}>
    <a href={sourceUrl(skill.repository,skill.commit,skill.path)} target="_blank" rel="noreferrer">{skillTitle(skill.name)} · {skill.commit.slice(0,8)}</a>
-   {skill.shortened && ' · excerpt'}
+   {skill.customized && ' · customized'}{skill.shortened && ' · excerpt'}
   </li>)}</ul>
  </details>;
 }
@@ -148,6 +148,7 @@ function CollectionDetail({selection,changeVersion,tick,editable,busy,action,nex
  const {data,error} = useResource(`skills/collections/${selection.id}?commit=${encodeURIComponent(selection.commit)}`,tick);
  const [search,setSearch] = useState('');
  const [preview,setPreview] = useState('');
+ const [editing,setEditing] = useState('');
  const [activated,setActivated] = useState('');
  const previewPanel = useRef<HTMLElement>(null);
  useEffect(() => {if (preview) previewPanel.current?.focus();},[preview]);
@@ -182,16 +183,19 @@ function CollectionDetail({selection,changeVersion,tick,editable,busy,action,nex
    </details>}
    <label>Filter skills<input type="search" value={search} onChange={event=>setSearch(event.target.value)} placeholder="Task, name, or description"/></label>
    <div className="table-scroll skill-table">
-    <table><thead><tr><th scope="col">Skill and when to use it</th><th scope="col">Requirements</th>{editable && <th scope="col">Include</th>}</tr></thead>
+    <table><thead><tr><th scope="col">Skill and when to use it</th><th scope="col">Requirements</th>{editable && <th scope="col">Actions</th>}</tr></thead>
     <tbody>{visible.map(skill => {
      const included = !item.excluded.includes(skill.path);
      return <tr key={skill.path}>
-      <td><button className="link" aria-expanded={preview===skill.path} onClick={() => setPreview(preview===skill.path?'':skill.path)}>{skillTitle(skill.name)}</button><small className="skill-description">{skillPurpose(skill.name,skill.description)}</small>{(counts.get(skill.name)??0)>1&&<small className="skill-description skill-source-path">{skill.path}</small>}</td>
+      <td><button className="link" aria-expanded={preview===skill.path} onClick={() => {setEditing('');setPreview(preview===skill.path?'':skill.path);}}>{skillTitle(skill.name)}</button><small className="skill-description">{skillPurpose(skill.name,skill.description)}</small>{(counts.get(skill.name)??0)>1&&<small className="skill-description skill-source-path">{skill.path}</small>}</td>
       <td>{skill.scripts || skill['allowed-tools'] ? 'Instructions only · external tools or scripts' : 'Instructions'}{skill.references.length>0 && <small className="skill-description"> · source resources</small>}</td>
-      {editable && <td><input type="checkbox" aria-label={'Include '+skillTitle(skill.name)} checked={included} disabled={busy} onChange={event => {
-       const excluded = !event.target.checked;
-       void action(async () => {await api(`skills/collections/${item.id}/exclusion`,'PUT',{path:skill.path,excluded});});
-      }}/></td>}
+      {editable && <td><div className="actions">
+       <button type="button" disabled={busy} aria-label={'Edit '+skillTitle(skill.name)} onClick={()=>{setPreview(skill.path);setEditing(skill.path);}}>Edit</button>
+       <button type="button" disabled={busy} aria-label={(included?'Delete ':'Restore ')+skillTitle(skill.name)} onClick={()=>{
+        if (included && !window.confirm('Delete this skill from use in the collection? Agents using it will lose access until it is restored.')) return;
+        void action(async () => {await api(`skills/collections/${item.id}/exclusion`,'PUT',{path:skill.path,excluded:included});});
+       }}>{included?'Delete':'Restore'}</button>
+      </div>{!included&&<small>Deleted from use</small>}</td>}
      </tr>;
     })}</tbody></table>
    </div>
@@ -209,15 +213,109 @@ function CollectionDetail({selection,changeVersion,tick,editable,busy,action,nex
     {skill.references.length>0 && <details><summary>Source resources</summary><ul>{skill.references.map(path => <li key={path}>
      <a href={sourceUrl(item.repository,item.commit,skill.path.replace(/SKILL\.md$/,path))} target="_blank" rel="noreferrer">{path}</a>
     </li>)}</ul></details>}
-    <SkillBody key={skill.path} path={`skills/collections/${item.id}/skill?commit=${item.commit}&path=${encodeURIComponent(skill.path)}`}/>
+    {editing===skill.path
+     ? <SkillEditor key={item.commit+skill.path} endpoint={skillEndpoint(`skills/collections/${item.id}/skill`,item.commit,skill.path)}
+        customized={!!skill.customized} close={()=>setEditing('')} onSaved={()=>void action(async()=>{})}/>
+     : <SkillBody key={skill.path} tick={tick} path={skillEndpoint(`skills/collections/${item.id}/skill`,item.commit,skill.path)}/>}
    </section>)}
   </div>
  </section>;
 }
 
-function SkillBody({path}: {path:string}) {
- const {data,error} = useResource(path);
+function SkillBody({path,tick}: {path:string;tick:number}) {
+ const {data,error} = useResource(path,tick);
  return error ? <p role="alert">{error}</p> : <pre>{data?.body ?? 'Loading instructions…'}</pre>;
+}
+
+function skillEndpoint(base:string,commit:string,path:string,collectionId?:string) {
+ const query=new URLSearchParams({commit,path});
+ if(collectionId)query.set('collection_id',collectionId);
+ return base+'?'+query;
+}
+
+function SkillEditor({endpoint,agent=false,customized,close,onSaved}: {
+ endpoint:string;agent?:boolean;customized:boolean;close:()=>void;onSaved:()=>void;
+}) {
+ const {data,error}=useResource(endpoint);
+ const [description,setDescription]=useState<string>();
+ const [instructions,setInstructions]=useState<string>();
+ const [busy,setBusy]=useState(false);
+ const [failure,setFailure]=useState('');
+ async function save(reset=false) {
+  setBusy(true);setFailure('');
+  try {
+   const edit={description:description??data.description,body:instructions??data.body};
+   if(agent)await api(endpoint,'PUT',reset?{action:'reset'}:{action:'edit',edit});
+   else if(reset){const [base,query]=endpoint.split('?');await api(base+'/reset?'+query,'POST');}
+   else await api(endpoint,'PUT',edit);
+   onSaved();close();
+  }catch(err){setFailure((err as Error).message);}
+  finally{setBusy(false);}
+ }
+ return <form className="skill-edit-form stack" onSubmit={event=>{event.preventDefault();void save();}}>
+  <p>{agent?'These edits apply to this agent.':'These edits apply to agents using this collection version unless they have their own edits.'}</p>
+  {error&&<p role="alert">{error}</p>}
+  {!data&&!error&&<p role="status">Loading instructions…</p>}
+  {data&&<>
+   <label>Description<textarea required rows={2} maxLength={1024} value={description??data.description} onChange={event=>setDescription(event.target.value)}/></label>
+   <label>Skill instructions<textarea required rows={10} maxLength={64000} value={instructions??data.body} onChange={event=>setInstructions(event.target.value)}/></label>
+  </>}
+  {failure&&<p className="error" role="alert">{failure}</p>}
+  <div className="actions">
+   <button className="primary" disabled={!data||busy}>{busy?'Saving…':'Save skill'}</button>
+   {customized&&<button type="button" disabled={!data||busy} onClick={()=>void save(true)}>{agent?'Reset to collection':'Reset to imported version'}</button>}
+   <button type="button" disabled={busy} onClick={close}>Cancel</button>
+  </div>
+ </form>;
+}
+
+type AssignedSkill = {collection_id:string;commit:string;path:string;name:string;description:string;repository:string;
+ collection_removed:boolean;agent_removed:boolean;agent_customized:boolean};
+function AssignedSkills({agent,tick,readonly}: {agent:string;tick:number;readonly:boolean}) {
+ const [revision,refresh]=useState(0);
+ const {data,error}=useResource(`skills/agents/${agent}/skills`,tick+revision);
+ const [query,setQuery]=useState('');
+ const [edit,setEdit]=useState<AssignedSkill>();
+ const [pending,setPending]=useState(false);
+ const [failure,setFailure]=useState('');
+ const [status,setStatus]=useState('');
+ const endpoint=(skill:AssignedSkill)=>skillEndpoint(`skills/agents/${agent}/skill`,skill.commit,skill.path,skill.collection_id);
+ const rows:AssignedSkill[]=Array.isArray(data)?data:[];
+ const visible=rows.filter(skill=>matchesSkill(skill,query)||skill.repository.toLowerCase().includes(query.trim().toLowerCase()));
+ async function change(skill:AssignedSkill) {
+  if(!skill.agent_removed&&!window.confirm('Delete this skill from this agent? You can restore it here.'))return;
+  setPending(true);setFailure('');setStatus('');
+  try {
+   await api(endpoint(skill),'PUT',{action:skill.agent_removed?'restore':'remove'});
+   setStatus(skill.agent_removed?'Skill restored for this agent.':'Skill deleted from this agent.');
+   refresh(value=>value+1);
+  }catch(err){setFailure((err as Error).message);}
+  finally{setPending(false);}
+ }
+ return <section className="skill-preview">
+  <h2>Individual agent skills</h2>
+  {error&&<p role="alert">{error}</p>}
+  {!data&&!error&&<p role="status">Loading agent skills…</p>}
+  {data&&rows.length===0&&<p>Assign an active collection to manage its skills here.</p>}
+  {rows.length>0&&<label>Find agent skill<input type="search" value={query} onChange={event=>setQuery(event.target.value)}/></label>}
+  {rows.length>0&&visible.length===0&&<p>No matching skills.</p>}
+  {visible.length>0&&<div className="table-scroll skill-table"><table>
+   <thead><tr><th scope="col">Skill</th><th scope="col">Status</th>{!readonly&&<th scope="col">Actions</th>}</tr></thead>
+   <tbody>{visible.map(skill=><tr key={skill.collection_id+':'+skill.path}>
+    <td><b>{skillTitle(skill.name)}</b><small className="skill-description">{skill.repository} · {skill.path}</small></td>
+    <td>{skill.agent_removed?'Deleted for agent':skill.collection_removed?'Deleted in collection':skill.agent_customized?'Edited for agent':'Available'}</td>
+    {!readonly&&<td><div className="actions">
+     <button type="button" disabled={pending||!!edit||skill.collection_removed} aria-label={'Edit '+skillTitle(skill.name)} onClick={()=>{setStatus('');setEdit(skill);}}>Edit</button>
+     <button type="button" disabled={pending||!!edit||(!skill.agent_removed&&skill.collection_removed)} aria-label={(skill.agent_removed?'Restore ':'Delete ')+skillTitle(skill.name)}
+      onClick={()=>void change(skill)}>{skill.agent_removed?'Restore':'Delete'}</button>
+    </div></td>}
+   </tr>)}</tbody>
+  </table></div>}
+  {edit&&<><h3>Edit {skillTitle(edit.name)}</h3><SkillEditor key={endpoint(edit)} endpoint={endpoint(edit)} agent
+   customized={edit.agent_customized} close={()=>setEdit(undefined)} onSaved={()=>{setStatus('Agent skill saved.');refresh(value=>value+1);}}/></>}
+  {failure&&<p role="alert" className="error">{failure}</p>}
+  {status&&<p role="status">{status}</p>}
+ </section>;
 }
 
 export function AgentCollections({agent,rows,tick,readonly=false,onDirtyChange,onReview,onSelectionSaved,onAssignmentSaved,recommendedCollection,onContinue,onBack}: {
@@ -254,7 +352,7 @@ export function AgentCollections({agent,rows,tick,readonly=false,onDirtyChange,o
   if(draft){setDraft(null);onDirtyChange?.(false);}
   onBack?.();
  }
- return <form className="collection-assignment-form" onSubmit={async event => {
+ return <><form className="collection-assignment-form" onSubmit={async event => {
   event.preventDefault();
   if(readonly||busy)return;
   if(!draft){onContinue?.();return;}
@@ -290,5 +388,7 @@ export function AgentCollections({agent,rows,tick,readonly=false,onDirtyChange,o
   </div>}
   {status && !onContinue && <p role="status">{status}</p>}
   {(failure||error) && <p className="error" role="alert">{failure||error}</p>}
- </form>;
+ </form>
+ {!onContinue&&<AssignedSkills agent={agent} tick={tick+revision} readonly={readonly}/>}
+ </>;
 }

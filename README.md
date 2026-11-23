@@ -249,6 +249,15 @@ collection in context. Choose an existing agent or create one. Under
 to the catalog, use **Review collections in Skills**. Under **Run agent**,
 open Chat or Tasks with that agent selected.
 
+Open **Individual agent skills** under **Agents → Attach skills** to edit a
+description and instructions for that agent. **Delete** takes the skill out of
+use for that agent and **Restore** makes it available again. In **Skills**,
+administrators can edit a skill for the selected collection version or delete
+it from use across the collection. **Reset** removes a local edit. Descriptions
+and instruction edits apply to the selected Git commit. Deletion applies to
+the skill path across versions. Imported source and prior run snapshots are
+retained.
+
 In Chat, **Automatic matching** previews up to two distinct skills.
 **Choose specific skills** groups same-name entries and lets you pick a source
 or version. Copies of the same repository, commit, and path appear once.
