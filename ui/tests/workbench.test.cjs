@@ -15,7 +15,10 @@ test('custom workbench navigates, splits and opens every implemented module',asy
   };
   responses['skills/agents/agent']=[];
   const chatSkill={name:'systematic-debugging',description:'Review evidence',repository:'example/skills',collection_id:'collection',commit:catalogCommit,path:'systematic-debugging/SKILL.md'};
-  responses['skills/chat/preview']={available:[chatSkill],automatic:[chatSkill],error:''};
+  responses['skills/chat/preview']={available:[chatSkill,
+   {...chatSkill,collection_id:'duplicate-ref',git_ref:'HEAD'},
+   {...chatSkill,collection_id:'alternate-source',repository:'other/skills',path:'alternate/SKILL.md'}],
+   automatic:[chatSkill],error:''};
   responses['skills/agents/new-agent']=[];
   const forexCommit='b'.repeat(40);
   const forexCollection={...catalogRow,id:'forex',repository:'marian2js/trading-skills',git_ref:'main',latest_commit:forexCommit};
@@ -366,26 +369,20 @@ test('custom workbench navigates, splits and opens every implemented module',asy
   await act(async()=>{approve.click();await wait();});
   assert.ok(fetched.includes('/api/v1/skills/collections/collection/activate'));
   await act(async()=>{button(skillsPanel,'Assign this collection').click();await wait();});
-  assert.match(skillsPanel.querySelector('[aria-current=step]').textContent,/Assign to an agent/);
-  await act(async()=>{change(skillsPanel.querySelector('section.form select'),'agent');await wait();});
-  assert.match(skillsPanel.querySelector('.skill-assignments').textContent,/Selected collection Example Skills/);
-  assert.ok(skillsPanel.querySelector('.skill-assignment input').checked);
-  assert.deepEqual(assignmentWrites,[]);
-  await act(async()=>{submit(skillsPanel);await wait();});
-  assert.deepEqual(assignmentWrites,[['collection']]);
-  await act(async()=>{button(skillsPanel,'New agent').click();});
-  const createAgent=skillsPanel.querySelector('.skill-agent-form');
-  createAgent.elements.namedItem('name').value='Evidence Reviewer';
-  createAgent.elements.namedItem('instructions').value='Review evidence.';
-  await act(async()=>{createAgent.dispatchEvent(new dom.window.Event('submit',{bubbles:true,cancelable:true}));await wait();});
-  assert.equal(skillsPanel.querySelector('section.form select').value,'new-agent');
-  await act(async()=>{button(skillsPanel,'Open Agents').click();await wait();});
   const agentsPanel=document.querySelector('.view:not([hidden]) .agents-page');
-  assert.match(agentsPanel.textContent,/Start with an agent/);
+  assert.match(agentsPanel.querySelector('.agent-handoff').textContent,/example\/skills/);
+  assert.ok(!skillsPanel.querySelector('.skill-assignments'));
   await act(async()=>{agentsPanel.querySelector('.record').click();await wait();});
-  assert.match(agentsPanel.querySelector('[aria-current=step]').textContent,/Profile/);
-  await act(async()=>{button(agentsPanel,'Continue to skill setup').click();await wait();});
   assert.match(agentsPanel.querySelector('[aria-current=step]').textContent,/Attach skills/);
+  assert.ok(!agentsPanel.querySelector('.skill-assignment input').checked);
+  await act(async()=>{button(agentsPanel,'Add recommended collection').click();});
+  assert.deepEqual(assignmentWrites,[]);
+  await act(async()=>{agentsPanel.querySelector('.collection-assignment-form').dispatchEvent(new dom.window.Event('submit',{bubbles:true,cancelable:true}));await wait();});
+  assert.deepEqual(assignmentWrites,[['collection']]);
+  await act(async()=>{button(agentsPanel,'Review collections in Skills').click();await wait();});
+  assert.ok(button(skillsPanel,'Back to agent'));
+  await act(async()=>{button(skillsPanel,'Attach to current agent').click();await wait();});
+  assert.match(agentsPanel.querySelector('.agent-detail > header').textContent,/Analyst/);
   const agentAssignment=agentsPanel.querySelector('.collection-assignment-form');
   assert.ok(agentAssignment.querySelector('.skill-assignment input').checked);
   await act(async()=>{agentAssignment.querySelector('.skill-assignment input').click();});
@@ -393,6 +390,14 @@ test('custom workbench navigates, splits and opens every implemented module',asy
   assert.ok(!agentAssignment.querySelector('.skill-assignment input').checked);
   await act(async()=>{agentAssignment.dispatchEvent(new dom.window.Event('submit',{bubbles:true,cancelable:true}));await wait();});
   assert.deepEqual(assignmentWrites,[['collection'],[]]);
+  await act(async()=>{button(agentsPanel,'Clear collection').click();});
+  await act(async()=>{button(agentsPanel,'New agent').click();});
+  await act(async()=>{
+   input(agentsPanel.querySelector('.agent-profile input'),'Evidence Reviewer');
+   input(agentsPanel.querySelector('.agent-profile textarea'),'Review evidence.');
+  });
+  await act(async()=>{submit(agentsPanel);await wait();});
+  assert.match(agentsPanel.querySelector('.agent-detail > header').textContent,/Evidence Reviewer/);
   await act(async()=>{button(agentsPanel,'New agent').click();});
   await act(async()=>{
    input(agentsPanel.querySelector('.agent-profile input'),'Studio Agent');
@@ -401,7 +406,9 @@ test('custom workbench navigates, splits and opens every implemented module',asy
   await act(async()=>{submit(agentsPanel);await wait();});
   assert.match(agentsPanel.querySelector('.agent-detail > header').textContent,/Studio Agent.*Version 1/);
   assert.match(agentsPanel.querySelector('[aria-current=step]').textContent,/Attach skills/);
-  await act(async()=>{button(agentsPanel,'3. Open Chat').click();await wait();});
+  await act(async()=>{button(agentsPanel,'3. Run agent').click();await wait();});
+  await act(async()=>{button(agentsPanel,'Open agent in Chat').click();await wait();});
+  assert.equal(chat().querySelector('[aria-label="Chat agent profile"]').value,'studio-agent');
   await act(async()=>{chat().querySelector('.chat-skills-trigger').click();});
   await act(async()=>{await new Promise(resolve=>setTimeout(resolve,230));});
   const skillPicker=document.querySelector('.chat-skills-picker');
@@ -413,7 +420,10 @@ test('custom workbench navigates, splits and opens every implemented module',asy
   await act(async()=>{await new Promise(resolve=>setTimeout(resolve,230));});
   await act(async()=>{input(skillPicker.querySelector('input[type=search]'),'root cause');});
   assert.match(skillPicker.querySelector('.chat-skill-options').textContent,/Find the Root Cause.*Reproduce a bug/);
-  await act(async()=>{skillPicker.querySelector('.chat-skill-options input').click();});
+  const duplicates=skillPicker.querySelector('.chat-skill-variants');
+  assert.match(duplicates.querySelector('summary').textContent,/Find the Root Cause.*2 sources or versions/);
+  assert.equal(duplicates.querySelectorAll('input').length,2);
+  await act(async()=>{duplicates.querySelector('summary').click();duplicates.querySelector('input').click();});
   assert.match(chat().querySelector('.chat-skills-trigger').textContent,/Selected \(1\)/);
   await act(async()=>{window.dispatchEvent(new CustomEvent('core-ai-goto',{detail:{view:'Workflows'}}));await wait();});
   const workflow=()=>document.querySelector('.view:not([hidden])');

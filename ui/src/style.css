@@ -199,11 +199,8 @@
 .skill-table{max-height:420px;overflow:auto}
 
 .skill-import-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(145px,220px) auto;gap:12px;align-items:end}
-.skill-import-grid label,.skill-agent-form label{display:grid;gap:4px;min-width:0;margin:0}
+.skill-import-grid label{display:grid;gap:4px;min-width:0;margin:0}
 .skill-import-grid input{width:100%}
-.skills-page .skill-section-heading{display:flex;align-items:center;justify-content:space-between;gap:8px}
-.skill-agent-form{display:grid;gap:8px;padding:var(--panel-inset);margin-bottom:var(--space);border:1px solid var(--line);border-radius:4px}
-.skill-agent-form button{justify-self:start}
 @container(max-width:560px){.skill-import-grid{grid-template-columns:minmax(0,1fr) auto;gap:8px}.skill-import-grid label:first-child{grid-column:1/-1}}
 
 
@@ -312,3 +309,9 @@
  .setup-card .collection-filters{grid-template-columns:minmax(0,1fr);justify-content:stretch}
  .setup-card .collection-filters button{justify-self:start}
 }
+
+.agent-handoff{display:flex;align-items:center;justify-content:space-between;gap:8px 12px;flex-wrap:wrap;overflow-wrap:anywhere}
+.agent-handoff p{margin:4px 0 0}
+.agent-run .actions{margin-top:8px}
+
+.skill-source-path{overflow-wrap:anywhere;color:var(--muted)}

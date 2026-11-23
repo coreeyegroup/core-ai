@@ -94,8 +94,10 @@ select option{background-color:var(--input);color:var(--text)}
 .chat-skills-picker p,.chat-skills-picker ul{margin:0}
 .chat-skills-picker>label,.chat-skills-picker div>label{display:grid;gap:4px}
 .chat-skill-options{max-height:210px;overflow:auto;margin-top:6px}
-.chat-skill-options label{display:flex;align-items:flex-start;gap:8px;padding:6px 2px;border-bottom:1px solid var(--line)}
+.chat-skills-picker .chat-skill-options label{display:flex;align-items:flex-start;gap:8px;padding:6px 2px;border-bottom:1px solid var(--line)}
 .chat-skill-options small{display:block}
+.chat-skill-options label>span{min-width:0;overflow-wrap:anywhere}
+.chat-skill-options input[type=checkbox]{flex:none;margin:3px 0 0}
 .chat-skill-selections{padding-left:18px;max-height:120px;overflow:auto}
 
 
@@ -113,3 +115,9 @@ select option{background-color:var(--input);color:var(--text)}
 .app .composer-tools .composer-agent{max-width:min(100%,175px);text-overflow:ellipsis}
 .chat-skill-options strong{font-weight:600}
 .chat-skill-options small{line-height:1.4;margin-top:2px}
+
+.chat-skill-variants{border-bottom:1px solid var(--line);min-width:0}
+.chat-skill-variants summary{cursor:pointer;padding:6px 4px}
+.chat-skill-variants summary span{display:block;padding-left:13px;color:var(--muted);font-size:var(--meta-size)}
+.chat-skill-variants>div{padding-left:8px}
+.chat-skill-variants label small{overflow-wrap:anywhere}

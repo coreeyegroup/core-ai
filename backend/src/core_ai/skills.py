@@ -5,7 +5,7 @@ import tarfile
 import time
 import uuid
 from typing import Annotated, Literal
-from urllib.parse import quote, urlsplit
+from urllib.parse import quote, unquote, urlsplit
 
 import httpx
 import yaml
@@ -264,15 +264,31 @@ def terms(text):
     }
 
 
+def unique_versions(skills):
+    result, seen = [], set()
+    for skill in skills:
+        identity = (skill['repository'], skill['commit'], skill['path'])
+        if identity not in seen:
+            seen.add(identity)
+            result.append(skill)
+    return result
+
+
 def select(candidates, prompt):
     """Rank by name and description, with an explicit override for assigned skills."""
     command = re.match(r'^/skill[ \t]+([^\s]+)(?:\s|$)', prompt)
     if command:
-        name = command[1]
+        name, pinned, source = command[1].partition('@')
         matches = [skill for skill in candidates
                    if name in (skill['name'], f"{skill['repository']}:{skill['name']}")]
+        if pinned:
+            commit, separator, path = source.partition(':')
+            if not separator or not SHA.fullmatch(commit) or not path:
+                raise HTTPException(422, 'Use the pinned task command shown in the skill catalog.')
+            matches = [skill for skill in matches if skill['commit'] == commit and skill['path'] == unquote(path)]
+        matches = unique_versions(matches)
         if len(matches) != 1:
-            raise HTTPException(422, 'Choose a unique enabled skill from an assigned collection. Use owner/repo:skill-name to qualify it.')
+            raise HTTPException(422, 'Choose a unique enabled skill from an assigned collection. Use the pinned task command in Skills if the name is shared.')
         return matches
     query = terms(prompt)
     ranked = []
@@ -283,7 +299,15 @@ def select(candidates, prompt):
         if score >= 3:
             ranked.append((-score, skill['repository'], skill['path'], skill['commit'], skill))
     ranked.sort(key=lambda row: row[:4])
-    return [row[-1] for row in ranked[:2]]
+    selected, names = [], set()
+    for *_, skill in ranked:
+        if skill['name'] in names:
+            continue
+        names.add(skill['name'])
+        selected.append(skill)
+        if len(selected) == 2:
+            break
+    return selected
 
 
 class SkillChoice(BaseModel):
@@ -304,7 +328,7 @@ class ChatPreview(BaseModel):
 
 def candidates(conn, agent_id):
     return conn.execute("""
-        SELECT s.*, c.repository, c.id AS collection_id, r.commit_sha AS commit
+        SELECT s.*, c.repository, c.git_ref, c.id AS collection_id, r.commit_sha AS commit
         FROM skill_collections c
         JOIN skill_releases r ON r.collection_id=c.id AND r.commit_sha=c.active_commit
         CROSS JOIN LATERAL jsonb_to_recordset(r.skills)
@@ -345,7 +369,7 @@ def snapshot(conn, agent_id, prompt, selection=None):
             raise HTTPException(422, 'Select at least one skill or choose Auto or Off.')
         if any(key not in lookup for key in keys):
             raise HTTPException(409, 'A selected skill changed or is no longer available. Review your selections.')
-        selected = [lookup[key] for key in keys]
+        selected = unique_versions(lookup[key] for key in keys)
     else:
         selected = select(available, prompt)
     if not selected:

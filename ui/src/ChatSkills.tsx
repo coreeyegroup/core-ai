@@ -5,7 +5,7 @@ import {collectionTitle,matchesSkill,skillPurpose,skillTitle} from './skillLabel
 
 export type SkillChoice = {collection_id:string;commit:string;path:string;name:string;repository:string};
 export type SkillSelection = {mode:'auto'|'manual'|'off';selected:SkillChoice[]};
-type AvailableSkill = SkillChoice & {description:string};
+type AvailableSkill = SkillChoice & {description:string;git_ref?:string};
 type Preview = {available:AvailableSkill[];automatic:AvailableSkill[];error:string};
 const sameSkill = (a:SkillChoice,b:SkillChoice) =>
  a.collection_id===b.collection_id && a.commit===b.commit && a.path===b.path;
@@ -38,8 +38,24 @@ function SkillPicker({agent,prompt,value,change}: {
   },200);
   return()=>{active=false;window.clearTimeout(timer);};
  },[agent,prompt,value.mode,revision]);
- const options = (preview?.available??[]).filter(skill =>
-  matchesSkill(skill,filter));
+ const groups = new Map<string,Map<string,AvailableSkill>>();
+ for(const skill of preview?.available??[]){
+  if(!matchesSkill(skill,filter)&&!skill.path.toLowerCase().includes(filter.trim().toLowerCase()))continue;
+  const versions=groups.get(skill.name)??new Map<string,AvailableSkill>();
+  const identity=JSON.stringify([skill.repository,skill.commit,skill.path]);
+  if(!versions.has(identity)||value.selected.some(item=>sameSkill(item,skill)))versions.set(identity,skill);
+  groups.set(skill.name,versions);
+ }
+ function renderChoice(skill:AvailableSkill,showPath=false){
+  const selected=value.selected.some(item=>sameSkill(skill,item));
+  return <label key={skill.collection_id+skill.path} title={skill.description}>
+   <input type="checkbox" checked={selected} disabled={!selected&&value.selected.length>=8} onChange={()=>change({
+    ...value,selected:selected?value.selected.filter(item=>!sameSkill(skill,item)):[...value.selected,skill]
+   })}/><span><strong>{showPath?skill.repository:skillTitle(skill.name)}</strong>
+    <small>{skillPurpose(skill.name,skill.description)}</small>
+    <small>{showPath?skill.path:collectionTitle(skill.repository)} · {skill.git_ref&&skill.git_ref+' · '}{skill.commit.slice(0,8)}</small></span>
+  </label>;
+ }
  const stale = preview && value.selected.filter(skill=>!preview.available.some(item=>sameSkill(item,skill)));
  return <div className="chat-skills-picker">
   <label>Skill selection<select value={value.mode} onChange={event=>change({...value,mode:event.target.value as SkillSelection['mode']})}>
@@ -63,15 +79,16 @@ function SkillPicker({agent,prompt,value,change}: {
     {' '}<button type="button" aria-label={'Remove skill '+skillTitle(skill.name)} onClick={()=>change({...value,selected:value.selected.filter(item=>!sameSkill(item,skill))})}>×</button>
    </li>)}</ul>}
    <label>Find skills<input type="search" value={filter} onChange={event=>setFilter(event.target.value)} placeholder="Task, name, or collection"/></label>
-   <div className="chat-skill-options">{options.map(skill=>{
-    const selected = value.selected.some(item=>sameSkill(skill,item));
-    return <label key={skill.collection_id+skill.path} title={skill.description}>
-     <input type="checkbox" checked={selected} disabled={!selected&&value.selected.length>=8} onChange={()=>change({
-      ...value,selected:selected?value.selected.filter(item=>!sameSkill(skill,item)):[...value.selected,skill]
-     })}/><span><strong>{skillTitle(skill.name)}</strong><small>{skillPurpose(skill.name,skill.description)}</small><small>{collectionTitle(skill.repository)} · {skill.commit.slice(0,8)}</small></span>
-    </label>;
+   <div className="chat-skill-options">{[...groups.entries()].sort(([a],[b])=>skillTitle(a).localeCompare(skillTitle(b))).map(([name,versions])=>{
+    const options=[...versions.values()];
+    if(options.length===1)return renderChoice(options[0]);
+    const used=options.filter(skill=>value.selected.some(item=>sameSkill(item,skill))).length;
+    return <details key={name} className="chat-skill-variants">
+     <summary><strong>{skillTitle(name)}</strong><span>{options.length} sources or versions{used>0&&` · ${used} selected`}</span></summary>
+     <div>{options.map(skill=>renderChoice(skill,true))}</div>
+    </details>;
    })}</div>
-   {preview && options.length===0 && <p>{preview.available.length?'No skills match this search.':agent?'This agent has no available skills. In Agents, assign an active skill collection.':'Activate a skill collection in Skills to make it available here.'}</p>}
+   {preview && groups.size===0 && <p>{preview.available.length?'No skills match this search.':agent?'This agent has no available skills. In Agents, assign an active skill collection.':'Activate a skill collection in Skills to make it available here.'}</p>}
   </div>}
  </div>;
 }

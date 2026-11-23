@@ -5,7 +5,8 @@ import {useSession} from './Session';
 import {AgentCollections,type Collection} from './Skills';
 import {useResource} from './Workspace';
 
-export type SkillSetup = {repository:string; collection?:Collection};
+export type SkillSetup = {repository?:string; collection?:Collection; agentId?:string};
+export type AgentHandoff = {collectionId?:string; agentId?:string};
 export type RunSetup = {agentId:string; prompt:string};
 
 const presets = [

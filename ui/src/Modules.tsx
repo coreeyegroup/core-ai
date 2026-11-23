@@ -6,7 +6,7 @@ import Connections from './Connections';
 import ProjectWorkspace,{type ProjectLocation} from './Projects';
 import Sources from './Sources';
 import Settings from './Settings';
-import AgentSetup,{type RunSetup,type SkillSetup} from './AgentSetup';
+import AgentSetup,{type RunSetup,type SkillSetup,type AgentHandoff} from './AgentSetup';
 import Skills,{AgentCollections,SkillVersions,type Collection} from './Skills';
 import {FilesPanel,ArtifactLibrary,AccessPanel,CapabilitiesPanel,useResource,openArtifact} from './Workspace';
 import {useSession} from './Session';
@@ -23,8 +23,8 @@ export function ErrorNote({error}:{error:string}){return error?<div className="e
 function Empty({children}:{children:React.ReactNode}){return <div className="empty">{children}</div>;}
 function Status({value}:{value:string}){return <span className={'state '+value.toLowerCase()}>{value.replaceAll('_',' ')}</span>;}
 export function Module({view,tick,refresh,go,appearance,changeAppearance,visible,projectLocation,changeProjectLocation,setupLaunch,launchSetup,openSetupChat}:{
- setupLaunch?:{skills?:SkillSetup;task?:RunSetup};
- launchSetup:(view:'Skills'|'Tasks',payload:{skills:SkillSetup}|{task:RunSetup})=>void;
+ setupLaunch?:{skills?:SkillSetup;task?:RunSetup;agent?:AgentHandoff};
+ launchSetup:(view:'Skills'|'Tasks'|'Agents',payload:{skills:SkillSetup}|{task:RunSetup}|{agent:AgentHandoff})=>void;
  openSetupChat:(setup:RunSetup)=>boolean;projectLocation:ProjectLocation;changeProjectLocation:(location:ProjectLocation)=>void;view:View;visible?:boolean;tick:number;refresh:()=>void;go:(v:View)=>void;appearance:Appearance;changeAppearance:(p:Partial<Appearance>)=>void}){
  const lastVisibleTick=useRef(tick);
  if(visible!==false)lastVisibleTick.current=tick;
@@ -34,8 +34,8 @@ export function Module({view,tick,refresh,go,appearance,changeAppearance,visible
   case 'Setup':return <AgentSetup tick={tick} refresh={refresh} go={go} openSkills={skills=>launchSetup('Skills',{skills})} openTask={task=>launchSetup('Tasks',{task})} openChat={openSetupChat}/>;
   case 'Overview':return <Overview tick={tick} go={go}/>;
   case 'Projects':return <ProjectWorkspace tick={tick} refresh={refresh} location={projectLocation} changeLocation={changeProjectLocation}/>;
-  case 'Skills':return <Skills tick={tick} refreshWorkspace={refresh} go={go} setup={setupLaunch?.skills}/>;
-  case 'Agents':return <Agents tick={tick} refresh={refresh} go={go}/>;
+  case 'Skills':return <Skills tick={tick} refreshWorkspace={refresh} go={go} setup={setupLaunch?.skills} openAgents={agent=>launchSetup('Agents',{agent})}/>;
+  case 'Agents':return <Agents tick={tick} refresh={refresh} go={go} handoff={setupLaunch?.agent} openSkills={skills=>launchSetup('Skills',{skills})} openTask={task=>launchSetup('Tasks',{task})} openChat={openSetupChat}/>;
   case 'Tasks':return <Tasks tick={tick} refresh={refresh} go={go} setup={setupLaunch?.task}/>;
   case 'Knowledge':return <Sources tick={tick} refresh={refresh}/>;
   case 'Artifacts':return <ArtifactLibrary tick={tick} refresh={refresh}/>;
@@ -61,14 +61,19 @@ type AgentRecord = AgentProfile & {id:string;version:number};
 const agentTools = ['knowledge.search','project.inspect','artifact.create'];
 const initialProfile: AgentProfile = {name:'',instructions:'',enabled:true,runtime_mode:'analysis',tools:agentTools.slice(0,2)};
 
-function Agents({tick,refresh,go}:{tick:number;refresh:()=>void;go:(view:View)=>void}){
+function Agents({tick,refresh,go,handoff,openSkills,openTask,openChat}:{
+ tick:number;refresh:()=>void;go:(view:View)=>void;handoff?:AgentHandoff;
+ openSkills:(setup:SkillSetup)=>void;openTask:(setup:RunSetup)=>void;openChat:(setup:RunSetup)=>boolean;
+}){
  const readonly = useSession().role==='VIEWER';
  const {data,error} = useData('agents',tick);
  const {data:catalog,error:catalogError} = useResource('skills',tick);
  const rows: AgentRecord[] = Array.isArray(data)?data:[];
  const collections: Collection[] = Array.isArray(catalog)?catalog:[];
  const [selected,setSelected] = useState<AgentRecord|null>(null);
- const [section,setSection] = useState<'profile'|'collections'|null>(null);
+ const [section,setSection] = useState<'profile'|'collections'|'run'|null>(null);
+ const [collectionId,setCollectionId]=useState('');
+ const handled=useRef<AgentHandoff>(null);
  const [profile,setProfile] = useState(initialProfile);
  const [dirty,setDirty] = useState(false);
  const [collectionsDirty,setCollectionsDirty] = useState(false);
@@ -77,12 +82,22 @@ function Agents({tick,refresh,go}:{tick:number;refresh:()=>void;go:(view:View)=>
  const [busy,setBusy] = useState(false);
  const heading = useRef<HTMLElement>(null);
 
- function open(agent:AgentRecord|null,editing=true){
-  if ((dirty || collectionsDirty) && !window.confirm('Discard unsaved changes to this agent?')) return;
+ useEffect(()=>{
+  if(!handoff||handled.current===handoff||!Array.isArray(data)||busy)return;
+  handled.current=handoff;
+  setCollectionId(handoff.collectionId??'');
+  const target=data.find((agent:AgentRecord)=>agent.id===handoff.agentId);
+  if(target?.id===selected?.id&&target){setSection('collections');return;}
+  if(!open(target??null,!!target,target?'collections':'profile'))setCollectionId('');
+ },[handoff,data,busy]);
+ const requested=collections.find(row=>row.id===collectionId);
+ function open(agent:AgentRecord|null,editing=true,tab:'profile'|'collections'='profile'){
+  if ((dirty || collectionsDirty) && !window.confirm('Discard unsaved changes to this agent?')) return false;
   setSelected(agent);
   setProfile(agent?{name:agent.name,instructions:agent.instructions,enabled:agent.enabled,runtime_mode:agent.runtime_mode||'analysis',tools:agent.tools||[]}:initialProfile);
-  setSection(editing?'profile':null);setErr('');setNotice('');setDirty(false);setCollectionsDirty(false);
+  setSection(editing?tab:null);setErr('');setNotice('');setDirty(false);setCollectionsDirty(false);
   if (editing) window.requestAnimationFrame(()=>heading.current?.focus());
+  return true;
  }
  function edit(change:Partial<AgentProfile>){
   setProfile(current=>({...current,...change}));setDirty(true);setNotice('');
@@ -102,15 +117,19 @@ function Agents({tick,refresh,go}:{tick:number;refresh:()=>void;go:(view:View)=>
   finally {setBusy(false);}
  }
  return <section className="page agents-page">
-  <PageHead title="Agents" subtitle="Set up an agent, attach skill collections, and use it in Chat.">
-   <div className="actions"><button type="button" onClick={()=>go('Setup')}>Guided setup</button><button type="button" onClick={()=>go('Skills')}>Open Skills</button>
+  <PageHead title="Agents" subtitle="Create an agent, manage its skills, and run it in Chat or Tasks.">
+   <div className="actions"><button type="button" onClick={()=>go('Setup')}>Guided setup</button>
     {!readonly&&<button type="button" className="primary" disabled={busy} onClick={()=>open(null)}>New agent</button>}</div>
   </PageHead>
   <ErrorNote error={error}/>
+  {requested&&<div className="box settings-content agent-handoff">
+   <div><strong>Attach a collection</strong><p>{requested.repository} · {requested.git_ref}. Choose a target agent or create one.</p></div>
+   <button type="button" onClick={()=>setCollectionId('')}>Clear collection</button>
+  </div>}
   <div className="two-col agents-grid">
    <section className="box"><header>Agent registry <span>{data&&rows.length+(rows.length===1?' agent':' agents')}</span></header>
     <div className="skill-index">{rows.map(agent=><button type="button" className="record" key={agent.id}
-     aria-current={selected?.id===agent.id?'true':undefined} disabled={busy} onClick={()=>open(agent)}>
+     aria-current={selected?.id===agent.id?'true':undefined} disabled={busy} onClick={()=>open(agent,true,requested?'collections':'profile')}>
      <b>{agent.name}</b><span>v{agent.version} · {agent.enabled?'Enabled':'Disabled'}</span>
     </button>)}</div>
     {rows.length===0&&<Empty>{data?'No agents yet.':'Loading agents…'}</Empty>}
@@ -120,7 +139,7 @@ function Agents({tick,refresh,go}:{tick:number;refresh:()=>void;go:(view:View)=>
     <nav className="skill-steps" aria-label="Agent setup">
      <button type="button" aria-current={section==='profile'?'step':undefined} onClick={()=>setSection('profile')}>1. Profile</button>
      <button type="button" aria-current={section==='collections'?'step':undefined} disabled={!selected||busy} onClick={()=>setSection('collections')}>2. Attach skills</button>
-     <button type="button" disabled={!selected?.enabled||busy} onClick={()=>go('Chat')}>3. Open Chat</button>
+     <button type="button" aria-current={section==='run'?'step':undefined} disabled={!selected?.enabled||busy} onClick={()=>setSection('run')}>3. Run agent</button>
     </nav>
     <ErrorNote error={err}/>
     {notice&&<p role="status" className="panel-note">{notice}</p>}
@@ -142,12 +161,22 @@ function Agents({tick,refresh,go}:{tick:number;refresh:()=>void;go:(view:View)=>
      </div>
     </form>
     {selected&&<div className="form" hidden={section!=='collections'}>
-     <p className="panel-note">A collection is a group of skills. Attach the groups this agent should be able to use. In Chat, choose this agent beside Skills, then use automatic matching or choose specific skills.</p>
+     <p className="panel-note">Choose the collections this agent can use, then save the assignment.</p>
      <ErrorNote error={catalogError}/>
-     <AgentCollections key={selected.id} agent={selected.id} rows={collections} tick={tick} readonly={readonly} onDirtyChange={setCollectionsDirty} onSaved={selected.enabled?()=>go('Chat'):undefined} onReview={()=>go('Skills')}/>
+     <AgentCollections key={selected.id} agent={selected.id} rows={collections} tick={tick} readonly={readonly} onDirtyChange={setCollectionsDirty} onAssignmentSaved={ids=>{if(ids.includes(collectionId))setCollectionId('');}} recommendedCollection={requested?.active_commit?requested.id:undefined} onReview={()=>openSkills({agentId:selected.id})}/>
+    </div>}
+    {selected&&section==='run'&&<div className="settings-content agent-run">
+     <p>Uses the saved profile and skill assignments for <strong>{selected.name}</strong>.</p>
+     {(dirty||collectionsDirty)&&<p role="status">Save your changes in Profile or Attach skills to include them in the run.</p>}
+     <div className="actions">
+      <button className="primary" disabled={!selected.enabled} onClick={()=>{
+       if(!openChat({agentId:selected.id,prompt:''}))setErr('Close a chat tab to make room, then try again.');
+      }}>Open agent in Chat</button>
+      <button disabled={!selected.enabled} onClick={()=>openTask({agentId:selected.id,prompt:''})}>Open agent in Tasks</button>
+     </div>
     </div>}
    </section> : <section className="box settings-content"><h2>Start with an agent</h2>
-    <p>{readonly?'Select an agent to see its profile and collections.':'Select an agent from the registry or choose New agent to start. Save the profile, attach collections, then open Chat.'}</p>
+    <p>{readonly?'Select an agent to see its profile and collections.':requested?'Select an agent in the registry to attach this collection, or choose New agent.':'Select an existing agent or choose New agent. Save the profile, attach collections if needed, then run it.'}</p>
    </section>}
   </div>
  </section>;
@@ -182,7 +211,7 @@ function Tasks({tick,refresh,go,researchOnly=false,setup}:{tick:number;refresh:(
   const fields=formRef.current?.elements;
   if(!fields)return;
   (fields.namedItem('agent_id') as HTMLSelectElement).value=value.agentId;
-  (fields.namedItem('prompt') as HTMLTextAreaElement).value=value.prompt;
+  if(value.prompt)(fields.namedItem('prompt') as HTMLTextAreaElement).value=value.prompt;
   const project=fields.namedItem('project_id') as HTMLSelectElement;
   const model=fields.namedItem('model') as HTMLSelectElement;
   if(!project.value&&project.options.length===2)project.selectedIndex=1;
@@ -194,7 +223,7 @@ function Tasks({tick,refresh,go,researchOnly=false,setup}:{tick:number;refresh:(
   applied.current=setup;
   if(detailsRef.current)detailsRef.current.open=true;
   const fields=formRef.current?.elements;
-  if(fields&&(fields.namedItem('prompt') as HTMLTextAreaElement).value.trim())setPendingSetup(setup);
+  if(setup.prompt&&fields&&(fields.namedItem('prompt') as HTMLTextAreaElement).value.trim())setPendingSetup(setup);
   else applySetup(setup);
  },[setup,agents,projects,models]);
  async function submit(e:FormEvent<HTMLFormElement>){
@@ -228,7 +257,7 @@ function Tasks({tick,refresh,go,researchOnly=false,setup}:{tick:number;refresh:(
     <TaskProject go={go} onCreated={project=>{setCreatedProject(project);setSelectProject(project.id);refresh();}}/>}
    <form ref={formRef} className="form research-form" onSubmit={submit}>
     {pendingSetup&&<div className="actions setup-task-note"><p>Use the guided agent and sample prompt in this form?</p><button type="button" onClick={()=>applySetup(pendingSetup)}>Use setup draft</button><button type="button" onClick={()=>setPendingSetup(null)}>Keep current draft</button></div>}
-    {setup&&!pendingSetup&&<p className="panel-note">Review the selected agent, choose a project and model, and add your inputs before queuing.</p>}
+    {setup&&!pendingSetup&&<p className="panel-note">Review the selected agent, choose a project and model, and describe the work before queuing.</p>}
     {!readonly&&Array.isArray(enabled)&&!enabled.length&&<div className="actions setup-task-note"><p>A task needs an enabled agent.</p><button type="button" onClick={()=>go('Setup')}>Set up an agent</button></div>}
     <div className="fields task-fields">
      <label>Project<select name="project_id" required defaultValue=""><option value="" disabled>Select project</option>{availableProjects?.map((p:Row)=><option key={p.id} value={p.id}>{p.name}</option>)}</select></label>

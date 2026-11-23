@@ -239,17 +239,23 @@ and records the exact commit. Review its inventory and excluded skills before se
 an older imported version to roll back. Import requires outbound HTTPS to GitHub's
 API and codeload hosts from the API server.
 
-Under **Assign collections to an agent**, select an existing agent or create a new one,
-then save its collection assignments. In Chat, open **Skills** next to the composer.
-**Auto** previews up to two relevant matches for the draft, **Manual** lets you select
-specific versions, and **Off** skips skill instructions. The default assistant can use
-all approved collections. Selecting an agent under Advanced limits the choices to that
-agent's assignments. Each reply identifies the exact skill versions supplied to the model.
+Choose **Assign this collection** in Skills to open **Agents** with that
+collection in context. Choose an existing agent or create one. Under
+**Attach skills**, select and save its collections. To return from the agent
+to the catalog, use **Review collections in Skills**. Under **Run agent**,
+open Chat or Tasks with that agent selected.
 
-In Tasks or Workflows, select the agent in the run form. Start a prompt with
-`/skill owner/repo:skill-name` to choose one explicitly. **Skills used** links to the
-pinned versions. Existing runs and research retries retain their original selection
-after a catalog update.
+In Chat, **Automatic matching** previews up to two distinct skills.
+**Choose specific skills** groups same-name entries and lets you pick a source
+or version. Copies of the same repository, commit, and path appear once.
+**Use no skills** skips skill instructions. The default assistant can use the
+approved catalog. Selecting an agent limits choices to its assignments.
+
+In Tasks or Workflows, select the agent in the run form. Use **Use this version
+in Tasks** in a skill's details for a command pinned to that commit and path.
+The short `/skill owner/repo:skill-name` command also works when it resolves to
+one version. **Skills used** links to the exact versions applied. Earlier runs
+and research retries retain their original selection after a catalog update.
 
 The catalog imports instructions. Reference and asset links are available for review
 at the pinned commit. Bundle scripts, hooks, external tools, and host-specific plugins

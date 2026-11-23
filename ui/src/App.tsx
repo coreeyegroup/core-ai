@@ -6,7 +6,7 @@ import {appearanceKey,defaultAppearance,restoreAppearance,typographyVersion,type
 import {MenuBar,CommandPalette,ResizeHandle,type Command} from './WorkbenchControls';
 import {Module,Inspector,Activity as ActivityPanel,ErrorNote} from './Modules';
 import {ChatProvider,ChatPane,ChatHistory,SidebarToggle} from './Chat';
-import type {SkillSetup,RunSetup} from './AgentSetup';
+import type {SkillSetup,RunSetup,AgentHandoff} from './AgentSetup';
 import {SessionProvider,type Session} from './Session';
 import {projectDirectory,type ProjectLocation} from './Projects';
 import {ArtifactEditor,SourceInspector,useResource} from './Workspace';
@@ -50,7 +50,7 @@ type Right={kind:'artifact';id:string}|{kind:'source';id:string;version?:number}
 export default function App(){
  const [layout,setLayout]=useState<Layout>(initial),[appearance,setAppearance]=useState<Appearance>(()=>restoreAppearance(safeGet(appearanceKey))),[pinned,setPinned]=useState<View[]>(()=>{try{const a=JSON.parse(safeGet('core-ai.pins.v1')||'[]');return Array.isArray(a)?views.filter(v=>a.includes(v)):[];}catch{return [];}});
  const [session,setSession]=useState<Session|null>(null),[checking,setChecking]=useState(true),[tick,setTick]=useState(0),[palette,setPalette]=useState(false),[error,setError]=useState(''),[health,setHealth]=useState<any>(null),[context,setContext]=useState<{v:View;g:number;x:number;y:number}|null>(null),[bottomTab,setBottomTab]=useState('Activity'),[right,setRight]=useState<Right>(null),[viewport,setViewport]=useState(()=>({width:window.innerWidth,height:window.innerHeight})),[workspaceBounds,setWorkspaceBounds]=useState<{width:number;height:number}|null>(null),[mobileOpen,setMobileOpen]=useState(false),[groupsOpen,setGroupsOpen]=useState<Record<string,boolean>>({'Workspace':true,'Build & automate':false,'Manage':false});
- const [setupLaunches,setSetupLaunches]=useState<Record<string,{skills?:SkillSetup;task?:RunSetup}>>({});
+ const [setupLaunches,setSetupLaunches]=useState<Record<string,{skills?:SkillSetup;task?:RunSetup;agent?:AgentHandoff}>>({});
  const [projectLocations,setProjectLocations]=useState<Record<string,ProjectLocation>>({});
  const paneKey=(index:number)=>layout.workspace+':'+layout.paneIds[index];
  const projectKey=(index:number)=>(session?.id??session?.username??'')+'/'+paneKey(index);
@@ -91,7 +91,7 @@ export default function App(){
   if(group)setGroupsOpen(current=>current[group.label]?current:{...current,[group.label]:true});
  }
  function go(v:View){revealNavigation(v);const at=layout.groups[layout.focus].includes(v)?layout.focus:layout.groups.findIndex(g=>g.includes(v));open(v,at<0?layout.focus:at);}
- function launchSetup(view:'Skills'|'Tasks',payload:{skills:SkillSetup}|{task:RunSetup}){
+ function launchSetup(view:'Skills'|'Tasks'|'Agents',payload:{skills:SkillSetup}|{task:RunSetup}|{agent:AgentHandoff}){
   const target=layout.groups[layout.focus].includes(view)?layout.focus:layout.groups.findIndex(group=>group.includes(view));
   const key=projectKey(target<0?layout.focus:target);
   setSetupLaunches(current=>({...current,[key]:{...current[key],...payload}}));
@@ -124,7 +124,13 @@ export default function App(){
  function resetLayout(){setLayout({...defaults(),workspace:layout.workspace});}
  function detach(v:View){window.open('?view='+encodeURIComponent(v),'_blank','noopener,noreferrer');}
  function pin(v:View){setPinned(x=>x.includes(v)?x.filter(y=>y!==v):[...x,v]);}
- function close(v:View,g:number){if(!pinned.includes(v))setLayout(x=>closeTab(x,v,g));}
+ function close(v:View,g:number){
+  if(pinned.includes(v))return;
+  const field=v==='Skills'?'skills':v==='Agents'?'agent':v==='Tasks'?'task':null;
+  const key=projectKey(g);
+  if(field)setSetupLaunches(current=>current[key]?.[field]?{...current,[key]:{...current[key],[field]:undefined}}:current);
+  setLayout(x=>closeTab(x,v,g));
+ }
  function workspace(w:Layout['workspace']){if(w===layout.workspace)return;try{localStorage.setItem(key+'.'+layout.workspace,JSON.stringify(layout));}catch{setError('Workspace could not be saved.');}setLayout({...restore(safeGet(key+'.'+w)),workspace:w});setPalette(false);setMobileOpen(false);}
  useEffect(()=>{api('session').then(s=>{setCsrf(s.csrf);setSession({...s,role:s.role||'ADMIN'});}).catch(()=>setSession(null)).finally(()=>setChecking(false));},[]);
  useEffect(()=>{const resize=()=>setViewport({width:window.innerWidth,height:window.innerHeight});window.addEventListener('resize',resize);return()=>window.removeEventListener('resize',resize);},[]);
