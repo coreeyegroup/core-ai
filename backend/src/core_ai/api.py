@@ -28,6 +28,10 @@ async def private_headers(request, call_next):
         length=request.headers.get('content-length','0')
         if not length.isdigit() or int(length)>11*1024*1024:
             return JSONResponse({'detail':'Upload exceeds the 10 MB file limit.'},status_code=413)
+    if request.url.path.startswith('/api/v1/external-connections') and request.method in ('POST','PUT'):
+        length = request.headers.get('content-length','')
+        if not length.isascii() or not length.isdigit() or len(length)>6 or int(length)>80*1024:
+            return JSONResponse({'detail':'External connection requests require a body of at most 80 KB.'},status_code=413)
     response = await call_next(request)
     response.headers['Cache-Control'] = 'no-store'
     response.headers['X-Content-Type-Options'] = 'nosniff'
@@ -369,3 +373,7 @@ def operation_metrics(user:User):
     return {'tasks':db.query('SELECT id,status,model,metrics,created_at,finished_at FROM runs WHERE project_id=ANY(%s) ORDER BY created_at DESC LIMIT 100',(ids,)),
             'chats':db.query('SELECT id,status,model,metrics,created_at,finished_at FROM chat_generations WHERE requested_by=%s ORDER BY created_at DESC LIMIT 100',(user['id'],)),
             'files':db.query("SELECT status,count(*) AS n FROM workspace_files WHERE owner_id=%s OR %s='ADMIN' GROUP BY status",(user['id'],user['role']))}
+
+from .external_connections import router as external_connections_router
+
+app.include_router(external_connections_router)

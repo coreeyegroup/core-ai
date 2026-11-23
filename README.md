@@ -93,6 +93,10 @@ See [release behavior and limits](docs/release-1.2.md) and the [requirements reg
 
 ## Connect an app, platform, or webhook
 
+Use **Connections → External connections** to fetch from or send requests to an
+external API. See the [connection guide](docs/external-connections.md) for setup,
+platform recipes, project snapshots, and both n8n directions.
+
 In CORE-AI, open **Manage → Connections → New connection** as an administrator. Name the connection and choose **Selected models** or **All supported installed models**. All-model access follows the installed Ollama catalog, including new supported models. Clear an individual model to block it, or use **Per-model overrides** to tighten request rate, pending jobs, timeout, context, and output limits. The connection-wide caps still apply. Set a default, lock the key to that model, or require the caller to specify a model. Text generation and text embedding each have their own submission permission. A project and an Analysis agent are optional. A linked project provides its instructions and matching sources, so select a project whose contents the receiving service may process.
 
 Save the key in your service’s credential store. Select **Save encrypted copy for later reveal** when creating or rotating a key if you want to retrieve it from **API keys → View key**. Reveal requires your administrator password and records an audit event. Older keys and keys issued without recovery can be replaced through rotation. The installer provisions the encryption key in the private workstation configuration. Restore that configuration with the matching database snapshot to retain access to encrypted copies. The Connections panel can test an allowed model, view job metadata, pause or resume a key, rotate it, revoke it, and configure request and generation limits. Rotation expires the previous key immediately by default. An administrator can allow up to 24 hours of overlap and end it early from the connection menu. An already accepted job can finish after a pause or revocation. Existing single-model project keys keep their original model and scope when upgrading.

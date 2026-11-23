@@ -4,6 +4,7 @@ import {api,newId} from './api';
 import {ChatPopover,isTextModel} from './ChatPopover';
 import {useSession} from './Session';
 import {useResource} from './Workspace';
+import ExternalConnections from './ExternalConnections';
 
 type Operation='generation'|'embedding';
 function isEmbeddingModel(model:Model){
@@ -54,7 +55,7 @@ function Manager({tick,visible}:{tick:number;visible:boolean}){
  const [revision,setRevision]=useState(0),[editing,setEditing]=useState<Connection|null|undefined>();
  const [key,setKey]=useState<{id:string;token:string}|null>(null),[copied,setCopied]=useState(false);
  const [keyAction,setKeyAction]=useState<{type:'reveal'|'rotate';connection:Connection}|null>(null);
- const [section,setSection]=useState<'Keys'|'API reference'>('Keys');
+ const [section,setSection]=useState<'Keys'|'External connections'|'API reference'>('Keys');
  const [selection,setSelection]=useState<string|null>(null),[busy,setBusy]=useState(false),[error,setError]=useState('');
  const {data,error:listError}=useResource('connections',tick+revision);
  const {data:storage}=useResource('connections/key-storage',tick);
@@ -117,13 +118,13 @@ function Manager({tick,visible}:{tick:number;visible:boolean}){
  </>;
 
  return <>
-  <header className="page-head"><div><h1>Connections</h1><p>Manage access to your models and webhook delivery.</p></div>
-   <button className="primary" disabled={busy||!!key} onClick={()=>{setSection('Keys');setError('');setEditing(null);}}><Plus size={16}/>New connection</button>
+  <header className="page-head"><div><h1>Connections</h1><p>Connect external apps to Core AI, or send requests to external APIs.</p></div>
+   {section==='Keys'&&<button className="primary" disabled={busy||!!key} onClick={()=>{setSection('Keys');setError('');setEditing(null);}}><Plus size={16}/>New connection</button>}
   </header>
   <nav className="project-sections" aria-label="Connection sections">
-   {(['Keys','API reference'] as const).map(tab=><button key={tab} aria-current={tab===section?'page':undefined} onClick={()=>{setSection(tab);setKey(null);setKeyAction(null);}}>{tab==='Keys'?'API keys':tab}</button>)}
+   {(['Keys','External connections','API reference'] as const).map(tab=><button key={tab} aria-current={tab===section?'page':undefined} onClick={()=>{setSection(tab);setKey(null);setKeyAction(null);}}>{tab==='Keys'?'API keys':tab}</button>)}
   </nav>
-  {section==='API reference'?<ApiGuide/>:<>
+  {section==='API reference'?<ApiGuide/>:section==='External connections'?<ExternalConnections tick={tick}/>:<>
   {(error||listError)&&<div className="error" role="alert">{error||listError}</div>}
   {keyAction&&<KeyActionDialog action={keyAction} storageAvailable={storageAvailable} close={()=>setKeyAction(null)}
    submit={manageKey} rotate={()=>setKeyAction({...keyAction,type:'rotate'})}/>}
