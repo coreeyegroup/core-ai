@@ -96,8 +96,7 @@ applicable.
   represent the response at fetch time. Both products keep independent logins and
   credentials, and this integration does not synchronize orders or portfolios.
 
-These broker presets collect data. Native direct broker order submission is
-outside the presets. Use each broker's own order workflow, the optional Corei
+These broker presets collect data. The Upstox task workflow also supports a manually confirmed live DAY limit order, described below. Use each broker's own order workflow, the optional Corei
 order desk, or an explicitly configured external action endpoint with its own
 approval and reconciliation controls.
 
@@ -147,3 +146,11 @@ https://corei-os-mini.coreeye.in/api/research/v1/bars?account_id=<uuid>&symbol=E
 Use the same private credential in the Core AI credential field. This endpoint
 returns collected bars only for the listed accounts. Run **Fetch and save** to
 make the snapshot available to an agent.
+
+## Upstox trading task in Core AI
+
+1. Import or create skills and assign them to the master agent and any specialist agents.
+2. Save an Upstox connection. Supply the app API key and secret together, and optionally a current access token. To exchange a single-use code obtained through your registered app login, open **Authorize Upstox app**, enter the exact registered redirect URL and code, and complete the exchange.
+3. Open **Broker analysis task and live order** on the saved connection. Select a project and master agent, enter the instrument keys and the task objective. Select specialist agents and additional saved datasets as required. Full quotes use the instrument list. Additional datasets use their saved instrument, expiry, or date parameters.
+4. Start collection. Keep the task ID. Click **Review task result** to check progress and queue the master synthesis after the specialist runs finish. Review again to read the final output. Agents use their assigned skills.
+5. For an intended live trade, enter the account ID, instrument, side, product, quantity and price. Review the explicit confirmation. Each task accepts one submission per instrument. Check broker status and fills after submission. A timeout requires reconciliation before further action. Account eligibility and the broker's order controls determine acceptance.

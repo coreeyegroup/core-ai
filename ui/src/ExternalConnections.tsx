@@ -1,3 +1,4 @@
+import {BrokerTask} from "./BrokerTask";
 import {useState,type FormEvent} from 'react';
 import {api} from './api';
 import {useResource} from './Workspace';
@@ -71,7 +72,7 @@ function UpstoxRequestFields({operation,choose,change}:{operation:UpstoxRequest;
    <option value="custom">Custom Upstox endpoint</option>
    {Object.entries(upstoxRequests).map(([id,request])=><option key={id} value={id}>{request.label}</option>)}
   </select></label>
-  {spec?.input&&<label>Instrument key<input required value={key} placeholder="NSE_INDEX|Nifty 50" onChange={event=>{
+  {spec?.input&&<label>{spec.input==='keys'&&operation!=='contracts'?'Instrument keys (comma-separated for quotes)':'Instrument key'}<input required value={key} placeholder="Exchange segment|instrument identifier" onChange={event=>{
    const key=event.target.value;setKey(key);endpoint(operation,{...defaults,key});
   }}/></label>}
   {spec?.input==='ohlc'&&<label>Quote interval<select value={ohlc} onChange={event=>{const ohlc=event.target.value;setOhlc(ohlc);endpoint(operation,{...defaults,ohlc});}}>
@@ -98,8 +99,8 @@ type Auth = 'none'|'bearer'|'header'|'basic'|'apikey'|'kite'|'angel';
 type SavedRequest = {name:string;endpoint:string;body?:Record<string,unknown>|null};
 type DraftRequest = {name:string;endpoint:string;json:string};
 type Settings = {name:string;provider:Provider;endpoint:string;method:Method;auth:Auth;header_name:string;paused:boolean;requests:SavedRequest[]};
-type ConnectionInput = Settings & {secret?:string;api_key?:string};
-type Connection = Settings & {id:string;version:number;has_secret:boolean};
+type ConnectionInput = Settings & {secret?:string;api_key?:string;upstox_app_key?:string;upstox_app_secret?:string};
+type Connection = Settings & {id:string;version:number;has_secret:boolean;has_upstox_app?:boolean};
 type Result = {outcome:string;upstream_status:number|null;elapsed_ms:number;method:string;data:unknown;source_id:string|null;request_name?:string|null};
 type Activity = Pick<Result,'outcome'|'upstream_status'|'elapsed_ms'> & {id:number;occasion:string;occurred_at:string};
 type Project = {id:string;name:string;archived_at?:string|null};
@@ -172,6 +173,7 @@ function ConnectionEditor({row,busy,save,cancel}:{row:Connection|null;busy:boole
  const [fields,setFields]=useState<Settings>(row??blank);
  const [secret,setSecret]=useState('');
  const [apiKey,setApiKey]=useState('');
+ const [appSecret,setAppSecret]=useState('');
  const [failed,fail]=useState('');
  const [requests,setRequests]=useState<DraftRequest[]>(()=> (row?.requests??[]).map(request=>(
   {name:request.name,endpoint:request.endpoint,json:request.body?JSON.stringify(request.body,null,2):''})));
@@ -196,7 +198,7 @@ function ConnectionEditor({row,busy,save,cancel}:{row:Connection|null;busy:boole
    }
    saved.push({name:request.name,endpoint:request.endpoint,body});
   }
-  void save({...fields,requests:fields.method==='GET'?saved:[],secret:auth!=='none'&&secret?secret:undefined,api_key:paired&&apiKey?apiKey:undefined});
+  void save({...fields,requests:fields.method==='GET'?saved:[],secret:auth!=='none'&&secret?secret:undefined,upstox_app_key:provider==='upstox'&&apiKey?apiKey:undefined,upstox_app_secret:provider==='upstox'&&appSecret?appSecret:undefined,api_key:paired&&apiKey?apiKey:undefined});
  }
  return <form className="box form external-editor" onSubmit={submit}>
   <header>{row?'Edit external connection':'New external connection'}</header>
@@ -204,7 +206,7 @@ function ConnectionEditor({row,busy,save,cancel}:{row:Connection|null;busy:boole
    <div className="external-fields">
     <label>Platform<select value={provider} onChange={e=>{
      const provider=e.target.value as Provider, entry=providers[provider];
-     setSecret('');setApiKey('');setRequests([]);setUpstoxOperation(provider==='upstox'?'ltp':'custom');patch({provider,name:entry.label,endpoint:provider==='upstox'?'https://api.upstox.com/v3/market-quote/ltp?instrument_key=':entry.endpoint,method:entry.method,auth:entry.auth,header_name:provider==='n8n'?'X-N8N-Webhook-Key':''});
+     setSecret('');setApiKey('');setAppSecret('');setRequests([]);setUpstoxOperation(provider==='upstox'?'ltp':'custom');patch({provider,name:entry.label,endpoint:provider==='upstox'?'https://api.upstox.com/v3/market-quote/ltp?instrument_key=':entry.endpoint,method:entry.method,auth:entry.auth,header_name:provider==='n8n'?'X-N8N-Webhook-Key':''});
     }}>{Object.entries(providers).map(([key,entry])=><option key={key} value={key}>{entry.label}</option>)}</select></label>
     <label>Connection name<input required maxLength={100} value={fields.name} onChange={e=>patch({name:e.target.value})}/></label>
    </div>
@@ -220,10 +222,14 @@ function ConnectionEditor({row,busy,save,cancel}:{row:Connection|null;busy:boole
     </select></label>
    </div>
    {auth==='header'&&<label>Header name<input maxLength={64} required value={fields.header_name} onChange={e=>patch({header_name:e.target.value})}/></label>}
+   {provider==='upstox'&&<div className="external-fields">
+    <label>Upstox API key<input type="password" autoComplete="new-password" value={apiKey} required={!!appSecret} onChange={e=>setApiKey(e.target.value)}/></label>
+    <label>Upstox API secret<input type="password" autoComplete="new-password" value={appSecret} required={!!apiKey} onChange={e=>setAppSecret(e.target.value)}/></label>
+   </div>}
    {paired&&<label>App API key<input type="password" autoComplete="new-password" maxLength={128}
     value={apiKey} required={!row?.has_secret} placeholder={row?.has_secret?'Leave blank to keep the current key':undefined} onChange={e=>setApiKey(e.target.value)}/></label>}
    {auth!=='none'&&<label>{auth==='basic'?'Credential (username:password)':provider==='angelone'?'Session access token (JWT)':auth==='bearer'||auth==='kite'?'Access token':'Token or API key'}<input type="password" autoComplete="new-password" maxLength={4096}
-    value={secret} required={!row?.has_secret} placeholder={row?.has_secret?'Leave blank to keep current credential':undefined} onChange={e=>setSecret(e.target.value)}/></label>}
+    value={secret} required={!row?.has_secret&&!(provider==='upstox'&&(apiKey||row?.has_upstox_app))} placeholder={row?.has_secret?'Leave blank to keep current credential':undefined} onChange={e=>setSecret(e.target.value)}/></label>}
    {fields.method==='GET'&&<section className="external-snapshot">
     <h3>Additional saved requests</h3>
     <p className="panel-note">Use the same account and hostname for market, history, or account requests.</p>
@@ -260,6 +266,15 @@ function ConnectionRun({row,tick,busy,edit,remove}:{row:Connection;tick:number;b
  const [failed,fail]=useState('');
  const [running,setRunning]=useState(false);
  const [confirming,setConfirming]=useState(false);
+ const [code,setCode]=useState('');
+ const [redirect,setRedirect]=useState('');
+ const [authorized,setAuthorized]=useState<number|null>(null);
+ async function exchange(){
+  setRunning(true);fail('');setAuthorized(null);
+  try{const result=await api('external-connections/'+row.id+'/upstox/exchange','POST',{code,redirect_uri:redirect});setAuthorized(result.version);}
+  catch(error){fail(message(error));}
+  finally{setCode('');setRunning(false);}
+ }
  const writable=row.method!=='GET';
  async function execute(occasion:'test'|'run', destination?:string, confirmed=false){
   if(running)return;
@@ -274,7 +289,7 @@ function ConnectionRun({row,tick,busy,edit,remove}:{row:Connection;tick:number;b
   }
   setRunning(true);
   try{setResult(await api('external-connections/'+row.id+'/'+occasion,'POST',{
-   body:json,project_id:destination||undefined,confirmed,connection_version:row.version,request_index:request===''?undefined:Number(request),
+   body:json,project_id:destination||undefined,confirmed,connection_version:authorized??row.version,request_index:request===''?undefined:Number(request),
    source_path:destination?sourcePath.trim():undefined,row_limit:destination&&rowLimit?Number(rowLimit):undefined,
   },40_000));}
   catch(error){fail(message(error));}
@@ -283,6 +298,14 @@ function ConnectionRun({row,tick,busy,edit,remove}:{row:Connection;tick:number;b
  return <section className="box external-run">
   <header>{row.name}<span>{row.paused?'Paused':row.method+' · '+providers[row.provider].label}</span></header>
   <div className="settings-content">
+   {row.provider==="upstox"&&!row.paused&&<BrokerTask connection={row.id} tick={tick} datasets={requests.map(entry=>entry.name)}/>}
+   {row.provider==='upstox'&&row.has_upstox_app&&<details className="external-snapshot"><summary>Authorize Upstox app</summary>
+    <p>Sign in using your registered Upstox app. Copy the single-use code from its redirect URL.</p>
+    <label>Registered redirect URL<input type="url" value={redirect} onChange={e=>setRedirect(e.target.value)}/></label>
+    <label>Authorization code<input type="password" autoComplete="off" value={code} onChange={e=>setCode(e.target.value)}/></label>
+    <button disabled={!code||!redirect||running||row.paused} onClick={()=>void exchange()}>Exchange code for access token</button>
+    {authorized&&<p role="status">Access token saved.</p>}
+   </details>}
    {requests.length>0&&<label>Data request<select value={request} disabled={running} onChange={e=>{
     setRequest(e.target.value);setResult(null);fail('');
    }}><option value="">Primary request</option>
