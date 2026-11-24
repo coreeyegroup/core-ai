@@ -9,7 +9,9 @@ import {collectionTitle,matchesSkill,skillPurpose,skillTitle} from './skillLabel
 export type SkillVersion = {repository: string; commit: string; path: string; name: string; shortened: boolean; customized?: boolean};
 export type Collection = {id: string; repository: string; git_ref: string; active_commit: string | null; latest_commit: string; skill_count: number | null;title?:string;description?:string;deleted_at?:string|null};
 type Skill = {customized?:boolean;name: string; path: string; description: string; license: string; compatibility: string; 'allowed-tools': string; scripts: boolean; references: string[]};
+type RepositoryAgent = {path:string;name:string;description:string};
 type Detail = Collection & {
+ agent_definitions?:RepositoryAgent[];
  commit: string;
  releases: {commit_sha: string; imported_at: string; skill_count: number}[];
  skills: Skill[];
@@ -48,7 +50,7 @@ export default function Skills({tick,refreshWorkspace,go,setup,openAgents}: {tic
  const [busy,setBusy] = useState(false);
  const [error,setError] = useState('');
  const [lifecycleNotice,setLifecycleNotice]=useState('');
- const [scan,setScan] = useState<{count:number;invalid:string[]}|null>(null);
+ const [scan,setScan] = useState<{count:number;agentCount?:number;invalid:string[]}|null>(null);
  const {data,error: catalogError} = useResource(showDeleted?'skills?include_deleted=true':'skills',tick+revision);
  const rows: Collection[] = Array.isArray(data) ? data : [];
  const canImport = role==='ADMIN';
@@ -91,11 +93,11 @@ export default function Skills({tick,refreshWorkspace,go,setup,openAgents}: {tic
    const imported = await api('skills/import','POST',{repository,ref},60000);
    setSelection({id:imported.id,commit:imported.commit});
    setStep('review');
-   setScan({count:imported.count,invalid:imported.invalid});
+   setScan({count:imported.count,agentCount:imported.agent_count,invalid:imported.invalid});
   });
  }
  return <section className="page skills-page">
-  <header className="page-head"><div><h1>Skills</h1><p>Browse, review, and import skill collections. Open a collection to attach it to an agent.</p></div>
+  <header className="page-head"><div><h1>Skills</h1><p>Browse repositories, attach skills, and import existing agent definitions.</p></div>
    <div className="actions">
     {returnToSetup&&<button type="button" onClick={()=>{setReturnToSetup(false);go('Setup');}}>Back to setup</button>}
     <button type="button" onClick={()=>targetAgent?returnToAgent():go('Agents')}>{targetAgent?'Back to agent':'Open Agents'}</button>
@@ -108,7 +110,7 @@ export default function Skills({tick,refreshWorkspace,go,setup,openAgents}: {tic
   {lifecycleNotice&&shown==='review'&&<p role="status" className="panel-note">{lifecycleNotice}</p>}
   {(error || catalogError) && <p role="alert" className="error">{error || catalogError}</p>}
   {scan && shown==='review' && <div className="notice">
-   <span role="status">Scanned {scan.count} {scan.count===1?'skill':'skills'}. Review the collection below.</span>
+   <span role="status">Scanned {scan.count} {scan.count===1?'skill':'skills'}{scan.agentCount?' and '+scan.agentCount+' agent '+(scan.agentCount===1?'definition':'definitions'):''}. Review the collection below.</span>
    {scan.invalid.length>0 && <details><summary>View {scan.invalid.length} skipped files</summary><ul>{scan.invalid.map(path=><li key={path}>{path}</li>)}</ul></details>}
   </div>}
   {canImport && shown==='import' && <form className="box form" onSubmit={importSource}>
@@ -142,6 +144,8 @@ export default function Skills({tick,refreshWorkspace,go,setup,openAgents}: {tic
     tick={tick+revision} editable={canImport} busy={busy} action={action}
     next={role==='VIEWER'?undefined:()=>returnToAgent(opened.id)}
     nextLabel={returnToSetup?'Continue setup':targetAgent?'Attach to current agent':undefined} returnToSetup={returnToSetup?()=>{setReturnToSetup(false);go('Setup');}:undefined}
+    onOpenImported={agentId=>{refreshWorkspace();openAgents({agentId,section:'profile'});}}
+    canCreateAgent={role!=='VIEWER'}
     onVisibilityChanged={deleted=>{
      setStep('review');setSelection(deleted&&!showDeleted?null:opened);
      setLifecycleNotice(deleted?'Collection deleted. Find it under Show deleted.':'Collection restored.');
@@ -152,9 +156,9 @@ export default function Skills({tick,refreshWorkspace,go,setup,openAgents}: {tic
  </section>;
 }
 
-function CollectionDetail({selection,changeVersion,tick,editable,busy,action,next,rescan,nextLabel,returnToSetup,onVisibilityChanged}: {
+function CollectionDetail({selection,changeVersion,tick,editable,busy,action,next,rescan,nextLabel,returnToSetup,onVisibilityChanged,onOpenImported,canCreateAgent}: {
  selection: {id: string; commit: string}; changeVersion: (commit:string)=>void; tick:number;
- onVisibilityChanged:(deleted:boolean)=>void; next?:()=>void; nextLabel?:string; returnToSetup?:()=>void; rescan?:()=>void; editable:boolean; busy:boolean; action:(operation:()=>Promise<void>)=>Promise<void>;
+ onVisibilityChanged:(deleted:boolean)=>void; onOpenImported:(id:string)=>void; canCreateAgent:boolean; next?:()=>void; nextLabel?:string; returnToSetup?:()=>void; rescan?:()=>void; editable:boolean; busy:boolean; action:(operation:()=>Promise<void>)=>Promise<void>;
 }) {
  const {data,error} = useResource(`skills/collections/${selection.id}?commit=${encodeURIComponent(selection.commit)}`,tick);
  const [search,setSearch] = useState('');
@@ -211,6 +215,12 @@ function CollectionDetail({selection,changeVersion,tick,editable,busy,action,nex
     <summary>{item.changes.added.length} added · {item.changes.changed.length} changed · {item.changes.removed.length} removed</summary>
     {Object.entries(item.changes).map(([label,paths]) => paths.length>0 && <p key={label}><b>{label}</b> {paths.join(', ')}</p>)}
    </details>}
+   {(item.agent_definitions?.length??0)>0&&!item.deleted_at&&<section className="catalog-profile">
+    <h2>Repository agents</h2>
+    <p>Review a definition before importing it into Agents.</p>
+    {item.agent_definitions?.map(definition=><RepositoryAgentReview key={item.commit+definition.path} item={item}
+      definition={definition} tick={tick} canCreate={canCreateAgent} onOpen={onOpenImported}/>)}
+   </section>}
    <label>Filter skills<input type="search" value={search} onChange={event=>setSearch(event.target.value)} placeholder="Task, name, or description"/></label>
    <ul className="catalog-records" aria-label="Collection skills">
     {visible.map(skill => {
@@ -261,6 +271,32 @@ function CollectionDetail({selection,changeVersion,tick,editable,busy,action,nex
 
   </div>
  </section>;
+}
+
+function RepositoryAgentReview({item,definition,tick,canCreate,onOpen}:{
+ item:Detail;definition:RepositoryAgent;tick:number;canCreate:boolean;onOpen:(id:string)=>void;
+}){
+ const [open,setOpen]=useState(false);
+ const [busy,setBusy]=useState(false);
+ const [problem,setProblem]=useState('');
+ const endpoint=skillEndpoint(`skills/collections/${item.id}/agent`,item.commit,definition.path);
+ const {data,error}=useResource(open?endpoint:'',tick);
+ async function create(){
+  setBusy(true);setProblem('');
+  try{const result=await api(endpoint,'POST');onOpen(result.id);}
+  catch(failure){setProblem((failure as Error).message);}
+  finally{setBusy(false);}
+ }
+ return <details onToggle={event=>setOpen(event.currentTarget.open)} className="skill-preview">
+  <summary>{definition.name}</summary>
+  <p>{definition.description}</p>
+  {open&&<>
+   <p><a href={sourceUrl(item.repository,item.commit,definition.path)} target="_blank" rel="noreferrer">View pinned agent source</a></p>
+   {error||problem?<p role="alert">{error||problem}</p>:null}
+   <pre>{data?.instructions??(error?'':'Loading agent instructions…')}</pre>
+   {canCreate&&<button type="button" disabled={!data||busy} onClick={()=>void create()}>{busy?'Importing…':'Import agent'}</button>}
+  </>}
+ </details>;
 }
 
 function SkillBody({path,tick}: {path:string;tick:number}) {

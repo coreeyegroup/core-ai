@@ -57,7 +57,7 @@ function Overview({tick,go}:{tick:number;go:(v:View)=>void}){
  return <section className="page"><PageHead title="Overview" subtitle="Workspace activity and service readiness."><button onClick={()=>go('Setup')}>Get started</button></PageHead><ErrorNote error={error}/><div className="metric-grid">{[['Projects',d?.projects,'Projects'],['Agents',d?.agents,'Agents'],['Active tasks',pending,'Tasks'],['Knowledge documents',d?.documents,'Knowledge']].map(([label,n,v])=><button className="metric" key={label} onClick={()=>go(v as View)}><small>{label}</small><strong>{n??'—'}</strong><ArrowUpRight className="metric-link" size={14} aria-hidden="true"/></button>)}</div><div className="overview-grid"><section className="box"><header>Runtime readiness</header><div className="readiness"><div><span className={'dot '+(d?.worker?.online?'ready':'')}/><b>Task worker</b><span>{d?d.worker?.online?'Online · one inference slot':'Offline or heartbeat stale':'Checking…'}</span></div><div><span className="dot"/><b>Model provider</b><span>{d?.inference.endpoint??'Checking…'}</span><button onClick={()=>go('Models')}>Inspect models</button></div><div><b>Product interfaces</b><span>Independent operation · no connectors required</span><button onClick={()=>go('Integrations')}>Interfaces</button></div></div></section><section className="box"><header>Your workspace</header><div className="pipeline">{(['Projects','Agents','Knowledge','Tasks','Artifacts'] as View[]).map((v,i)=><button key={v} onClick={()=>go(v)}><b>{v}</b><span>{['Define the work','Set instructions','Add project sources','Queue and inspect','Review outputs'][i]}</span></button>)}</div></section></div><div className="two-col overview-notes"><section className="box"><header>Execution boundary</header><p>This release supports local model generation and bounded project tools. Each task records its agent version, tool events and result. Host commands and product actions are unavailable.</p></section><section className="box"><header>Workspace controls</header><p>Use Ctrl K to find a panel or command. Open views together, split your workspace, pin tabs and detach a workspace into its own window.</p><button onClick={()=>go('Tasks')}>Create a task →</button></section></div></section>;
 }
 type AgentProfile = {name:string;instructions:string;enabled:boolean;runtime_mode:string;tools:string[]};
-type AgentRecord = AgentProfile & {id:string;version:number;deleted_at?:string|null};
+type AgentRecord = AgentProfile & {id:string;version:number;deleted_at?:string|null;imported_source?:{repository:string;commit:string;path:string}|null};
 const agentTools = ['knowledge.search','project.inspect','artifact.create'];
 const initialProfile: AgentProfile = {name:'',instructions:'',enabled:true,runtime_mode:'analysis',tools:agentTools.slice(0,2)};
 
@@ -87,11 +87,12 @@ function Agents({tick,refresh,go,handoff,openSkills,openTask,openChat}:{
 
  useEffect(()=>{
   if(!handoff||handled.current===handoff||!Array.isArray(data)||busy)return;
+  const target=data.find((agent:AgentRecord)=>agent.id===handoff.agentId);
+  if(handoff.section==='profile'&&!target)return;
   handled.current=handoff;
   setCollectionId(handoff.collectionId??'');
-  const target=data.find((agent:AgentRecord)=>agent.id===handoff.agentId);
-  if(target?.id===selected?.id&&target){setSection('collections');return;}
-  if(!open(target??null,!!target,target?'collections':'profile'))setCollectionId('');
+  if(target?.id===selected?.id&&target){setSection(handoff.section??'collections');return;}
+  if(!open(target??null,!!target,target?(handoff.section??'collections'):'profile'))setCollectionId('');
  },[handoff,data,busy]);
  const requested=collections.find(row=>row.id===collectionId);
  function open(agent:AgentRecord|null,editing=true,tab:'profile'|'collections'='profile'){
@@ -111,7 +112,7 @@ function Agents({tick,refresh,go,handoff,openSkills,openTask,openChat}:{
   setBusy(true);setErr('');
   try {
    const result = await api(selected?'agents/'+selected.id:'agents',selected?'PUT':'POST',profile);
-   setSelected({...profile,id:selected?.id??result.id,version:selected?result.version:1});
+   setSelected({...selected,...profile,id:selected?.id??result.id,version:selected?result.version:1});
    setDirty(false);
    setNotice(selected?'Profile saved.':'Agent created. Choose collections to use with it.');
    if (!selected) setSection('collections');
@@ -171,6 +172,7 @@ function Agents({tick,refresh,go,handoff,openSkills,openTask,openChat}:{
     </nav>}
     <ErrorNote error={err}/>
     {notice&&<p role="status" className="panel-note">{notice}</p>}
+    {section==='profile'&&selected?.imported_source&&<p className="panel-note">Imported from {selected.imported_source.repository} · {selected.imported_source.commit.slice(0,8)} · {selected.imported_source.path}</p>}
     <form hidden={section!=='profile'||!!selected?.deleted_at} className="form" onSubmit={submit}>
      <fieldset className="agent-profile" disabled={busy||readonly||!!selected?.deleted_at}>
       <label>Agent name<input required maxLength={120} value={profile.name} onChange={event=>edit({name:event.target.value})}/></label>

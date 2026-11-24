@@ -243,6 +243,15 @@ and records the exact commit. Review its inventory and excluded skills before se
 an older imported version to roll back. Import requires outbound HTTPS to GitHub's
 API and codeload hosts from the API server.
 
+The same scan recognizes Markdown agent definitions in agent directories such as
+`.claude/agents` and `.github/agents`, `*.agent.md` profiles, and the
+division layout used by Agency Agents. A repository can contain agent definitions
+without any skills. Rescan an older collection to discover its agent definitions.
+Open **Repository agents** to review the pinned instructions, then select
+**Import agent** to create an editable profile. It starts disabled in Analysis
+mode with an empty tool list. Review it in **Agents** and enable it when ready.
+Repository settings for tools, hooks, and models are not imported.
+
 Choose **Assign this collection** in Skills to open **Agents** with that
 collection in context. Choose an existing agent or create one. Under
 **Attach skills**, select and save its collections. To return from the agent

@@ -70,7 +70,40 @@ def parse_skill(path, raw):
         return None
 
 
-def discover(archive, deadline):
+def agent_definition_path(path, repository):
+    parts = path.split('/')
+    filename = parts[-1]
+    if not filename.endswith('.md') or filename.lower() in ('readme.md', 'agents.md', 'skill.md', 'contributing.md'):
+        return False
+    if 'agents' in parts[:-1] or filename.endswith('.agent.md'):
+        return True
+    return repository.endswith('/agency-agents') and len(parts) == 2
+
+
+def parse_agent_definition(path, raw, repository=''):
+    try:
+        text = raw.decode('utf-8-sig').replace('\r\n', '\n')
+        preamble, metadata, body = re.split(r'^---[ \t]*$', text, maxsplit=2, flags=re.M)
+        if preamble or len(metadata) > 8192 or '\x00' in text:
+            return None
+        fields = yaml.load(metadata, Loader=yaml.BaseLoader)
+        if not isinstance(fields,dict):
+            return None
+        if repository.endswith('/agency-agents') and 'agents' not in path.split('/')[:-1] and not path.endswith('.agent.md') and not fields.get('color'):
+            return None
+        filename = path.split('/')[-1].removesuffix('.md').removesuffix('.agent')
+        name, description = fields.get('name', filename), fields.get('description')
+        if not isinstance(name,str) or not 0 < len(name.strip()) <= 120 or not isinstance(description,str) or not description.strip():
+            return None
+        body = body.strip()
+        if not 0 < len(body) <= 16000:
+            return None
+        return {'path':path,'name':name.strip(),'description':description.strip()[:2000],'instructions':body}
+    except (UnicodeError,ValueError,yaml.YAMLError,RecursionError):
+        return None
+
+
+def discover(archive, deadline, *, definitions=None, repository=''):
     skills, paths, invalid = [], set(), []
     size = 0
     with tarfile.open(fileobj=archive, mode='r|gz') as tar:
@@ -81,7 +114,15 @@ def discover(archive, deadline):
             path = member.name.partition('/')[2]
             if not member.isfile() or not path or '..' in path.split('/') or len(path) > 500:
                 continue
+            if path in paths and definitions is not None and agent_definition_path(path,repository):
+                raise ValueError('Archive has duplicate agent paths.')
             paths.add(path)
+            if definitions is not None and agent_definition_path(path, repository):
+                definition = parse_agent_definition(path,tar.extractfile(member).read(),repository) if member.size <= 96 * 1024 else None
+                if definition:
+                    definitions.append(definition)
+                if len(definitions) > 2000:
+                    raise ValueError('Collection exceeds 2,000 agent definitions.')
             if path.split('/')[-1] != 'SKILL.md':
                 continue
             skill = parse_skill(path, tar.extractfile(member).read()) if member.size <= 96 * 1024 else None
@@ -116,8 +157,9 @@ def fetch_collection(repository, ref):
                     raise ValueError('Collection archive exceeds download limits.')
                 archive.write(chunk)
             archive.seek(0)
-            skills, invalid = discover(archive, deadline)
-    return sha, skills, invalid
+            definitions = []
+            skills, invalid = discover(archive, deadline, definitions=definitions, repository=repository)
+    return sha, skills, invalid, definitions
 
 
 @router.get('')
@@ -196,21 +238,23 @@ def import_collection(body: Import, user: User):
     if not repository or not REF.fullmatch(body.ref) or '..' in body.ref:
         raise HTTPException(422, 'Enter a public GitHub owner/repository and a valid branch, tag, or commit.')
     try:
-        sha, skills, invalid = fetch_collection(repository, body.ref)
+        sha, skills, invalid, definitions = fetch_collection(repository, body.ref)
     except (httpx.HTTPError, ValueError, tarfile.TarError, OSError, EOFError):
         raise HTTPException(422, 'GitHub import failed. Check repository access, ref, or archive size.') from None
-    if not skills:
-        raise HTTPException(422, 'No valid SKILL.md files were found.')
+    if not skills and not definitions:
+        raise HTTPException(422, 'No supported skill or agent definitions were found.')
     with db.connect() as conn:
         collection = conn.execute('''
             INSERT INTO skill_collections(id,repository,git_ref) VALUES (%s,%s,%s)
             ON CONFLICT (repository,git_ref) DO UPDATE SET repository=excluded.repository RETURNING id
         ''', (uuid.uuid4(), repository, body.ref)).fetchone()
         ident = collection['id']
-        conn.execute('''INSERT INTO skill_releases(collection_id,commit_sha,skills) VALUES (%s,%s,%s)
-                     ON CONFLICT DO NOTHING''', (ident, sha, Jsonb(skills)))
+        conn.execute('''INSERT INTO skill_releases(collection_id,commit_sha,skills,agent_definitions)
+                     VALUES (%s,%s,%s,%s) ON CONFLICT (collection_id,commit_sha)
+                     DO UPDATE SET agent_definitions=excluded.agent_definitions WHERE skill_releases.agent_definitions IS NULL''',
+                     (ident, sha, Jsonb(skills), Jsonb(definitions)))
         db.event('skills.imported', user['id'], {'collection': str(ident), 'commit': sha, 'count': len(skills)}, conn=conn)
-    return {'id': ident, 'commit': sha, 'count': len(skills), 'invalid': invalid}
+    return {'id': ident, 'commit': sha, 'count': len(skills), 'agent_count': len(definitions), 'invalid': invalid}
 
 
 @router.get('/collections/{ident}')
@@ -222,9 +266,10 @@ def collection_detail(ident: uuid.UUID, user: User, commit: str | None = None):
         releases = conn.execute('''SELECT commit_sha,imported_at,jsonb_array_length(skills) AS skill_count
                                  FROM skill_releases WHERE collection_id=%s ORDER BY imported_at DESC''', (ident,)).fetchall()
         chosen = commit or collection['active_commit'] or releases[0]['commit_sha']
-        snapshots = conn.execute('''SELECT commit_sha,skills FROM skill_releases
+        snapshots = conn.execute('''SELECT commit_sha,skills,agent_definitions FROM skill_releases
                                     WHERE collection_id=%s AND commit_sha=ANY(%s)''',
                                  (ident, [chosen, collection['active_commit']])).fetchall()
+        definitions = next((row['agent_definitions'] or [] for row in snapshots if row['commit_sha']==chosen), [])
         snapshots = {row['commit_sha']: row['skills'] for row in snapshots}
         if chosen not in snapshots:
             raise HTTPException(404, 'Version not found.')
@@ -237,9 +282,49 @@ def collection_detail(ident: uuid.UUID, user: User, commit: str | None = None):
                  'description': effective[skill['path']]['description'],
                  'customized': effective[skill['path']]['customized']}
                 for skill in snapshots[chosen]],
+            'agent_definitions': [{k:v for k,v in definition.items() if k!='instructions'} for definition in definitions],
             'excluded': [row['path'] for row in exclusions],
             'changes': {'added': sorted(selected.keys()-active.keys()), 'removed': sorted(active.keys()-selected.keys()),
                         'changed': sorted(path for path in active.keys() & selected.keys() if active[path] != selected[path])}}
+
+
+def repository_agent(conn, ident, commit, path):
+    row = conn.execute("""SELECT c.repository, d AS definition
+        FROM skill_collections c JOIN skill_releases r ON r.collection_id=c.id
+        CROSS JOIN LATERAL jsonb_array_elements(r.agent_definitions) AS d
+        WHERE c.id=%s AND c.deleted_at IS NULL AND r.commit_sha=%s AND d->>'path'=%s""",
+        (ident,commit,path)).fetchone()
+    if not row:
+        raise HTTPException(404, 'Agent definition not found.')
+    return row
+
+
+@router.get('/collections/{ident}/agent')
+def inspect_repository_agent(ident: uuid.UUID, user: User, commit: str, path: str):
+    with db.connect() as conn:
+        return repository_agent(conn,ident,commit,path)['definition']
+
+
+@router.post('/collections/{ident}/agent')
+def import_repository_agent(ident: uuid.UUID, user: User, commit: str, path: str):
+    access.writer(user)
+    with db.connect() as conn:
+        row = repository_agent(conn,ident,commit,path)
+        definition = row['definition']
+        source = {'repository':row['repository'],'commit':commit,'path':path}
+        agent_id = uuid.uuid4()
+        created = conn.execute("""INSERT INTO agents(id,name,instructions,owner_id,runtime_mode,tools,enabled,imported_source)
+            VALUES (%s,%s,%s,%s,'analysis','[]',false,%s) ON CONFLICT DO NOTHING RETURNING id""",
+            (agent_id,definition['name'],definition['instructions'],user['id'],Jsonb(source))).fetchone()
+        if created:
+            db.event('agent.imported',user['id'],{'id':str(agent_id),**source},conn=conn)
+            return {'id':agent_id,'created':True}
+        existing = conn.execute("""SELECT id,deleted_at FROM agents WHERE owner_id=%s
+            AND imported_source->>'repository'=%s AND imported_source->>'path'=%s""",
+            (user['id'],row['repository'],path)).fetchone()
+        if not existing or existing['deleted_at']:
+            raise HTTPException(409, 'Restore the imported agent from Agents → Show deleted.')
+        return {'id':existing['id'],'created':False}
 
 
 @router.get('/collections/{ident}/skill')

@@ -29,7 +29,7 @@ def test_catalog_bulk_activation_update_rollback_and_run_provenance(signed, work
     sha = 'a' * 40
     updated_sha = 'b' * 40
     location = {'repository': 'https://github.com/example/skills?utm_source=chatgpt.com#readme', 'ref': 'main'}
-    monkeypatch.setattr(skills, 'fetch_collection', lambda repository, ref: (sha, discovered, []))
+    monkeypatch.setattr(skills, 'fetch_collection', lambda repository, ref: (sha, discovered, [], []))
     imported = signed.post('/api/v1/skills/import', json=location)
     assert imported.status_code == 200, imported.text
     ident = imported.json()['id']
@@ -53,7 +53,7 @@ def test_catalog_bulk_activation_update_rollback_and_run_provenance(signed, work
     assert signed.get(original_path).json()['skill_versions'][0]['commit'] == sha
 
     changed = [{**discovered[0], 'body': 'Updated instructions.'}, *discovered[1:]]
-    monkeypatch.setattr(skills, 'fetch_collection', lambda repository, ref: (updated_sha, changed, []))
+    monkeypatch.setattr(skills, 'fetch_collection', lambda repository, ref: (updated_sha, changed, [], []))
     assert signed.post('/api/v1/skills/import', json=location).json()['id'] == ident
     assert signed.get(path, params={'commit': updated_sha}).json()['changes']['changed'] == [discovered[0]['path']]
     assert activate(updated_sha, None).status_code == 409
@@ -92,7 +92,7 @@ def test_repository_link_normalization():
 def test_chat_skill_controls_use_approved_current_versions(signed, work, monkeypatch):
     commit = 'a' * 40
     entries, _ = skills.discover(bundle(), time.monotonic() + 5)
-    monkeypatch.setattr(skills, 'fetch_collection', lambda repository, ref: (commit, entries[:3], []))
+    monkeypatch.setattr(skills, 'fetch_collection', lambda repository, ref: (commit, entries[:3], [], []))
     collection = signed.post('/api/v1/skills/import', json={'repository': 'example/skills'}).json()['id']
     catalog = '/api/v1/skills/collections/' + collection
     assert signed.put(catalog+'/activate', json={'commit': commit}).status_code == 200
@@ -127,3 +127,41 @@ def test_chat_skill_controls_use_approved_current_versions(signed, work, monkeyp
     path, response = send('off', [choice], '/skill skill-001')
     assert response.status_code == 201, response.text
     assert signed.get(path).json()['messages'][-1]['skill_versions'] == []
+
+
+def test_agent_only_repository_import_and_deduplication(signed, monkeypatch):
+    destination = io.BytesIO()
+    fixtures = {
+        '.claude/agents/analyst.md': b'---\nname: analyst\ndescription: Analyse evidence\ntools: Bash\n---\nReview the supplied evidence.',
+        '.github/agents/reviewer.agent.md': b'---\ndescription: Review changes\n---\nWrite review notes.',
+        'AGENTS.md': b'---\nname: guidance\ndescription: Repository guidance\n---\nRepository-wide guidance.',
+    }
+    with tarfile.open(fileobj=destination,mode='w:gz') as archive:
+        for path, content in fixtures.items():
+            entry = tarfile.TarInfo('repo/'+path)
+            entry.size = len(content)
+            archive.addfile(entry,io.BytesIO(content))
+    destination.seek(0)
+    definitions = []
+    entries, invalid = skills.discover(destination,time.monotonic()+5,definitions=definitions,repository='example/agents')
+    assert [entry['name'] for entry in definitions] == ['analyst','reviewer']
+    assert not entries and not invalid
+    assert skills.parse_agent_definition('engineering/engineer.md',
+        b'---\nname: Engineer\ndescription: Implement changes\ncolor: blue\n---\nUse project context.',
+        'example/agency-agents')['name']=='Engineer'
+
+    sha = 'e'*40
+    monkeypatch.setattr(skills,'fetch_collection',lambda *_:(sha,entries,invalid,definitions))
+    result = signed.post('/api/v1/skills/import',json={'repository':'example/agents'}).json()
+    assert result['count']==0 and result['agent_count']==2
+    base = '/api/v1/skills/collections/'+result['id']
+    params = {'commit':sha,'path':definitions[0]['path']}
+    assert 'instructions' not in signed.get(base).json()['agent_definitions'][0]
+    assert signed.get(base+'/agent',params=params).json()['instructions']=='Review the supplied evidence.'
+    created = signed.post(base+'/agent',params=params).json()
+    assert created['created']
+    existing = signed.post(base+'/agent',params=params).json()
+    assert existing == {'id':created['id'],'created':False}
+    row, = [item for item in signed.get('/api/v1/agents').json() if item['id']==created['id']]
+    assert row['runtime_mode']=='analysis' and not row['enabled'] and row['tools']==[]
+    assert row['imported_source']=={'path':params['path'],'commit':sha,'repository':'example/agents'}

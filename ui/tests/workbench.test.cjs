@@ -51,6 +51,12 @@ test('custom workbench navigates, splits and opens every implemented module',asy
    responses.projects=responses['projects?deleted=true'].map(project=>({...project,deleted_at:null}));
    responses['projects?deleted=true']=[];
   }
+  if(options.method==='POST'&&key.startsWith('skills/collections/collection/agent?')){
+   responses.agents.push({id:'repository-agent',name:'Repository Reviewer',instructions:'Review with evidence',
+    enabled:false,version:1,runtime_mode:'analysis',tools:[]});
+   responses['skills/agents/repository-agent']=[];
+   result={id:'repository-agent',created:true};
+  }
   if(options.method==='POST'&&key==='skills/import'){
    const body=JSON.parse(options.body);
    if(body.repository===forexCollection.repository){
@@ -526,6 +532,24 @@ test('custom workbench navigates, splits and opens every implemented module',asy
   assert.match(directory().textContent,/Project restored to Active projects/);
   await act(async()=>{button(directory(),'Active projects').click();});
   assert.match(directory().querySelector('.project-card').textContent,/First Research Project/);
+
+  const importedDefinition={name:'Repository Reviewer',path:'.github/agents/reviewer.agent.md',description:'Review changes'};
+  responses['skills/collections/collection?commit='+catalogCommit].agent_definitions=[importedDefinition];
+  const agentQuery=new URLSearchParams({commit:catalogCommit,path:importedDefinition.path});
+  responses['skills/collections/collection/agent?'+agentQuery]={...importedDefinition,instructions:'Review with evidence'};
+  await navigate('Skills');
+  const repoAgents=document.querySelector('.view:not([hidden]) .skills-page');
+  await act(async()=>{button(repoAgents,'Browse skills').click();button(document,'Refresh').click();await wait();});
+  await act(async()=>{[...repoAgents.querySelectorAll('.record')].find(record=>record.textContent.includes('example/skills')).click();await wait();});
+  await act(async()=>{
+   const details=[...repoAgents.querySelectorAll('details')].find(node=>node.querySelector('summary')?.textContent==='Repository Reviewer');
+   details.open=true;details.dispatchEvent(new dom.window.Event('toggle'));await wait();
+  });
+  assert.match(repoAgents.textContent,/Review with evidence/);
+  await act(async()=>{button(repoAgents,'Import agent').click();await wait();});
+  const agentView=document.querySelector('.view:not([hidden]) .agents-page');
+  assert.match(agentView.querySelector('.catalog-heading').textContent,/Repository Reviewer.*Disabled/);
+  assert.equal(agentView.querySelector('input[required]').value,'Repository Reviewer');
 
  }finally{await act(async()=>root.unmount());global.fetch=fetchOld;delete global.IS_REACT_ACT_ENVIRONMENT;for(const k of Object.keys(old)){if(old[k])Object.defineProperty(global,k,old[k]);else delete global[k];}if(locationOld)Object.defineProperty(global,'location',locationOld);else delete global.location;dom.window.close();}
 });
