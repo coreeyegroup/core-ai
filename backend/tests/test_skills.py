@@ -29,7 +29,7 @@ def test_catalog_bulk_activation_update_rollback_and_run_provenance(signed, work
     sha = 'a' * 40
     updated_sha = 'b' * 40
     location = {'repository': 'https://github.com/example/skills?utm_source=chatgpt.com#readme', 'ref': 'main'}
-    monkeypatch.setattr(skills, 'fetch_collection', lambda repository, ref: (sha, discovered, [], []))
+    monkeypatch.setattr(skills, 'fetch_collection', lambda repository, ref: (sha, discovered, [], [], []))
     imported = signed.post('/api/v1/skills/import', json=location)
     assert imported.status_code == 200, imported.text
     ident = imported.json()['id']
@@ -53,7 +53,7 @@ def test_catalog_bulk_activation_update_rollback_and_run_provenance(signed, work
     assert signed.get(original_path).json()['skill_versions'][0]['commit'] == sha
 
     changed = [{**discovered[0], 'body': 'Updated instructions.'}, *discovered[1:]]
-    monkeypatch.setattr(skills, 'fetch_collection', lambda repository, ref: (updated_sha, changed, [], []))
+    monkeypatch.setattr(skills, 'fetch_collection', lambda repository, ref: (updated_sha, changed, [], [], []))
     assert signed.post('/api/v1/skills/import', json=location).json()['id'] == ident
     assert signed.get(path, params={'commit': updated_sha}).json()['changes']['changed'] == [discovered[0]['path']]
     assert activate(updated_sha, None).status_code == 409
@@ -92,7 +92,7 @@ def test_repository_link_normalization():
 def test_chat_skill_controls_use_approved_current_versions(signed, work, monkeypatch):
     commit = 'a' * 40
     entries, _ = skills.discover(bundle(), time.monotonic() + 5)
-    monkeypatch.setattr(skills, 'fetch_collection', lambda repository, ref: (commit, entries[:3], [], []))
+    monkeypatch.setattr(skills, 'fetch_collection', lambda repository, ref: (commit, entries[:3], [], [], []))
     collection = signed.post('/api/v1/skills/import', json={'repository': 'example/skills'}).json()['id']
     catalog = '/api/v1/skills/collections/' + collection
     assert signed.put(catalog+'/activate', json={'commit': commit}).status_code == 200
@@ -151,7 +151,7 @@ def test_agent_only_repository_import_and_deduplication(signed, monkeypatch):
         'example/agency-agents')['name']=='Engineer'
 
     sha = 'e'*40
-    monkeypatch.setattr(skills,'fetch_collection',lambda *_:(sha,entries,invalid,definitions))
+    monkeypatch.setattr(skills,'fetch_collection',lambda *_:(sha,entries,invalid,definitions,[]))
     result = signed.post('/api/v1/skills/import',json={'repository':'example/agents'}).json()
     assert result['count']==0 and result['agent_count']==2
     base = '/api/v1/skills/collections/'+result['id']

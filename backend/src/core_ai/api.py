@@ -379,6 +379,8 @@ app.include_router(chat_router)
 
 from .skills import router as skills_router
 app.include_router(skills_router)
+from .repository_intelligence import router as repository_intelligence_router
+app.include_router(repository_intelligence_router)
 
 from .connections import router as connections_router
 app.include_router(connections_router)

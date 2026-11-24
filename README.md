@@ -282,3 +282,17 @@ and research retries retain their original selection after a catalog update.
 The catalog imports instructions. Reference and asset links are available for review
 at the pinned commit. Bundle scripts, hooks, external tools, and host-specific plugins
 require their own execution environment. Agent tool permissions continue to apply.
+
+### Repository Intelligence
+
+Open a collection in **Skills**, select its version, and expand **Repository
+Intelligence**. Earlier imports can be rescanned at the exact commit. Inventory
+search covers file paths and kinds. The scanner stores bounded text excerpts
+for evidence and links to the pinned GitHub source for complete files.
+
+Select up to 12 excerpt files, or use automatic evidence selection. Add an
+optional focus and model, then choose **Analyse repository**. The built-in
+Repository Integration Analyst saves a versioned report with decisions,
+prerequisites, permissions, sources, proposed steps, and expected test
+results. Proposed commands are checked against the excerpts. Installation is
+manual. Administrators record the observed result for each capability.

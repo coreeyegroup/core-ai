@@ -13,7 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from psycopg.types.json import Jsonb
 from pydantic import BaseModel, Field
 
-from . import access, auth, db
+from . import access, auth, db, repository_intelligence as intelligence
 
 router = APIRouter(prefix='/api/v1/skills')
 User = Annotated[dict, Depends(auth.session)]
@@ -103,9 +103,10 @@ def parse_agent_definition(path, raw, repository=''):
         return None
 
 
-def discover(archive, deadline, *, definitions=None, repository=''):
+def discover(archive, deadline, *, definitions=None, repository='', inventory=None):
     skills, paths, invalid = [], set(), []
     size = 0
+    excerpts_by_kind = {}
     with tarfile.open(fileobj=archive, mode='r|gz') as tar:
         for index, member in enumerate(tar):
             size += member.size
@@ -117,15 +118,31 @@ def discover(archive, deadline, *, definitions=None, repository=''):
             if path in paths and definitions is not None and agent_definition_path(path,repository):
                 raise ValueError('Archive has duplicate agent paths.')
             paths.add(path)
-            if definitions is not None and agent_definition_path(path, repository):
-                definition = parse_agent_definition(path,tar.extractfile(member).read(),repository) if member.size <= 96 * 1024 else None
+            is_agent = agent_definition_path(path, repository)
+            is_skill = path.split('/')[-1] == 'SKILL.md'
+            kind = intelligence.file_kind(path,is_agent,bool(member.mode & 0o111))
+            capture = (inventory is not None and kind!='other'
+                       and excerpts_by_kind.get(kind,0) < 30 and member.size <= 96 * 1024)
+            raw = (tar.extractfile(member).read() if (capture or is_skill or is_agent and definitions is not None)
+                   and member.size <= 96 * 1024 else None)
+            if inventory is not None:
+                entry = {'path':path,'kind':kind,'size':member.size}
+                if capture and raw is not None:
+                    content = intelligence.excerpt(raw)
+                    if content:
+                        entry['text'] = content[:intelligence.EVIDENCE_PER_FILE]
+                        entry['truncated'] = len(content) > intelligence.EVIDENCE_PER_FILE
+                        excerpts_by_kind[kind] = excerpts_by_kind.get(kind,0)+1
+                inventory.append(entry)
+            if definitions is not None and is_agent:
+                definition = parse_agent_definition(path,raw,repository) if raw is not None else None
                 if definition:
                     definitions.append(definition)
                 if len(definitions) > 2000:
                     raise ValueError('Collection exceeds 2,000 agent definitions.')
-            if path.split('/')[-1] != 'SKILL.md':
+            if not is_skill:
                 continue
-            skill = parse_skill(path, tar.extractfile(member).read()) if member.size <= 96 * 1024 else None
+            skill = parse_skill(path,raw) if raw is not None else None
             if skill:
                 skills.append(skill)
             else:
@@ -157,9 +174,9 @@ def fetch_collection(repository, ref):
                     raise ValueError('Collection archive exceeds download limits.')
                 archive.write(chunk)
             archive.seek(0)
-            definitions = []
-            skills, invalid = discover(archive, deadline, definitions=definitions, repository=repository)
-    return sha, skills, invalid, definitions
+            definitions, inventory = [], []
+            skills, invalid = discover(archive, deadline, definitions=definitions, repository=repository, inventory=inventory)
+    return sha, skills, invalid, definitions, sorted(inventory,key=lambda item:item['path'])
 
 
 @router.get('')
@@ -238,23 +255,44 @@ def import_collection(body: Import, user: User):
     if not repository or not REF.fullmatch(body.ref) or '..' in body.ref:
         raise HTTPException(422, 'Enter a public GitHub owner/repository and a valid branch, tag, or commit.')
     try:
-        sha, skills, invalid, definitions = fetch_collection(repository, body.ref)
+        sha, skills, invalid, definitions, inventory = fetch_collection(repository, body.ref)
     except (httpx.HTTPError, ValueError, tarfile.TarError, OSError, EOFError):
         raise HTTPException(422, 'GitHub import failed. Check repository access, ref, or archive size.') from None
-    if not skills and not definitions:
-        raise HTTPException(422, 'No supported skill or agent definitions were found.')
+    if not inventory and not skills and not definitions:
+        raise HTTPException(422, 'No repository files were found.')
     with db.connect() as conn:
         collection = conn.execute('''
             INSERT INTO skill_collections(id,repository,git_ref) VALUES (%s,%s,%s)
             ON CONFLICT (repository,git_ref) DO UPDATE SET repository=excluded.repository RETURNING id
         ''', (uuid.uuid4(), repository, body.ref)).fetchone()
         ident = collection['id']
-        conn.execute('''INSERT INTO skill_releases(collection_id,commit_sha,skills,agent_definitions)
-                     VALUES (%s,%s,%s,%s) ON CONFLICT (collection_id,commit_sha)
-                     DO UPDATE SET agent_definitions=excluded.agent_definitions WHERE skill_releases.agent_definitions IS NULL''',
-                     (ident, sha, Jsonb(skills), Jsonb(definitions)))
+        conn.execute("""INSERT INTO skill_releases(collection_id,commit_sha,skills,agent_definitions,repository_inventory)
+            VALUES (%s,%s,%s,%s,%s) ON CONFLICT (collection_id,commit_sha) DO UPDATE SET
+                agent_definitions=COALESCE(skill_releases.agent_definitions,excluded.agent_definitions),
+                repository_inventory=COALESCE(skill_releases.repository_inventory,excluded.repository_inventory)""",
+            (ident,sha,Jsonb(skills),Jsonb(definitions),Jsonb(inventory)))
         db.event('skills.imported', user['id'], {'collection': str(ident), 'commit': sha, 'count': len(skills)}, conn=conn)
-    return {'id': ident, 'commit': sha, 'count': len(skills), 'agent_count': len(definitions), 'invalid': invalid}
+    return {'id': ident, 'commit': sha, 'count': len(skills), 'agent_count': len(definitions), 'file_count':len(inventory), 'invalid': invalid}
+
+
+@router.post('/collections/{ident}/intelligence/rescan')
+def rescan_repository(ident: uuid.UUID, commit: str, user: User):
+    access.admin(user)
+    with db.connect() as conn:
+        row = intelligence.release(conn,ident,commit,False)
+    try:
+        sha, _, _, definitions, inventory = fetch_collection(row['repository'],commit)
+    except (httpx.HTTPError,ValueError,tarfile.TarError,OSError,EOFError):
+        raise HTTPException(422, 'Could not rescan this GitHub commit.') from None
+    if sha != commit:
+        raise HTTPException(422, 'GitHub did not return the requested commit.')
+    with db.connect() as conn:
+        intelligence.release(conn,ident,commit,False)
+        conn.execute("""UPDATE skill_releases SET repository_inventory=COALESCE(repository_inventory,%s),
+            agent_definitions=COALESCE(agent_definitions,%s) WHERE collection_id=%s AND commit_sha=%s""",
+            (Jsonb(inventory),Jsonb(definitions),ident,commit))
+        db.event('repository.rescanned',user['id'],{'collection':str(ident),'commit':commit},conn=conn)
+    return {'ok':True}
 
 
 @router.get('/collections/{ident}')

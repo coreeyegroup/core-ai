@@ -51,6 +51,16 @@ test('custom workbench navigates, splits and opens every implemented module',asy
    responses.projects=responses['projects?deleted=true'].map(project=>({...project,deleted_at:null}));
    responses['projects?deleted=true']=[];
   }
+  if(options.method==='POST'&&key.startsWith('skills/collections/collection/intelligence/analyse?')){
+   assert.deepEqual(JSON.parse(options.body).paths,['README.md']);
+   const inventory=responses['skills/collections/collection/intelligence?'+new URLSearchParams({commit:catalogCommit,q:'',kind:'',offset:'0',limit:'40'})];
+   inventory.reports=[{id:'assessment-1',model:'test:latest',focus:'',created_at:new Date().toISOString()}];
+   result={id:'assessment-1'};
+  }
+  if(options.method==='POST'&&key.endsWith('/reports/assessment-1/verify/0')){
+   const report=responses['skills/collections/collection/intelligence/reports/assessment-1'];
+   report.verification=[{capability_index:0,...JSON.parse(options.body),checked_at:new Date().toISOString()}];
+  }
   if(options.method==='POST'&&key.startsWith('skills/collections/collection/agent?')){
    responses.agents.push({id:'repository-agent',name:'Repository Reviewer',instructions:'Review with evidence',
     enabled:false,version:1,runtime_mode:'analysis',tools:[]});
@@ -541,6 +551,26 @@ test('custom workbench navigates, splits and opens every implemented module',asy
   const repoAgents=document.querySelector('.view:not([hidden]) .skills-page');
   await act(async()=>{button(repoAgents,'Browse skills').click();button(document,'Refresh').click();await wait();});
   await act(async()=>{[...repoAgents.querySelectorAll('.record')].find(record=>record.textContent.includes('example/skills')).click();await wait();});
+  const intelRoot='skills/collections/collection/intelligence';
+  responses[intelRoot+'?'+new URLSearchParams({commit:catalogCommit,q:'',kind:'',offset:'0',limit:'40'})]={
+   available:true,files:[{path:'README.md',kind:'documentation',size:10,has_excerpt:true}],
+   file_count:1,total:1,kinds:['documentation'],reports:[]
+  };
+  responses[intelRoot+'/reports/assessment-1']={id:'assessment-1',model:'test:latest',commit_sha:catalogCommit,
+   evidence_paths:[{path:'README.md',truncated:false}],verification:[],report:{summary:'One tool found.',
+   open_questions:[],capabilities:[{name:'Slide validator',kind:'Task tool',decision:'Install tool',reason:'Documented.',
+    sources:['README.md'],prerequisites:[],permissions:[],license_notes:'',steps:[],test_input:'Slides',expected_result:'Valid'}]}};
+  await act(async()=>{const details=repoAgents.querySelector('.repo-intelligence');details.open=true;
+   details.dispatchEvent(new dom.window.Event('toggle'));await wait();});
+  const intelligencePanel=repoAgents.querySelector('.repo-intelligence');
+  await act(async()=>{intelligencePanel.querySelector('input[type=checkbox]').click();});
+  await act(async()=>{submit(intelligencePanel);await wait();});
+  assert.match(intelligencePanel.textContent,/Slide validator.*Install tool/);
+  const verification=intelligencePanel.querySelector('article form');
+  await act(async()=>{change(verification.querySelector('select'),'Verified');
+   input(verification.querySelector('textarea'),'Test passed.');});
+  await act(async()=>{submit(intelligencePanel.querySelector('article'));await wait();});
+  assert.match(intelligencePanel.textContent,/Test passed/);
   await act(async()=>{
    const details=[...repoAgents.querySelectorAll('details')].find(node=>node.querySelector('summary')?.textContent==='Repository Reviewer');
    details.open=true;details.dispatchEvent(new dom.window.Event('toggle'));await wait();
