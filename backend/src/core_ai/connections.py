@@ -101,7 +101,7 @@ def list_connections(user: User):
                c.timeout_seconds,c.max_output_tokens,c.context_tokens,c.created_at,c.revoked_at,
                CASE WHEN c.previous_valid_until>now() THEN c.previous_valid_until END AS overlap_until,
                c.expires_at<=now() AS expired, c.encrypted_token IS NOT NULL AS can_reveal,
-               u.enabled AND u.role='ADMIN' AND (p.archived_at IS NULL)
+               u.enabled AND u.role='ADMIN' AND (p.archived_at IS NULL AND p.deleted_at IS NULL)
                  AND (c.agent_id IS NULL OR (a.enabled AND a.runtime_mode='analysis')) AS scope_available
         FROM automation_connections c LEFT JOIN projects p ON p.id=c.project_id
         LEFT JOIN agents a ON a.id=c.agent_id JOIN users u ON u.id=c.created_by

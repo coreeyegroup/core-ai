@@ -20,7 +20,7 @@ TEXT={'.txt','.md','.csv','.json','.py','.js','.ts','.tsx','.jsx','.sql','.yaml'
 SUPPORTED=TEXT|{'.pdf','.docx','.xlsx'}
 
 def owned(conn,user,ident,lock=False):
-    row=conn.execute('SELECT * FROM workspace_files WHERE id=%s AND (owner_id=%s OR %s=\'ADMIN\')'+(' FOR UPDATE' if lock else ''),(ident,user['id'],user['role'])).fetchone()
+    row=conn.execute('SELECT * FROM workspace_files f WHERE id=%s AND NOT EXISTS (SELECT 1 FROM projects p WHERE p.id=f.project_id AND p.deleted_at IS NOT NULL) AND (owner_id=%s OR %s=\'ADMIN\')'+(' FOR UPDATE' if lock else ''),(ident,user['id'],user['role'])).fetchone()
     if not row:raise HTTPException(404,'File not found.')
     return row
 
@@ -30,7 +30,7 @@ def listing(project_id:uuid.UUID|None=None,user=Depends(auth.session)):
         with db.connect() as conn: access.project(conn,user,project_id)
     return db.query("""
         SELECT id,owner_id,project_id,name,media_type,size_bytes,sha256,status,error,truncated,document_id,created_at,processed_at
-        FROM workspace_files WHERE (owner_id=%s OR %s='ADMIN') AND (%s::uuid IS NULL OR project_id=%s)
+        FROM workspace_files f WHERE NOT EXISTS (SELECT 1 FROM projects p WHERE p.id=f.project_id AND p.deleted_at IS NOT NULL) AND (owner_id=%s OR %s='ADMIN') AND (%s::uuid IS NULL OR project_id=%s)
         ORDER BY created_at DESC LIMIT 200
     """,(user['id'],user['role'],project_id,project_id))
 

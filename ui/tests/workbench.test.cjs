@@ -14,6 +14,7 @@ test('custom workbench navigates, splits and opens every implemented module',asy
    excluded:[],changes:{added:['systematic-debugging/SKILL.md'],removed:[],changed:[]}
   };
   responses['skills/agents/agent']=[];
+  responses['projects/first-research-project/connections']=[];
   const chatSkill={name:'systematic-debugging',description:'Review evidence',repository:'example/skills',collection_id:'collection',commit:catalogCommit,path:'systematic-debugging/SKILL.md'};
   responses['skills/chat/preview']={available:[chatSkill,
    {...chatSkill,collection_id:'duplicate-ref',git_ref:'HEAD'},
@@ -39,6 +40,16 @@ test('custom workbench navigates, splits and opens every implemented module',asy
    const project={...body,id:'first-research-project',description:'',created_at:new Date().toISOString()};
    responses.projects=[...responses.projects,project];
    result={id:project.id};
+  }
+  if(options.method==='DELETE'&&key==='projects/first-research-project'){
+   assert.deepEqual(JSON.parse(options.body),{name:'First Research Project'});
+   const deleted=responses.projects.find(project=>project.id==='first-research-project');
+   responses.projects=responses.projects.filter(project=>project.id!==deleted.id);
+   responses['projects?deleted=true']=[{...deleted,deleted_at:new Date().toISOString()}];
+  }
+  if(options.method==='POST'&&key==='projects/first-research-project/restore'){
+   responses.projects=responses['projects?deleted=true'].map(project=>({...project,deleted_at:null}));
+   responses['projects?deleted=true']=[];
   }
   if(options.method==='POST'&&key==='skills/import'){
    const body=JSON.parse(options.body);
@@ -500,5 +511,21 @@ test('custom workbench navigates, splits and opens every implemented module',asy
   assert.equal(responses['runs/guided-task'].project_id,'first-research-project');
   assert.equal(responses['runs/guided-task'].agent_id,'guided-agent');
   assert.match(task().querySelector('.result').textContent,/Task result.*QUEUED/);
+  await navigate('Projects');
+  const directory=()=>document.querySelector('.view:not([hidden]) .project-page');
+  await act(async()=>{button(document.querySelector('.explorer-projects'),'First Research Project').click();await wait();});
+  await act(async()=>{button(directory(),'Settings').click();await wait();});
+  await act(async()=>{button(directory(),'Delete project').click();});
+  const deletion=document.querySelector('dialog');
+  assert.ok(button(deletion,'Delete').disabled);
+  await act(async()=>{input(deletion.querySelector('input'),'First Research Project');});
+  assert.ok(!button(deletion,'Delete').disabled);
+  await act(async()=>{submit(deletion);await wait();});
+  assert.match(directory().textContent,/Project moved to Deleted projects/);
+  await act(async()=>{button(directory(),'Restore project').click();await wait();});
+  assert.match(directory().textContent,/Project restored to Active projects/);
+  await act(async()=>{button(directory(),'Active projects').click();});
+  assert.match(directory().querySelector('.project-card').textContent,/First Research Project/);
+
  }finally{await act(async()=>root.unmount());global.fetch=fetchOld;delete global.IS_REACT_ACT_ENVIRONMENT;for(const k of Object.keys(old)){if(old[k])Object.defineProperty(global,k,old[k]);else delete global[k];}if(locationOld)Object.defineProperty(global,'location',locationOld);else delete global.location;dom.window.close();}
 });

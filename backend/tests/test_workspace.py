@@ -174,3 +174,38 @@ def test_document_creation_rolls_back_when_audit_insert_fails(signed, work, monk
     assert response.status_code == 500
     assert not db.query("SELECT id FROM documents WHERE title='Atomic source'")
     assert not db.query("SELECT document_id FROM document_versions WHERE title='Atomic source'")
+
+
+def test_project_trash_requires_confirmation_and_restores_contents(signed, work):
+    project = work['project_id']
+    path = f'/api/v1/projects/{project}'
+    editor, _ = account(signed, 'trash-editor')
+    assert signed.put(path+'/members', json={'username':'trash-editor','role':'EDITOR'}).status_code == 200
+    chat = signed.post('/api/v1/chat/conversations', json={
+        'project_id':project,'model':work['model'],'title':'Project discussion',
+    }).json()['id']
+    source = signed.post('/api/v1/documents', json={
+        'project_id':project,'title':'Notes','content':'Keep after restore',
+    }).json()['id']
+    artifact = signed.post('/api/v1/library/artifacts', json={
+        'project_id':project,'title':'Report','kind':'markdown','content':'Keep',
+    }).json()['id']
+    assert signed.request('DELETE', path, json={'name':'Wrong name'}).status_code == 422
+    assert editor.request('DELETE', path, json={'name':'Research'}).status_code == 403
+    assert signed.put(path+'/archive', json={'archived':True}).status_code == 200
+    assert signed.request('DELETE', path, json={'name':'Research'}).status_code == 200
+    assert not signed.get('/api/v1/projects').json()
+    assert [item['id'] for item in signed.get('/api/v1/projects?deleted=true').json()] == [project]
+    assert not editor.get('/api/v1/projects?deleted=true').json()
+    assert not signed.get('/api/v1/chat/conversations').json()
+    assert not signed.get('/api/v1/documents').json()
+    assert not signed.get('/api/v1/library/artifacts').json()
+    assert signed.get('/api/v1/chat/conversations/'+chat).status_code == 404
+    assert signed.get('/api/v1/documents/'+source).status_code == 404
+    assert signed.get('/api/v1/library/artifacts/'+artifact).status_code == 404
+    assert editor.post(path+'/restore').status_code == 403
+    assert signed.post(path+'/restore').status_code == 200
+    assert signed.get('/api/v1/projects').json()[0]['archived_at']
+    assert signed.get('/api/v1/chat/conversations/'+chat).status_code == 200
+    assert signed.get('/api/v1/documents/'+source).status_code == 200
+    assert signed.get('/api/v1/library/artifacts/'+artifact).status_code == 200

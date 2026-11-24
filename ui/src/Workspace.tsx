@@ -6,7 +6,7 @@ import {MessageMarkdown} from './Chat';
 import {useSession} from './Session';
 type Row=Record<string,any>;
 export const openArtifact=(id:string)=>window.dispatchEvent(new CustomEvent('core-ai-artifact',{detail:{id}}));
-export function useResource(path:string,tick=0){const [data,setData]=useState<any>(null),[error,setError]=useState('');useEffect(()=>{let alive=true;api(path).then(x=>{if(alive){setData(x);setError('');}}).catch(e=>{if(alive)setError(e.message);});return()=>{alive=false;};},[path,tick]);return {data,error};}
+export function useResource(path:string,tick=0){const [data,setData]=useState<any>(null),[error,setError]=useState('');useEffect(()=>{if(!path)return;let alive=true;api(path).then(x=>{if(alive){setData(x);setError('');}}).catch(e=>{if(alive)setError(e.message);});return()=>{alive=false;};},[path,tick]);return {data,error};}
 function ErrorBox({error}:{error:string}){return error?<div role="alert" className="error">{error}</div>:null;}
 export function WorkspaceHead({title,description,children,compact=false}:{title:string;description:string;children?:React.ReactNode;compact?:boolean}){return <header className="page-head"><div>{compact?<h2>{title}</h2>:<><h1>{title}</h1><p>{description}</p></>}</div><div className="actions">{children}</div></header>;}
 export function FilesPanel({tick,refresh,projectId,readOnly=false}:{tick:number;refresh:()=>void;projectId?:string;readOnly?:boolean}){

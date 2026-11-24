@@ -73,9 +73,9 @@ export function ChatModelPicker({value,models,available,onChange}:{value:string;
 }
 
 
-export function ConversationDialog({action,title,dismiss,confirm}:{action:'rename'|'delete';title:string;dismiss:()=>void;confirm:(title:string)=>Promise<void>}){
+export function ConversationDialog({action,title,dismiss,confirm,project=false}:{action:'rename'|'delete';title:string;dismiss:()=>void;confirm:(title:string)=>Promise<void>;project?:boolean}){
  const dialog=useRef<HTMLDialogElement>(null),id=useId();
- const [name,setName]=useState(title),[error,setError]=useState(''),[busy,setBusy]=useState(false);
+ const [name,setName]=useState(project?'':title),[error,setError]=useState(''),[busy,setBusy]=useState(false);
  useLayoutEffect(()=>{
   const node=dialog.current,previous=document.activeElement as HTMLElement|null;
   if(!node)return;
@@ -86,15 +86,16 @@ export function ConversationDialog({action,title,dismiss,confirm}:{action:'renam
  return createPortal(<dialog className="conversation-dialog" ref={dialog} aria-labelledby={id} onCancel={e=>{e.preventDefault();if(!busy)dismiss();}}>
   <form onSubmit={async e=>{
    e.preventDefault();
-   if(busy||!name.trim())return;
+   if(busy||(project?name!==title:!name.trim()))return;
    setBusy(true);setError('');
-   try{await confirm(name.trim());dismiss();}catch(e){setError((e as Error).message);setBusy(false);}
+   try{await confirm(project?name:name.trim());dismiss();}catch(e){setError((e as Error).message);setBusy(false);}
   }}>
-   <h2 id={id}>{action==='rename'?'Rename conversation':'Delete conversation?'}</h2>
-   {action==='rename'?<label>Conversation title<input maxLength={120} value={name} onChange={e=>setName(e.target.value)} required/></label>:<p>The conversation “{title}” and its messages will be permanently deleted.</p>}
+   <h2 id={id}>{action==='rename'?'Rename conversation':project?'Delete project?':'Delete conversation?'}</h2>
+   {action==='rename'?<label>Conversation title<input maxLength={120} value={name} onChange={e=>setName(e.target.value)} required/></label>:project?<><p>Move “{title}” to Deleted projects. You can restore it with its contents from the project directory.</p>
+    <label>Type the exact project name<input maxLength={120} value={name} onChange={e=>setName(e.target.value)} required/></label></>:<p>The conversation “{title}” and its messages will be permanently deleted.</p>}
    {error&&<p className="inline-error" role="alert">{error}</p>}
    <div><button type="button" disabled={busy} onClick={dismiss}>Cancel</button>
-    <button type="submit" disabled={busy||!name.trim()} className={action==='delete'?'chat-menu-danger':undefined}>{action==='rename'?'Save name':'Delete'}</button>
+    <button type="submit" disabled={busy||(project?name!==title:!name.trim())} className={action==='delete'?'chat-menu-danger':undefined}>{action==='rename'?'Save name':'Delete'}</button>
    </div>
   </form>
  </dialog>,document.body);

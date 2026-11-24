@@ -12,7 +12,7 @@ export const projectDirectory:ProjectLocation={id:'',creating:false};
 
 type Project={
  id:string;name:string;description:string;instructions:string;default_model:string|null;
- default_mode:string|null;archived_at:string|null;owner_id?:string;member_role?:string;
+ default_mode:string|null;archived_at:string|null;deleted_at?:string|null;owner_id?:string;member_role?:string;
 };
 type Chat={id:string;title:string;project_id:string|null;pinned:boolean;archived:boolean;updated_at:string};
 const sections=['Chats','Sources','Instructions','Artifacts','Members','Settings'] as const;
@@ -22,6 +22,10 @@ export default function Projects({tick,refresh,location,changeLocation}:{tick:nu
  const {data,error}=useResource('projects',tick);
  const {id,creating}=location;
  const [archives,setArchives]=useState(false);
+ const [trash,setTrash]=useState(false);
+ const {data:deletedProjects,error:trashError}=useResource(trash?'projects?deleted=true':'',tick);
+ const [notice,setNotice]=useState('');
+
  const [busy,setBusy]=useState(false),[problem,setProblem]=useState(''),[query,setQuery]=useState('');
  const {role}=useSession();
  const projects:Project[]=data??[];
@@ -34,12 +38,22 @@ export default function Projects({tick,refresh,location,changeLocation}:{tick:nu
   }
  },[current,creating]);
 
+ async function restore(project:Project){
+  setBusy(true);setProblem('');setNotice('');
+  try{
+   await api('projects/'+project.id+'/restore','POST');
+   setNotice('Project restored to '+(project.archived_at?'Archived projects.':'Active projects.'));
+   refresh();
+  }catch(e){setProblem((e as Error).message);}
+  finally{setBusy(false);}
+ }
+
  async function create(event:FormEvent<HTMLFormElement>){
   event.preventDefault();setBusy(true);setProblem('');
   try{
    const body=Object.fromEntries(new FormData(event.currentTarget));
    const project=await api('projects','POST',body);
-   changeLocation({id:project.id,creating:false});setArchives(false);refresh();
+   changeLocation({id:project.id,creating:false});setArchives(false);setTrash(false);refresh();
   }catch(e){setProblem((e as Error).message);}
   finally{setBusy(false);}
  }
@@ -47,18 +61,21 @@ export default function Projects({tick,refresh,location,changeLocation}:{tick:nu
  if(current&&!creating)return <section className="page project-page">
   <div className="project-content">
    <ProjectHome key={current.id} project={current} tick={tick} refresh={refresh}
+    onDeleted={()=>{returnFocus.current=true;setNotice('Project moved to Deleted projects.');setTrash(true);changeLocation(projectDirectory);refresh();}}
     back={()=>{returnFocus.current=true;setArchives(!!current.archived_at);changeLocation(projectDirectory);}}/>
   </div>
  </section>;
 
- const visibleProjects=projects.filter(project=>!!project.archived_at===archives&&
+ const directory:Project[]=trash?(deletedProjects??[]):projects;
+ const visibleProjects=directory.filter(project=>(trash?!!project.deleted_at:!!project.archived_at===archives)&&
   (project.name+' '+project.description).toLowerCase().includes(query.trim().toLowerCase()));
  return <section className="page project-page">
   <header className="page-head">
    <div><h1 tabIndex={-1} ref={directoryHeading}>Projects</h1><p>Keep related chats, sources, and artifacts together.</p></div>
    {!creating&&<button className="primary" disabled={role==='VIEWER'} onClick={()=>{changeLocation({id,creating:true});setProblem('');}}><Plus size={15}/>New project</button>}
   </header>
-  {(problem||error)&&<div className="error" role="alert">{problem||error}</div>}
+  {(problem||error||(trash&&trashError))&&<div className="error" role="alert">{problem||error||trashError}</div>}
+  {notice&&<p role="status">{notice}</p>}
   {creating?<section className="box project-create">
    <header>New project</header>
    <form className="form" onSubmit={create}>
@@ -69,24 +86,30 @@ export default function Projects({tick,refresh,location,changeLocation}:{tick:nu
   </section>:<>
    <div className="project-toolbar">
     <label className="project-search"><Search size={15} aria-hidden="true"/><input aria-label="Search projects" placeholder="Search projects" value={query} onChange={event=>setQuery(event.target.value)}/></label>
-    <button aria-pressed={archives} onClick={()=>setArchives(value=>!value)}><Archive size={14}/>{archives?'Archived':'Active'} projects</button>
+    <button aria-pressed={!trash&&!archives} onClick={()=>{setTrash(false);setArchives(false);}}>Active projects</button>
+    <button aria-pressed={!trash&&archives} onClick={()=>{setTrash(false);setArchives(true);}}><Archive size={14}/>Archived projects</button>
+    {role!=='VIEWER'&&<button aria-pressed={trash} onClick={()=>setTrash(true)}>Deleted projects</button>}
    </div>
-   {id&&!current?<p className="muted" role="status">Opening project…</p>:<>
+   {id&&!current?<p className="muted" role="status">{data?'Project unavailable.':'Opening project…'} {data&&<button className="link" onClick={()=>changeLocation(projectDirectory)}>Back to projects</button>}</p>:<>
     <div className="project-directory">
-     {visibleProjects.map(project=><button className="project-card" key={project.id} onClick={()=>{changeLocation({id:project.id,creating:false});setProblem('');}}>
+     {visibleProjects.map(project=>trash?<div className="box settings-content" key={project.id}>
+      <strong>{project.name}</strong><p>Deleted {displayDate(project.deleted_at!)}</p>
+      <button disabled={busy} onClick={()=>void restore(project)}>Restore project</button>
+     </div>:<button className="project-card" key={project.id} onClick={()=>{changeLocation({id:project.id,creating:false});setProblem('');}}>
       <Folder size={20} aria-hidden="true"/>
       <span><b>{project.name}</b>{project.description&&<small>{project.description}</small>}</span>
       <ArrowRight size={15} aria-hidden="true"/>
      </button>)}
     </div>
-    {data&&!visibleProjects.length&&<div className="box empty">{query?'No matching projects.':archives?'No archived projects.':'Create a project to get started.'}</div>}
-    {!data&&!error&&<p role="status">Loading projects…</p>}
+    {(trash?deletedProjects:data)&&!visibleProjects.length&&<div className="box empty">{query?'No matching projects.':trash?'No deleted projects.':archives?'No archived projects.':'Create a project to get started.'}</div>}
+    {!(trash?deletedProjects:data)&&!(trash?trashError:error)&&<p role="status">Loading projects…</p>}
    </>}
   </>}
  </section>;
 }
 
-function ProjectHome({project,tick,refresh,back}:{project:Project;tick:number;refresh:()=>void;back:()=>void}){
+function ProjectHome({project,tick,refresh,back,onDeleted}:{project:Project;tick:number;refresh:()=>void;back:()=>void;onDeleted:()=>void}){
+ const [deleteOpen,setDeleteOpen]=useState(false);
  const [active,setActive]=useState<typeof sections[number]>('Chats');
  const [fileMode,setFileMode]=useState<'Text sources'|'Files'>('Files');
  const heading=useRef<HTMLHeadingElement>(null);
@@ -113,6 +136,7 @@ function ProjectHome({project,tick,refresh,back}:{project:Project;tick:number;re
       <button role="menuitem" onClick={()=>{setActive('Sources');setFileMode('Files');dismiss();}}>{readOnly?'View sources':'Add sources'}</button>
       <button role="menuitem" onClick={()=>{setActive('Instructions');dismiss();}}>{readOnly?'View instructions':'Edit instructions'}</button>
       <button role="menuitem" onClick={()=>{setActive('Settings');dismiss();}}>Project settings</button>
+      {manage&&<button role="menuitem" className="chat-menu-danger" onClick={()=>{dismiss();setDeleteOpen(true);}}>Delete project</button>}
      </>}
     </ChatPopover>
    </div>
@@ -130,7 +154,7 @@ function ProjectHome({project,tick,refresh,back}:{project:Project;tick:number;re
   {active==='Artifacts'&&<ArtifactLibrary projectId={project.id} readOnly={readOnly} tick={tick} refresh={refresh}/>}
   {active==='Members'&&<ProjectMembers project={project} tick={tick} refresh={refresh} manage={manage&&!readOnly}/>}
   {active==='Settings'&&<>
-   <ProjectSettings key="settings" project={project} tick={tick} refresh={refresh} readOnly={readOnly} canArchive={manage}/>
+   <ProjectSettings key="settings" project={project} tick={tick} refresh={refresh} readOnly={readOnly} canArchive={manage} onDelete={manage?()=>setDeleteOpen(true):undefined}/>
    <section className="box">
     <header>Project tools</header>
     <div className="settings-content"><div className="actions">
@@ -139,6 +163,9 @@ function ProjectHome({project,tick,refresh,back}:{project:Project;tick:number;re
    </section>
    {user.role==='ADMIN'&&<ProjectConnections id={project.id} tick={tick}/>}
   </>}
+  {deleteOpen&&manage&&<ConversationDialog action="delete" title={project.name} project dismiss={()=>setDeleteOpen(false)} confirm={async name=>{
+   await api('projects/'+project.id,'DELETE',{name});onDeleted();
+  }}/>}
  </>;
 }
 
@@ -200,7 +227,7 @@ function ProjectChats({project,tick,refresh,start,canChat}:{project:Project;tick
  </section>;
 }
 
-function ProjectSettings({project,tick,refresh,readOnly,instructions=false,canArchive=false}:{project:Project;tick:number;refresh:()=>void;readOnly:boolean;instructions?:boolean;canArchive?:boolean}){
+function ProjectSettings({project,tick,refresh,readOnly,instructions=false,canArchive=false,onDelete}:{project:Project;tick:number;refresh:()=>void;readOnly:boolean;instructions?:boolean;canArchive?:boolean;onDelete?:()=>void}){
  const [busy,setBusy]=useState(false),[problem,setProblem]=useState(''),[saved,setSaved]=useState(false);
  const {data:catalog}=useResource('models?catalog=true',tick);
  const modelNames=[...new Set<string>([...(catalog?.models??[]).filter(isTextModel).map((model:{name:string})=>model.name),...(project.default_model?[project.default_model]:[])])];
@@ -239,6 +266,7 @@ function ProjectSettings({project,tick,refresh,readOnly,instructions=false,canAr
    {saved&&<p role="status">Saved.</p>}
    <div className="actions"><button className="primary" disabled={readOnly||busy}>{instructions?'Save instructions':'Save project'}</button>
     {!instructions&&canArchive&&<button type="button" disabled={busy} onClick={()=>void archive()}>{project.archived_at?'Restore project':'Archive project'}</button>}
+    {onDelete&&<button type="button" className="chat-menu-danger" disabled={busy} onClick={onDelete}>Delete project</button>}
    </div>
   </form>
  </section>;

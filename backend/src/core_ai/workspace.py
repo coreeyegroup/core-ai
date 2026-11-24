@@ -71,9 +71,44 @@ def archive_project(ident: uuid.UUID, body: ProjectArchive, user=Depends(auth.se
     return {'ok': True}
 
 
+class ProjectDeletion(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+
+
+@router.delete('/projects/{ident}')
+def delete_project(ident: uuid.UUID, body: ProjectDeletion, user=Depends(auth.session)):
+    return set_project_deleted(ident, user, body.name)
+
+
+@router.post('/projects/{ident}/restore')
+def restore_deleted_project(ident: uuid.UUID, user=Depends(auth.session)):
+    return set_project_deleted(ident, user, None)
+
+
+def set_project_deleted(ident, user, confirmed_name):
+    access.writer(user)
+    with db.connect() as conn:
+        project = access.project(conn, user, ident, include_deleted=True)
+        if user['role'] != 'ADMIN' and project['owner_id'] != user['id']:
+            raise HTTPException(403, 'Project owner access is required.')
+        current = conn.execute('SELECT name,deleted_at FROM projects WHERE id=%s FOR UPDATE', (ident,)).fetchone()
+        deleting = confirmed_name is not None
+        if deleting and current['name'] != confirmed_name:
+            raise HTTPException(422, 'Enter the exact project name shown.')
+        if deleting == bool(current['deleted_at']):
+            return {'ok': True}
+        conn.execute('UPDATE projects SET deleted_at=CASE WHEN %s THEN now() END,updated_at=now() WHERE id=%s',
+                     (deleting,ident))
+        db.event('project.deleted' if deleting else 'project.restored_from_trash', user['id'],
+                 {'project_id':str(ident)}, conn=conn)
+    return {'ok':True}
+
+
 @router.get('/projects/{ident}/connections')
 def project_connections(ident: uuid.UUID, user=Depends(auth.session)):
     access.admin(user)
+    with db.connect() as conn:
+        access.project(conn,user,ident)
     return db.query("""
         SELECT id,name,model,allowed_models,paused,expires_at,revoked_at
         FROM automation_connections WHERE project_id=%s ORDER BY created_at DESC
@@ -166,6 +201,8 @@ class SaveArtifact(Artifact):
 def artifact_access(conn,user,ident,write=False):
     row=conn.execute('SELECT * FROM workspace_artifacts WHERE id=%s'+(' FOR UPDATE' if write else ''),(ident,)).fetchone()
     if not row:raise HTTPException(404,'Artifact not found.')
+    if row['project_id'] and conn.execute('SELECT 1 FROM projects WHERE id=%s AND deleted_at IS NOT NULL', (row['project_id'],)).fetchone():
+        raise HTTPException(404, 'Artifact not found.')
     if row['source_run_id']:
         source = conn.execute("""SELECT r.project_id FROM runs r JOIN research_workflows w ON w.run_id=r.id
                                  WHERE r.id=%s""", (row['source_run_id'],)).fetchone()
@@ -208,6 +245,7 @@ def artifact_list(source_message_id:uuid.UUID|None=None,project_id:uuid.UUID|Non
     return db.query('''SELECT a.*,u.username AS owner FROM workspace_artifacts a JOIN users u ON u.id=a.owner_id
         WHERE (a.owner_id=%s OR %s='ADMIN' OR (a.visibility='PROJECT' AND EXISTS(SELECT 1 FROM project_members m WHERE m.project_id=a.project_id AND m.user_id=%s)))
         AND (%s::uuid IS NULL OR (a.owner_id=%s AND a.source_message_id=%s))
+        AND NOT EXISTS (SELECT 1 FROM projects p WHERE p.id=a.project_id AND p.deleted_at IS NOT NULL)
         AND (%s::uuid IS NULL OR a.project_id=%s)
         ORDER BY a.updated_at DESC LIMIT 200''',(user['id'],user['role'],user['id'],source_message_id,user['id'],source_message_id,project_id,project_id))
 

@@ -126,8 +126,10 @@ class Project(BaseModel):
     instructions: str = Field(default='',max_length=8000)
 
 @app.get('/api/v1/projects')
-def projects(user: User):
-    return access.allowed_projects(user)
+def projects(user: User, deleted: bool = False):
+    if deleted:
+        access.writer(user)
+    return access.allowed_projects(user, deleted)
 
 @app.post('/api/v1/projects', status_code=201)
 def create_project(body: Project, user: User):
@@ -233,8 +235,8 @@ def runs(user: User):
         r.created_at,r.started_at,r.finished_at,left(r.prompt,200) AS prompt,w.phase AS research_phase
         FROM runs r JOIN projects p ON p.id=r.project_id JOIN agents a ON a.id=r.agent_id
         LEFT JOIN research_workflows w ON w.run_id=r.id
-        WHERE %s='ADMIN' OR (EXISTS(SELECT 1 FROM project_members m WHERE m.project_id=r.project_id AND m.user_id=%s)
-                             AND (w.run_id IS NULL OR r.requested_by=%s))
+        WHERE p.deleted_at IS NULL AND (%s='ADMIN' OR (EXISTS(SELECT 1 FROM project_members m WHERE m.project_id=r.project_id AND m.user_id=%s)
+                             AND (w.run_id IS NULL OR r.requested_by=%s)))
         ORDER BY r.created_at DESC LIMIT 100''',(user['role'],user['id'],user['id']))
 
 @app.post('/api/v1/runs', status_code=201)
@@ -318,7 +320,7 @@ def documents(user: User, project_id: uuid.UUID | None = None):
     if project_id:
         with db.connect() as conn:access.project(conn,user,project_id)
         return db.query('SELECT * FROM documents WHERE project_id=%s ORDER BY created_at DESC', (project_id,))
-    return db.query("SELECT id,project_id,title,version,enabled,created_at FROM documents d WHERE %s='ADMIN' OR EXISTS(SELECT 1 FROM project_members m WHERE m.project_id=d.project_id AND m.user_id=%s) ORDER BY created_at DESC LIMIT 200",(user['role'],user['id']))
+    return db.query("SELECT d.id,d.project_id,d.title,d.version,d.enabled,d.created_at FROM documents d JOIN projects p ON p.id=d.project_id WHERE p.deleted_at IS NULL AND (%s='ADMIN' OR EXISTS(SELECT 1 FROM project_members m WHERE m.project_id=d.project_id AND m.user_id=%s)) ORDER BY created_at DESC LIMIT 200",(user['role'],user['id']))
 
 @app.post('/api/v1/documents', status_code=201)
 def add_document(body: Document, user: User):

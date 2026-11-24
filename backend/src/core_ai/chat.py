@@ -78,7 +78,7 @@ class Fork(Send):
 
 
 def owned(conn, ident, user_id, lock=False):
-    row=conn.execute('SELECT * FROM conversations WHERE id=%s AND user_id=%s'+(' FOR UPDATE' if lock else ''),(ident,user_id)).fetchone()
+    row=conn.execute('SELECT * FROM conversations c WHERE id=%s AND user_id=%s AND NOT EXISTS (SELECT 1 FROM projects p WHERE p.id=c.project_id AND p.deleted_at IS NOT NULL)'+(' FOR UPDATE' if lock else ''),(ident,user_id)).fetchone()
     if not row: raise HTTPException(404,'Conversation not found.')
     return row
 
@@ -159,7 +159,8 @@ def enqueue(conn,ident,user,body):
 def conversations(q: str = '', archived: bool = False, project_id:uuid.UUID|None=None, all_statuses:bool=False,user=Depends(auth.session)):
     q=q[:200]
     return db.query('''SELECT c.*, (SELECT count(*) FROM chat_messages m WHERE m.conversation_id=c.id) AS message_count
-        FROM conversations c WHERE c.user_id=%s AND (%s OR c.archived=%s) AND (%s::uuid IS NULL OR c.project_id=%s) AND
+        FROM conversations c WHERE c.user_id=%s AND NOT EXISTS (SELECT 1 FROM projects p WHERE p.id=c.project_id AND p.deleted_at IS NOT NULL)
+        AND (%s OR c.archived=%s) AND (%s::uuid IS NULL OR c.project_id=%s) AND
         (%s='' OR c.title ILIKE %s OR EXISTS(SELECT 1 FROM chat_messages m WHERE m.conversation_id=c.id AND m.content ILIKE %s))
         ORDER BY c.pinned DESC,c.updated_at DESC LIMIT 200''',(user['id'],all_statuses,archived,project_id,project_id,q,'%'+q+'%','%'+q+'%'))
 
