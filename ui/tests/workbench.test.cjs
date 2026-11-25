@@ -553,6 +553,14 @@ test('custom workbench navigates, splits and opens every implemented module',asy
   assert.match(directory().querySelector('.project-card').textContent,/First Research Project/);
 
   await navigate('Tools');
+  assert.equal(new URL(window.location.href).searchParams.get('view'),'Tools');
+  await navigate('Skills');
+  assert.equal(new URL(window.location.href).searchParams.get('view'),'Skills');
+  await act(async()=>{window.history.pushState(null,'','/?view=Tools#repository-coverage');window.dispatchEvent(new window.PopStateEvent('popstate'));await wait();});
+  assert.equal(document.querySelector('.view:not([hidden])').getAttribute('aria-label'),'Tools');
+  assert.ok(document.querySelector('.view:not([hidden]) details[data-repository-coverage]').open);
+  assert.match(document.querySelector('.view:not([hidden])').textContent,/Source repositories: 1\/1 verified/);
+
   const toolsView=document.querySelector('.view:not([hidden])');
   assert.match(toolsView.textContent,/1 \/ 1 qualified/);
   await act(async()=>{button(toolsView,'Inspect / run').click();});
