@@ -22,11 +22,11 @@ def enqueue(conn, *, project_id, agent, prompt, model, user_id, connection_id=No
     ident = uuid.uuid4()
     conn.execute("""
         INSERT INTO runs(id,project_id,agent_id,agent_version,instructions,prompt,model,status,
-                         requested_by,runtime_mode,tools,connection_id,request_id,timeout_seconds,max_output_tokens,context_tokens,retry_of,operation,skill_context,skill_versions)
-        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                         requested_by,runtime_mode,tools,connection_id,request_id,timeout_seconds,max_output_tokens,context_tokens,retry_of,operation,skill_context,skill_versions,program_scope)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
     """, (ident, project_id, agent.get('id'), agent.get('version'), agent.get('instructions', ''), prompt, model,
           'SCHEDULED' if scheduled else 'QUEUED', user_id, agent.get('runtime_mode', 'analysis'), Jsonb(agent.get('tools', [])), connection_id, request_id,
-          timeout_seconds, max_output_tokens, context_tokens, retry_of, operation, context, Jsonb(versions)))
+          timeout_seconds, max_output_tokens, context_tokens, retry_of, operation, context, Jsonb(versions),Jsonb(agent.get('program_scope',[]))))
     detail = {'agent_version': agent.get('version')}
     if connection_id is not None:
         detail['connection_id'] = str(connection_id)

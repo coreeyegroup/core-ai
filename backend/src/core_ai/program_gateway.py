@@ -58,8 +58,8 @@ def get_catalog():
 def list_programs(user=Depends(auth.session)):
     return get_catalog()
 
-def invoke(body):
-    return request({"action":"run",**body.model_dump()})
+def invoke(body,execution=None):
+    return request({"action":"run",**body.model_dump(),**(execution or {})})
 
 @router.post("/run")
 def manual_run(body:RunInput,user=Depends(auth.session)):
@@ -73,12 +73,17 @@ def manual_run(body:RunInput,user=Depends(auth.session)):
     db.event("program.completed",user["id"],{"recipe":body.recipe,"execution_id":result["id"],"commit":result["commit"]})
     return result
 
-def agent_catalog():
+def agent_catalog(run=None,user=None):
+    from . import capability_policy
     catalog=get_catalog()
     return {"programs":[{k:p[k] for k in ("id","fields","example","extensions","mode")}
-                        for p in catalog["programs"] if p["state"]=="qualified-receipt"]}
+                        for p in catalog["programs"] if p["state"]=="qualified-receipt" and
+                        (run is None or capability_policy.program_allowed(run,user,p["id"]))]}
 
 def agent_run(body,user,run):
+    from . import capability_policy,program_jobs
+    if not capability_policy.program_allowed(run,user,body.recipe):
+        raise ValueError('Program is outside the agent capability scope.')
     extension=None
     data=None
     if body.file_id is not None:
@@ -94,7 +99,7 @@ def agent_run(body,user,run):
         if len(raw)>4*1024*1024: raise HTTPException(413,"Program input exceeds 4 MiB.")
         extension=PurePath(row["name"]).suffix.lower()
         data=base64.b64encode(raw).decode("ascii")
-    result=invoke(RunInput(recipe=body.recipe,values=body.values,extension=extension,file_data=data))
+    result=program_jobs.wait(user,RunInput(recipe=body.recipe,values=body.values,extension=extension,file_data=data),run)
     generated=result.pop("file",None)
     if generated:
         raw=base64.b64decode(generated["data"],validate=True)

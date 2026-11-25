@@ -17,7 +17,7 @@ DOMAIN {
         reverse_proxy 127.0.0.1:18787
     }
     @program_run {
-        path /api/v1/programs/run
+        path /api/v1/programs/run /api/v1/programs/jobs
         method POST
     }
     handle @program_run {

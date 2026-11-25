@@ -23,6 +23,10 @@ MAX_FRAME=10*1024*1024
 SOCKET="/run/core-ai-lab/gateway.sock"
 RUN_SLOT=threading.BoundedSemaphore(1)
 REQUEST_SLOTS=threading.BoundedSemaphore(4)
+ACTIVE_LOCK=threading.Lock()
+ACTIVE_JOBS={}
+CATALOG_LOCK=threading.Lock()
+CATALOG_CACHE={}
 
 class Busy(ValueError):
     pass
@@ -64,7 +68,7 @@ def metadata(name,tag,module):
             "mode":"mock" if name=="research-mock" else "offline",
             "state":"pending"}
 
-def catalog(root):
+def build_catalog(root):
     pins=manager.load_manifest(manager.HERE/"repositories.json")
     rows={repo:{"repository":repo,"commit":commit,"source_present":False,"recipes":[],
                 "coverage":"not-reviewed-for-installation"} for repo,commit in pins.items()}
@@ -93,6 +97,37 @@ def catalog(root):
         row["recipes"].append(name)
         programs.append(item)
     return {"schema":1,"programs":programs,"repositories":list(rows.values())}
+
+def catalog(root):
+    with CATALOG_LOCK:
+        cached=CATALOG_CACHE.get(str(root))
+        if cached and time.monotonic()-cached[0]<15:
+            return cached[1]
+        data=build_catalog(root)
+        CATALOG_CACHE[str(root)]=(time.monotonic(),data)
+        return data
+
+def cancel_job(ident):
+    if not isinstance(ident,str) or len(ident)!=32 or any(c not in "0123456789abcdef" for c in ident):
+        raise ValueError("Invalid job ID")
+    with ACTIVE_LOCK:
+        signal=ACTIVE_JOBS.get(ident)
+        if signal: signal.set()
+        return {"accepted":signal is not None}
+
+def run_cancellable(args,container,signal,timeout,out,err):
+    deadline=time.monotonic()+timeout
+    with subprocess.Popen(args,stdout=out,stderr=err) as proc:
+        while proc.poll() is None:
+            if signal.is_set() or time.monotonic()>=deadline:
+                proc.kill()
+                proc.wait(timeout=5)
+                subprocess.run(["docker","kill",container],timeout=15,check=False,
+                    stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+                if signal.is_set():raise ValueError("Program cancelled")
+                raise subprocess.TimeoutExpired(args,timeout)
+            signal.wait(.2)
+        return proc
 
 def decode_file(value):
     if not isinstance(value,str) or len(value)>((MAX_FILE+2)//3)*4:
@@ -139,13 +174,20 @@ def prepare(root,name,values,extension,file_data,work,container):
     return plan,args
 
 def execute(root,request,temp_root):
-    if set(request)!={"action","recipe","values","extension","file_data"}:
-        raise ValueError("Unexpected execution request fields")
+    legacy={"action","recipe","values","extension","file_data"}
+    tracked=legacy|{"job_id","expected_commit","expected_image"}
+    if set(request) not in (legacy,tracked): raise ValueError("Unexpected execution request fields")
+    job=request.get("job_id")
+    if job is not None and (not isinstance(job,str) or len(job)!=32 or any(c not in "0123456789abcdef" for c in job)):
+        raise ValueError("Invalid job ID")
     name=request["recipe"]
     if not isinstance(name,str): raise ValueError("Expected a reviewed recipe ID")
     if not RUN_SLOT.acquire(blocking=False):
         raise Busy("Execution slot is busy; retry after the current run")
     ident=uuid.uuid4().hex
+    signal=threading.Event()
+    if job is not None:
+        with ACTIVE_LOCK: ACTIVE_JOBS[job]=signal
     container="core-ai-lab-gateway-"+ident
     start=time.monotonic()
     plan=None
@@ -155,11 +197,14 @@ def execute(root,request,temp_root):
             work=Path(directory)
             plan,args=prepare(root,name,request["values"],request["extension"],request["file_data"],work,container)
             record.update(repo=plan["repo"],commit=plan["commit"],image=plan["image"])
+            if job is not None and (plan["commit"]!=request["expected_commit"] or plan["image"]!=request["expected_image"]):
+                raise ValueError("Queued version no longer matches reviewed runtime")
+            if signal.is_set(): raise ValueError("Program cancelled")
             # prlimit bounds output files without unsafe preexec_fn in threaded server.
             with tempfile.TemporaryFile(dir=work) as out, tempfile.TemporaryFile(dir=work) as err:
                 try:
-                    proc=subprocess.run(["prlimit","--fsize="+str(MAX_OUTPUT+1),"--",*args],
-                        stdout=out,stderr=err,timeout=plan["timeout"],check=False)
+                    command=["prlimit","--fsize="+str(MAX_OUTPUT+1),"--",*args]
+                    proc=run_cancellable(command,container,signal,plan["timeout"],out,err) if job is not None else subprocess.run(command,stdout=out,stderr=err,timeout=plan["timeout"],check=False)
                 except subprocess.TimeoutExpired:
                     record["state"]="timeout"
                     raise ValueError("Program timed out") from None
@@ -201,12 +246,15 @@ def execute(root,request,temp_root):
                 record["duration_seconds"]=round(time.monotonic()-start,3)
                 manager.write_new(manager.safe_path(root,"reports","gateway",ident+".json"),record)
         finally:
+            if job is not None:
+                with ACTIVE_LOCK: ACTIVE_JOBS.pop(job,None)
             RUN_SLOT.release()
 
 def route(root,request,temp_root):
     if not isinstance(request,dict): raise ValueError("Expected an object")
     if request=={"action":"catalog"}: return catalog(root)
     if request.get("action")=="run": return execute(root,request,temp_root)
+    if set(request)=={"action","job_id"} and request["action"]=="cancel": return cancel_job(request["job_id"])
     raise ValueError("Unknown gateway action")
 
 class Handler(socketserver.StreamRequestHandler):

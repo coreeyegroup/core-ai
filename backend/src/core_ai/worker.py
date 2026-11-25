@@ -7,7 +7,7 @@ import time
 import uuid
 import httpx
 from psycopg.types.json import Jsonb
-from . import db, models, chat, files, access, agent_runtime, webhooks, research
+from . import db, models, chat, files, access, agent_runtime, webhooks, research, execution_policy, program_jobs, missions
 
 stopping = threading.Event()
 
@@ -108,6 +108,8 @@ def execute(run):
         result=agent_runtime.execute(run,stopping)
         finish(run['id'],'SUCCEEDED',output=result)
         return
+    policy=execution_policy.get()
+    execution_policy.admit_model(run['model'],policy)
     project, docs = None, []
     if run['project_id'] is not None:
         with db.connect() as conn:
@@ -124,7 +126,7 @@ If the supplied sources do not support a claim, state that limitation. Do not cl
     output = []
     started = time.monotonic()
     # Streaming permits prompt cancellation even when generation has started.
-    with httpx.Client(timeout=httpx.Timeout(min(30, run['timeout_seconds']), connect=8), trust_env=False, follow_redirects=False) as client:
+    with httpx.Client(timeout=execution_policy.timeout(min(policy.model_read_seconds,run['timeout_seconds'])), trust_env=False, follow_redirects=False) as client:
         with client.stream('POST', cfg['endpoint']+'/api/chat', json={
             'model':run['model'], 'messages':[{'role':'system','content':system},{'role':'user','content':run['prompt']}],
             'stream':True, 'options':{'num_predict':run['max_output_tokens'],'num_ctx':run['context_tokens']}, 'keep_alive':'5m'
@@ -210,6 +212,16 @@ def process_files():
             stopping.wait(3)
 
 
+def process_programs():
+    while not stopping.is_set():
+        try:
+            missions.advance()
+            job=program_jobs.claim()
+            if job: program_jobs.process(job,stopping)
+            else: stopping.wait(.5)
+        except Exception:
+            stopping.wait(2)
+
 def main():
     for sig in (signal.SIGTERM, signal.SIGINT):
         signal.signal(sig, lambda *_: stopping.set())
@@ -224,6 +236,8 @@ def main():
         webhook_thread.start()
         file_thread = threading.Thread(target=process_files, daemon=True)
         file_thread.start()
+        program_thread=threading.Thread(target=process_programs,daemon=True)
+        program_thread.start()
         last_automation = None
         try:
             while not stopping.is_set():
@@ -265,6 +279,7 @@ def main():
             thread.join(timeout=6)
             webhook_thread.join(timeout=6)
             file_thread.join(timeout=22)
+            program_thread.join(timeout=5)
 
 if __name__ == '__main__':
     main()
