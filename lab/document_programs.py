@@ -2,6 +2,10 @@
 """Run pinned upstream document utilities independently of CORE-AI."""
 import argparse
 import json
+import os
+import shutil
+import tempfile
+import zipfile
 from pathlib import Path
 import subprocess
 import sys
@@ -53,9 +57,69 @@ for marker in ('<!-- Slide number: 1 -->', '<!-- Slide number: 2 -->', 'CoreEye 
         raise SystemExit('Missing slide extraction marker: ' + marker)
 print(out)
 """
+DOCX_SMOKE = """from docx import Document
+import subprocess, sys
+d = Document()
+p = d.add_paragraph()
+p.add_run('CoreEye ')
+p.add_run('qualification')
+p.add_run(' bold').bold = True
+d.save('/tmp/source.docx')
+subprocess.run([sys.executable, sys.argv[1], '/tmp/source.docx', '-o', '/tmp/result.docx'], check=True)
+before = Document('/tmp/source.docx').paragraphs[0]
+after = Document('/tmp/result.docx').paragraphs[0]
+if len(before.runs) != 3 or len(after.runs) != 2 or before.text != after.text or after.runs[-1].bold is not True:
+    raise SystemExit('DOCX merge did not preserve text and formatting')
+print('PASS: DOCX run merge, text and bold formatting preserved')
+"""
+XLSX_SMOKE = """from openpyxl import Workbook, load_workbook
+import json, subprocess, sys
+p = '/tmp/fixture.xlsx'
+w = Workbook()
+s = w.active
+s['A1'] = 6
+s['A2'] = 7
+s['B1'] = '=A1*A2'
+s['C1'] = 'CoreEye'
+w.save(p)
+out = subprocess.check_output([sys.executable, sys.argv[1], p, '60'], text=True)
+r = json.loads(out)
+if r.get('status') != 'success' or r.get('total_errors') != 0 or r.get('total_formulas') != 1:
+    raise SystemExit('Unexpected recalc report: ' + out)
+f = load_workbook(p)
+v = load_workbook(p, data_only=True)
+if f.active['B1'].value != '=A1*A2' or v.active['B1'].value != 42 or f.active['C1'].value != 'CoreEye':
+    raise SystemExit('Formula, cached value or original data was not preserved')
+print(out)
+print('PASS: XLSX formula retained, cached value = 42')
+"""
+# The edit wrapper emits only the resulting file on stdout. Upstream messages
+# go to stderr, and errors never publish a destination.
+EDIT = """import json, shutil, subprocess, sys, zipfile
+from pathlib import Path
+kind, entry, source = sys.argv[1:]
+target = Path('/tmp/result.' + ('docx' if kind == 'docx-merge-runs' else 'xlsx'))
+if kind == 'docx-merge-runs':
+    subprocess.run([sys.executable, entry, source, '-o', str(target)], check=True, stdout=sys.stderr)
+else:
+    shutil.copyfile(source, target)
+    out = subprocess.check_output([sys.executable, entry, str(target), '60'], text=True)
+    print(out, file=sys.stderr)
+    r = json.loads(out)
+    if r.get('status') != 'success' or r.get('total_errors') != 0 or r.get('not_computed'):
+        raise SystemExit('Recalculation not fully successful; output withheld')
+if not target.is_file() or target.stat().st_size > 32*1024*1024 or not zipfile.is_zipfile(target):
+    raise SystemExit('Invalid or oversized office output')
+with target.open('rb') as f:
+    shutil.copyfileobj(f, sys.stdout.buffer)
+"""
+EDIT_RECIPES = {"docx-merge-runs", "xlsx-recalc"}
+
 RECIPES = {
     "pdf-form-check": ("skills/pdf/scripts/check_fillable_fields.py", {".pdf"}, PDF_SMOKE),
     "pptx-text": ("skills/pptx/scripts/slide_text.py", {".pptx", ".pptm", ".potx", ".ppsx"}, PPTX_SMOKE),
+    "docx-merge-runs": ("skills/docx/scripts/merge_runs.py", {".docx"}, DOCX_SMOKE),
+    "xlsx-recalc": ("skills/xlsx/scripts/recalc.py", {".xlsx"}, XLSX_SMOKE),
 }
 
 def plan(name, image):
@@ -99,26 +163,73 @@ def command(root, name, image, path, container):
     path = input_file(path, name)
     checkout = manager.source(root, REPO, COMMIT)
     target = "/input" + path.suffix.lower()
+    step = ["python3", RECIPES[name][0], target]
+    if name in EDIT_RECIPES:
+        step = ["python3", "-c", EDIT, name, RECIPES[name][0], target]
     p = manager.validate_plan({"repo": REPO, "commit": COMMIT, "image": image,
-         "steps": [["python3", RECIPES[name][0], target]], "timeout": 120})
+         "steps": [step], "timeout": 120})
     args = manager.docker_args(checkout, p, container)
     index = args.index("--entrypoint")
     args[index:index] = ["--mount", f"type=bind,src={path},dst={target},readonly"]
     return p, args
 
-def run(root, name, image, path):
+def output_path(path, name, source):
+    if path is None or path.suffix.lower() not in RECIPES[name][1]:
+        raise ValueError("Supply --output with the matching file extension")
+    if path.exists() or path.is_symlink() or path.resolve() == source.resolve():
+        raise ValueError("Output already exists or equals input; no overwrite")
+    return path.parent.resolve(strict=True) / path.name
+
+def publish_output(stream, dest, name):
+    size = stream.seek(0, os.SEEK_END)
+    if not 0 < size <= 32 * 1024 * 1024:
+        raise ValueError("Invalid or oversized output")
+    stream.seek(0)
+    with zipfile.ZipFile(stream) as zf:
+        expected = "word/document.xml" if name == "docx-merge-runs" else "xl/workbook.xml"
+        if expected not in zf.namelist() or "[Content_Types].xml" not in zf.namelist():
+            raise ValueError("Unexpected Office output structure")
+    stream.seek(0)
+    # A new temporary file in the destination directory, followed by an
+    # exclusive hard-link publication; never replace an existing user file.
+    with tempfile.NamedTemporaryFile(dir=dest.parent, prefix=".core-ai-", delete=True) as tmp:
+        shutil.copyfileobj(stream, tmp)
+        tmp.flush()
+        os.fsync(tmp.fileno())
+        os.link(tmp.name, dest)
+
+def _file_limit():
+    import resource
+    cap = 32 * 1024 * 1024
+    resource.setrlimit(resource.RLIMIT_FSIZE, (cap, cap))
+
+def run(root, name, image, path, output=None):
     dest, data = receipt(root, name, image)
     if not dest.is_file() or json.loads(dest.read_text()) != data:
         raise ValueError("Qualify this recipe and exact runtime image first")
     manager.verify(manager.source(root, REPO, COMMIT), COMMIT)
+    path = input_file(path, name)
+    if name in EDIT_RECIPES:
+        output = output_path(output, name, path)
+    elif output is not None:
+        raise ValueError("Read-only recipes do not accept --output")
     container = "core-ai-lab-doc-" + uuid.uuid4().hex
     p, args = command(root, name, image, path, container)
     state = {"repo": REPO, "commit": COMMIT, "recipe": name, "image": image,
              "state": "failed", "exit_code": None}
     try:
-        result = subprocess.run(args, timeout=p["timeout"], check=False)
+        if output is None:
+            result = subprocess.run(args, timeout=p["timeout"], check=False)
+        else:
+            with tempfile.TemporaryFile() as stream:
+                result = subprocess.run(args, timeout=p["timeout"], check=False,
+                                        stdout=stream, preexec_fn=_file_limit)
+                if result.returncode == 0:
+                    publish_output(stream, output, name)
         state.update(exit_code=result.returncode,
                      state="passed-exit" if result.returncode == 0 else "failed")
+        if output is not None and result.returncode == 0:
+            print("Created:", output)
     except subprocess.TimeoutExpired:
         state["state"] = "timeout"
         subprocess.run(["docker", "kill", container], timeout=20, check=False,
@@ -140,6 +251,7 @@ def main():
             p.add_argument("--approve", required=True)
         if action == "run":
             p.add_argument("--input", required=True, type=Path)
+            p.add_argument("--output", type=Path)
     args = parser.parse_args()
     if args.action == "list":
         for name, (entry, extensions, _) in RECIPES.items():
@@ -152,11 +264,11 @@ def main():
         return 0
     if args.action == "install":
         return install(args.root, args.recipe, args.image, args.approve)
-    return run(args.root, args.recipe, args.image, args.input)
+    return run(args.root, args.recipe, args.image, args.input, args.output)
 
 if __name__ == "__main__":
     try:
         sys.exit(main())
-    except (ValueError, OSError, subprocess.SubprocessError) as exc:
+    except (ValueError, OSError, subprocess.SubprocessError, zipfile.BadZipFile) as exc:
         print("STOP:", str(exc), file=sys.stderr)
         sys.exit(1)
