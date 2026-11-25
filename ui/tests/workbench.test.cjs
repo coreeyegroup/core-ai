@@ -7,6 +7,7 @@ test('custom workbench navigates, splits and opens every implemented module',asy
  const responses={'chat/conversations?archived=false&q=':[],session:{username:'test-admin',role:'ADMIN',csrf:'csrf-test'},overview,projects:[{id:'project',name:'Project one',description:'',created_at:new Date().toISOString()}],agents:[{id:'agent',name:'Analyst',instructions:'Test',version:1,enabled:true}],models:{available:true,models:[{name:'test:latest',size:1000000},{name:'editor:latest',size:1000000}],config:overview.inference},runs:[],events:[],documents:[],artifacts:[],files:[],'library/artifacts':[],'access/users':[],capabilities:{features:[]},'operations/metrics':{tasks:[],chat:[],files:[]},tools:[],connections:[],'connections/webhook-destinations':[],'connections/key-storage':{available:true}};
   const catalogCommit='a'.repeat(40);
   const catalogRow={id:'collection',repository:'example/skills',git_ref:'HEAD',active_commit:null,latest_commit:catalogCommit,skill_count:1};
+  responses.programs={schema:1,programs:[{id:'position-sizing',repository:'example/trading',commit:catalogCommit,runtime:'python:3.12-slim',fields:['account','risk_pct','entry','stop','fee_rate','slippage'],example:[10000,.01,100,95,0,0],extensions:[],output_file:false,mode:'offline',state:'qualified-receipt'}],repositories:[{repository:'example/trading',commit:catalogCommit,source_present:true,recipes:['position-sizing'],coverage:'partial-reviewed-recipes'}]};
   responses.skills=[catalogRow];
   responses['skills/collections/collection?commit='+catalogCommit]={
    ...catalogRow,commit:catalogCommit,releases:[{commit_sha:catalogCommit,skill_count:1}],
@@ -29,6 +30,10 @@ test('custom workbench navigates, splits and opens every implemented module',asy
    excluded:[],changes:{added:['macro-event-analysis/SKILL.md'],removed:[],changed:[]}
   };
  let conversationCount=0,agentCount=0;const writes=[],connectionWrites=[],researchWrites=[],assignmentWrites=[];const fetchOld=global.fetch;global.fetch=async(path,options={})=>{fetched.push(path);const key=path.replace('/api/v1/','');let result=responses[key==='models?catalog=true'?'models':key]??{};
+  if(options.method==='POST'&&key==='programs/run'){
+   assert.deepEqual(JSON.parse(options.body),{recipe:'position-sizing',values:[10000,.01,100,95,0,0],extension:null,file_data:null});
+   result={id:'execution-test',recipe:'position-sizing',state:'succeeded',commit:catalogCommit,image:'sha256:'+'a'.repeat(64),provenance:'offline-program',result:{units:20},file:null};
+  }
   if(options.method==='POST'&&key==='agents'){
    result={id:['new-agent','studio-agent','guided-agent'][agentCount++]};
    responses['skills/agents/'+result.id]=[];
@@ -543,6 +548,13 @@ test('custom workbench navigates, splits and opens every implemented module',asy
   await act(async()=>{button(directory(),'Active projects').click();});
   assert.match(directory().querySelector('.project-card').textContent,/First Research Project/);
 
+  await navigate('Tools');
+  const toolsView=document.querySelector('.view:not([hidden])');
+  assert.match(toolsView.textContent,/1 \/ 1 qualified/);
+  await act(async()=>{button(toolsView,'Inspect / run').click();});
+  await act(async()=>{button(toolsView,'Run qualified program').click();await wait();});
+  assert.match(toolsView.textContent,/execution-test/);
+  assert.match(toolsView.textContent,/"units": 20/);
   const importedDefinition={name:'Repository Reviewer',path:'.github/agents/reviewer.agent.md',description:'Review changes'};
   responses['skills/collections/collection?commit='+catalogCommit].agent_definitions=[importedDefinition];
   const agentQuery=new URLSearchParams({commit:catalogCommit,path:importedDefinition.path});

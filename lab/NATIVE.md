@@ -43,11 +43,13 @@ tag and pass it to the native manager if one already exists.
     # Copy exact displayed digest after inspecting the plan.
     python3 lab/native_host.py verify --approve REVIEWED_DIGEST
 
-The probe runs --version and plugin list in fresh offline non-root
-containers. Only the pinned plugin source is mounted read-only;
+The probe runs --version and the native plugin/skill API in fresh offline non-root
+containers. It copies the existing image configuration into the temporary
+container-global configuration directory, not the host filesystem. This addresses
+the observed API location /home/node versus project configuration /workspace. Only the pinned plugin source is mounted read-only;
 container home and workspace are temporary. It records version match
-and whether the listing mentions superpowers, not a full qualification.
-Inspect the actual listing for active plugin status. An absent plugin,
+and actual API plugin identifiers plus all expected source skill IDs, not a full
+model-driven qualification. Inspect the reported plugin status. An absent plugin,
 timeout or version mismatch must be investigated; never mark a failed
 plugin as qualified. The runtime may require further dependencies or a
 different supported version. No automatic provider setup is performed.

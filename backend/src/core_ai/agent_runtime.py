@@ -4,7 +4,7 @@ import time
 import httpx
 from pydantic import BaseModel,ConfigDict,Field
 from psycopg.types.json import Jsonb
-from . import access,db,models
+from . import access,db,models,program_gateway
 from .workspace import Artifact,new_artifact
 
 class Query(BaseModel):
@@ -21,7 +21,9 @@ class Draft(BaseModel):
 
 SCHEMAS={'knowledge.search':('knowledge_search','Search the current project sources for a keyword or phrase.',Query),
          'project.inspect':('project_inspect','Read the current project and available source titles.',Inspect),
-         'artifact.create':('artifact_create','Create a private Markdown artifact in the current project.',Draft)}
+         'artifact.create':('artifact_create','Create a private Markdown artifact in the current project.',Draft),
+         'program.list':('program_list','Discover qualified offline programs, input order, examples and file types.',program_gateway.Discover),
+         'program.run':('program_run','Run an approved offline recipe with a JSON values array and optional current-project file ID. Mock research is not live evidence; no orders or host commands.',program_gateway.AgentProgram)}
 
 def actor(run,write=False):
     with db.connect() as conn:
@@ -41,6 +43,16 @@ def dispatch(run,name,args,step):
     user=actor(run,write=name=='artifact.create')
     schema=SCHEMAS[name][2]
     body=schema.model_validate(args)
+    if name in ('program.list','program.run'):
+        # No database transaction is held while external runtime executes.
+        result=program_gateway.agent_catalog() if name=='program.list' else program_gateway.agent_run(body,user,run)
+        with db.connect() as conn:
+            access.project(conn,user,run['project_id'])
+            state=conn.execute('SELECT status FROM runs WHERE id=%s',(run['id'],)).fetchone()
+            if not state or state['status']!='RUNNING':raise InterruptedError('Execution stopped.')
+            conn.execute("INSERT INTO agent_steps(run_id,step,kind,tool,input,result) VALUES (%s,%s,'tool',%s,%s,%s)",(run['id'],step,name,Jsonb(args),Jsonb(result)))
+            db.event('tool.completed',user['id'],{'tool':name,'step':step,'execution_id':result.get('id')},run['id'],conn)
+        return result
     with db.connect() as conn:
         access.project(conn,user,run['project_id'],name=='artifact.create')
         if name=='knowledge.search':

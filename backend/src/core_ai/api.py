@@ -9,7 +9,7 @@ from fastapi import FastAPI, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel, Field
-from . import __version__, auth, db, models, access, runs as run_queue, research as research_workflow
+from . import __version__, auth, db, models, access, runs as run_queue, research as research_workflow, agent_runtime, program_gateway
 
 @asynccontextmanager
 async def lifespan(app):
@@ -21,6 +21,12 @@ User = Annotated[dict, Depends(auth.session)]
 
 @app.middleware('http')
 async def private_headers(request, call_next):
+    if request.url.path=='/api/v1/programs/run' and request.method=='POST':
+        try:auth.session(request)
+        except HTTPException as exc:return JSONResponse({'detail':exc.detail},status_code=exc.status_code)
+        length=request.headers.get('content-length','')
+        if not length.isascii() or not length.isdigit() or len(length)>7 or int(length)>6*1024*1024:
+            return JSONResponse({'detail':'Program requests require a body of at most 6 MiB.'},status_code=413)
     if request.url.path=='/api/v1/files' and request.method=='POST':
         # Authenticate before parsing a potentially large multipart body.
         try:auth.session(request)
@@ -145,7 +151,7 @@ class Agent(BaseModel):
     instructions: str = Field(min_length=1, max_length=16000)
     enabled: bool = True
     runtime_mode: str = Field(default='analysis',pattern=r'^(analysis|tools)$')
-    tools: list[str] = Field(default_factory=lambda:['knowledge.search','project.inspect'],max_length=3)
+    tools: list[str] = Field(default_factory=lambda:['knowledge.search','project.inspect'],max_length=5)
 
 @app.get('/api/v1/agents')
 def agents(user: User, include_deleted: bool = False):
@@ -158,7 +164,7 @@ def create_agent(body: Agent, user: User):
     access.writer(user)
     ident = uuid.uuid4()
     from psycopg.types.json import Jsonb
-    if any(t not in ('knowledge.search','project.inspect','artifact.create') for t in body.tools):raise HTTPException(422,'Unsupported agent tool.')
+    if any(t not in agent_runtime.SCHEMAS for t in body.tools):raise HTTPException(422,'Unsupported agent tool.')
     db.query('INSERT INTO agents(id,name,instructions,enabled,owner_id,runtime_mode,tools) VALUES (%s,%s,%s,%s,%s,%s,%s)',
              (ident, body.name, body.instructions, body.enabled,user['id'],body.runtime_mode,Jsonb(body.tools)))
     db.event('agent.created', user['id'], {'id': str(ident)})
@@ -169,7 +175,7 @@ def update_agent(ident: uuid.UUID, body: Agent, user: User):
     from psycopg.types.json import Jsonb
     access.writer(user)
     with db.connect() as conn:access.agent(conn,user,ident)
-    if any(t not in ('knowledge.search','project.inspect','artifact.create') for t in body.tools):raise HTTPException(422,'Unsupported agent tool.')
+    if any(t not in agent_runtime.SCHEMAS for t in body.tools):raise HTTPException(422,'Unsupported agent tool.')
     row = db.query('UPDATE agents SET name=%s,instructions=%s,enabled=%s,runtime_mode=%s,tools=%s,version=version+1 WHERE id=%s AND deleted_at IS NULL RETURNING version',
                    (body.name, body.instructions, body.enabled,body.runtime_mode,Jsonb(body.tools),ident), one=True)
     if not row:
@@ -358,7 +364,9 @@ def tools(user: User):
     return [{'id':'knowledge.search','mode':'read','enabled':True,'description':'Search only the authorized task project and return source excerpts.'},
             {'id':'project.inspect','mode':'read','enabled':True,'description':'Inspect the authorized project and its source inventory.'},
             {'id':'artifact.create','mode':'write','enabled':user['role']!='VIEWER','description':'Create a private, versioned artifact from a permitted agent task.'},
-            {'id':'model.generate','mode':'inference','enabled':True,'description':'Use the selected local model. Tools mode requires verified model tool support.'}]
+            {'id':'model.generate','mode':'inference','enabled':True,'description':'Use the selected local model. Tools mode requires verified model tool support.'},
+            {'id':'program.list','mode':'read','enabled':True,'description':'Discover qualified independent programs when the private gateway is online.'},
+            {'id':'program.run','mode':'execute','enabled':user['role']!='VIEWER','description':'Invoke only qualified offline program recipes; requires explicit agent tool permission.'}]
 
 @app.get('/api/v1/integrations')
 def integrations(user: User):
@@ -405,3 +413,5 @@ def operation_metrics(user:User):
 from .external_connections import router as external_connections_router
 
 app.include_router(external_connections_router)
+
+app.include_router(program_gateway.router)
