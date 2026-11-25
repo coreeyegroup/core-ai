@@ -288,6 +288,7 @@ def advance():
             try:
                 with conn.transaction():advance_one(conn,row)
             except HTTPException as exc:
-                if exc.status_code!=409:set_state(conn,row,"FAILED","Mission access or step validation failed.")
+                if exc.status_code!=409 or not isinstance(exc.detail,str) or 'queue is full' not in exc.detail.lower():
+                    set_state(conn,row,"FAILED","Mission access, storage or step validation failed.")
             except (ValueError,KeyError,TypeError,OverflowError):
                 set_state(conn,row,"FAILED","Mission dependency, agent version, or input validation failed.")

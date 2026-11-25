@@ -35,6 +35,8 @@ def configure(body:Policy,user=Depends(auth.session)):
     return body
 
 def admit_model(name,policy):
+    if not models.supports_generation({'name':name}):
+        raise ValueError('Choose a generation model, not an embedding-only model.')
     # Optional operator-provided size cap is not a measurement of free RAM/VRAM.
     if policy.max_model_gib:
         items=models.list_models()["models"]

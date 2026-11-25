@@ -128,3 +128,20 @@ def test_automation_program_key_scope(signed):
         program_jobs.process(row)
         r=signed.get("/api/v1/automation/programs/jobs/"+job.json()["id"],headers=key)
         assert r.status_code==200 and r.json()["status"]=="SUCCEEDED"
+
+def test_cancel_claimed_job_before_gateway_start(signed):
+    from core_ai import program_jobs
+    with patch.object(program_gateway,"get_catalog",return_value=catalog()),patch.object(program_gateway,"invoke",return_value=result()) as invoke:
+        response=signed.post("/api/v1/programs/jobs",json={**example(),"request_id":str(uuid.uuid4())})
+        assert response.status_code==201,response.text
+        ident=response.json()["id"]
+        row=program_jobs.claim()
+        assert signed.post("/api/v1/programs/jobs/"+ident+"/cancel",json={}).json()["status"]=="CANCEL_REQUESTED"
+        program_jobs.process(row)
+        invoke.assert_not_called()
+        assert signed.get("/api/v1/programs/jobs/"+ident).json()["status"]=="CANCELLED"
+
+def test_generation_model_admission():
+    from core_ai import execution_policy
+    with pytest.raises(ValueError,match="embedding-only"):
+        execution_policy.admit_model("nomic-embed-text",execution_policy.Policy())

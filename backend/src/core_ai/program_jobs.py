@@ -180,6 +180,12 @@ def finish(row,status,*,result=None,code=None,error=None):
 
 def process(row,stopping=None):
     try:
+        state=db.query("SELECT status,claim_token,lease_until>now() AS valid FROM program_jobs WHERE id=%s",(row["id"],),one=True)
+        if not state or state["claim_token"]!=row["claim_token"] or not state["valid"]:return
+        if state["status"]=="CANCEL_REQUESTED" or (stopping and stopping.is_set()):
+            finish(row,"CANCELLED")
+            return
+        if state["status"]!="RUNNING":return
         authorize(row)
         body=gateway.RunInput.model_validate(row["input_data"])
         with ThreadPoolExecutor(max_workers=1) as pool:
