@@ -19,6 +19,12 @@ the same catalog without changing the recipes.
 
 ## Install on core-node (explicit operator approval)
 
+For the existing core-node host, pull the same reviewed main release in both checkouts and use one operator-approved command:
+
+    bash lab/install-integration.sh --approve-deploy
+
+The command checks all receipts, installs/restarts only the independent gateway, runs an actual qualified position-sizing fixture as the application account, and then invokes the existing workstation installer (including its backup and migration process). If a gate fails, it stops; no automatic retry or unrelated cleanup.
+
 The service unit is for the existing coreeye lab owner and core-ai
 application group. Docker group access is privileged; the application
 account must NOT be added to it. Prefer a dedicated test VM/rootless

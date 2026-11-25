@@ -3,7 +3,7 @@ import {api} from './api';
 import {useSession} from './Session';
 
 type Program={id:string;repository:string;commit:string;runtime:string;fields:string|string[];example:unknown[];extensions:string[];output_file:boolean;mode:string;state:string;image?:string};
-type Repo={repository:string;commit:string;source_present:boolean;recipes:string[];coverage:string};
+type Repo={repository:string;commit:string;source_present:boolean;recipes:string[];coverage:string;inventory_counts?:Record<string,number>;file_count?:number};
 type Catalog={schema:number;programs:Program[];repositories:Repo[]};
 type Result={id:string;recipe:string;state:string;commit:string;image:string;provenance:string;result:unknown;file?:{name:string;data:string}|null};
 
@@ -26,7 +26,7 @@ export default function ProgramsPanel({tick}:{tick:number}){
  const [catalog,setCatalog]=useState<Catalog|null>(null),[loadError,setLoadError]=useState(''),[refresh,setRefresh]=useState(0);
  const [query,setQuery]=useState(''),[selected,setSelected]=useState(''),[values,setValues]=useState('[]'),[file,setFile]=useState<File|null>(null);
  const [result,setResult]=useState<Result|null>(null),[error,setError]=useState(''),[busy,setBusy]=useState(false);
- useEffect(()=>{let active=true;setLoadError('');api('programs','GET',undefined,50000).then((d:Catalog)=>{if(active){setCatalog(d);setLoadError('');}}).catch(e=>{if(active){setCatalog(null);setLoadError(e.message);}});return()=>{active=false;};},[tick,refresh]);
+ useEffect(()=>{let active=true;setLoadError('');api('programs','GET',undefined,50000).then((d:Catalog)=>{if(!d||d.schema!==1||!Array.isArray(d.programs)||!Array.isArray(d.repositories)||!d.programs.every(r=>r&&typeof r.id==='string'&&typeof r.repository==='string'&&typeof r.runtime==='string'&&Array.isArray(r.example)&&Array.isArray(r.extensions)))throw new Error('Invalid program catalog response.');if(active){setCatalog(d);setLoadError('');}}).catch(e=>{if(active){setCatalog(null);setLoadError(e.message);}});return()=>{active=false;};},[tick,refresh]);
  const current=catalog?.programs.find(p=>p.id===selected);
  const qualified=catalog?.programs.filter(p=>p.state==='qualified-receipt').length??0;
  function select(p:Program){setSelected(p.id);setValues(JSON.stringify(p.example,null,2));setFile(null);setResult(null);setError('');}
@@ -47,7 +47,7 @@ export default function ProgramsPanel({tick}:{tick:number}){
   }catch(e){setError((e as Error).message);}finally{setBusy(false);}
  }
  return <section className="box">
-  <header>Independent executable programs <span>{catalog?qualified+' / '+catalog.programs.length+' qualified':'—'}</span><button disabled={busy} onClick={()=>setRefresh(n=>n+1)}>Refresh catalog</button></header>
+  <header>Independent executable programs <span>{catalog?qualified+' / '+catalog.programs.length+' qualified':'—'}</span><button type="button" disabled={busy} onClick={()=>setRefresh(n=>n+1)}>Refresh catalog</button></header>
   {loadError?<div className="error" role="alert">{loadError} · Check the independent gateway service.</div>:!catalog?<p role="status">Checking runtime qualification records…</p>:<>
    <p className="panel-note">Runs actual pinned software, independently of the language model. Mock research is not live evidence. No broker orders, host commands or public runtime access.</p>
    <div className="fields"><label>Filter programs<input value={query} onChange={e=>setQuery(e.target.value)} placeholder="Name, repository or runtime"/></label></div>
@@ -65,7 +65,7 @@ export default function ProgramsPanel({tick}:{tick:number}){
    {error&&<div className="error" role="alert">{error}</div>}
    {busy&&<p role="status">Execution in progress. Do not submit again.</p>}
    {result&&<section className="box"><header>Execution result · {result.state}</header><p>{result.recipe} · {result.provenance} · ID {result.id}</p><pre style={{whiteSpace:'pre-wrap',overflowWrap:'anywhere',maxHeight:'30rem',overflow:'auto'}}>{JSON.stringify(result.result,null,2)}</pre>{result.file&&<button onClick={()=>save(result.file!.name,result.file!.data)}>Download new file</button>}</section>}
-   <details><summary>Repository coverage ({catalog.repositories.length})</summary><div className="table-scroll"><table><thead><tr><th>Repository</th><th>Source</th><th>Reviewed recipes</th></tr></thead><tbody>{catalog.repositories.map(r=><tr key={r.repository}><td>{r.repository}</td><td>{r.source_present?'Verified':'Unavailable'}</td><td>{r.recipes.length} · {r.coverage}</td></tr>)}</tbody></table></div></details>
+   <details><summary>Repository coverage ({catalog.repositories.length})</summary><div className="table-scroll"><table><thead><tr><th>Repository</th><th>Source</th><th>Source inventory</th><th>Reviewed recipes</th></tr></thead><tbody>{catalog.repositories.map(r=><tr key={r.repository}><td>{r.repository}</td><td>{r.source_present?'Verified':'Unavailable'}</td><td>{r.file_count===undefined?'—':r.file_count+' files'}{r.inventory_counts&&<p>{['program','hook','manifest','skill','agent-candidate'].map(k=>k+': '+(r.inventory_counts?.[k]??0)).join(' · ')}</p>}</td><td>{r.recipes.length} · {r.coverage}</td></tr>)}</tbody></table></div></details>
    <p className="panel-note">For agent execution, enable Tools mode and assign program.list and program.run in Agents, then launch a project task. In Chat, select the permitted agent and explicitly enable Use programs.</p>
   </>}
  </section>;

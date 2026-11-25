@@ -70,8 +70,10 @@ def catalog(root):
                 "coverage":"not-reviewed-for-installation"} for repo,commit in pins.items()}
     for repo,row in rows.items():
         try:
-            manager.verify(manager.source(root,repo,row["commit"]),row["commit"])
+            inventory=manager.inventory(manager.source(root,repo,row["commit"]),row["commit"])
             row["source_present"]=True
+            row["inventory_counts"]=inventory["counts"]
+            row["file_count"]=inventory["file_count"]
         except (ValueError,OSError,subprocess.SubprocessError):
             pass
     images={}
@@ -223,7 +225,10 @@ class Handler(socketserver.StreamRequestHandler):
             response={"ok":False,"code":"rejected","error":"Program request rejected or execution failed. Verify inputs, qualification and lab reports."}
         except (OSError,subprocess.SubprocessError):
             response={"ok":False,"code":"unavailable","error":"Lab runtime unavailable. Check its service and image."}
-        payload=json.dumps(response,ensure_ascii=True,allow_nan=False).encode()+b"\n"
+        try:
+            payload=json.dumps(response,ensure_ascii=True,allow_nan=False).encode()+b"\n"
+        except (ValueError,TypeError,OverflowError):
+            payload=b'{"ok":false,"code":"rejected","error":"Invalid result data"}\n'
         if len(payload)>MAX_FRAME:
             payload=b'{"ok":false,"code":"rejected","error":"Response exceeds the gateway limit"}\n'
         try:

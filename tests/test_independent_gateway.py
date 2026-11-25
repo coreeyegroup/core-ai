@@ -44,6 +44,29 @@ class GatewayTests(unittest.TestCase):
             root=Path(tmp)
             for request in [{"action":"run","command":"id"},{"action":"install"},{"action":"catalog","path":"/"}]:
                 with self.assertRaises(ValueError): g.route(root,request,root)
+    def test_unix_socket_protocol(self):
+        import socket
+        import threading
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            path=root/"gateway.sock"
+            with g.Server(str(path),g.Handler) as server:
+                server.root=root
+                server.temp_root=root
+                with patch.object(g,"catalog",return_value={"schema":1,"programs":[],"repositories":[]}):
+                    thread=threading.Thread(target=server.serve_forever,daemon=True)
+                    thread.start()
+                    try:
+                        with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as conn:
+                            conn.settimeout(3)
+                            conn.connect(str(path))
+                            conn.sendall(b'{"action":"catalog"}\n')
+                            reply=json.loads(conn.makefile("rb").readline())
+                        self.assertTrue(reply["ok"])
+                        self.assertEqual(reply["data"]["schema"],1)
+                    finally:
+                        server.shutdown()
+                        thread.join(3)
     def test_result_executes_and_records(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp)
