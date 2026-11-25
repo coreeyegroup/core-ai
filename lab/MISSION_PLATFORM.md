@@ -127,3 +127,28 @@ step mission and retry after a failed child; compare manual, Chat, Task,
 and connection program outputs; verify legacy research and n8n.
 Use actual local model and Docker runtime for deployment acceptance.
 A passing mocked CI fixture is not a substitute for those live tests.
+
+## Shareable page links and installation verification
+
+Use the main page address with ?view=Tools, ?view=Skills, ?view=Agents,
+?view=Workflows, etc. Browser Back/Forward restores the focused main
+view, not a snapshot of every pane or editor. Use
+?view=Tools#repository-coverage to open the repository coverage panel.
+Detached panels use ?view=Tools&detached=1. Links retain authentication
+requirements and do not grant access to project data.
+
+Read-only host checks:
+
+    cd ~/core-ai-lab/manager
+    python3 lab/batch_install.py status
+    python3 lab/installation_review.py
+
+The first validates pinned source and exact runtime receipts for each
+reviewed recipe. The second reports source inventory, candidate entry
+points, missing installation work, and native registration evidence.
+Neither command claims full upstream installation or performs fresh
+execution of every program. Run reviewed qualification fixtures when
+new functional evidence is needed. In the browser, use Tools to submit
+a real program job and inspect its persisted result. All repositories
+must have their own capability-specific functional acceptance tests
+before their entire installations can be considered complete.

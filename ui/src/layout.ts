@@ -20,3 +20,16 @@ export function closeTab(x:Layout,v:View,group:number):Layout{
  const focus=groups.length<x.groups.length&&group<x.focus?x.focus-1:x.focus;
  return {...x,groups,active,paneIds,focus:Math.min(focus,groups.length-1),maximized:false};
 }
+
+/** Focus a shareable view without discarding the saved multi-pane workspace. */
+export function focusView(layout:Layout,view:View):Layout{
+ const current=layout.groups[layout.focus].includes(view)?layout.focus:layout.groups.findIndex(g=>g.includes(view));
+ const focus=current<0?layout.focus:current;
+ const groups=layout.groups.map((g,i)=>i===focus&&!g.includes(view)?[...g,view]:g);
+ const active=layout.active.map((v,i)=>i===focus?view:v);
+ return {...layout,groups,active,focus};
+}
+export function readView(search:string):View|null{
+ const v=new URLSearchParams(search).get('view');
+ return views.includes(v as View)?v as View:null;
+}

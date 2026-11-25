@@ -1,7 +1,7 @@
 import {Component,Fragment,useEffect,useRef,useState,type CSSProperties,type KeyboardEvent as ReactKeyboardEvent,type ReactNode} from 'react';
 import {MessageSquare,MessageSquarePlus,Compass,Plus,Folder,Files,FileText,Bot,ListTodo,BookOpen,Wrench,Activity,Shield,Settings as SettingsIcon,LayoutDashboard,Plug,Search,Command as CommandIcon,LogOut,PanelRight,Columns2,X,Maximize2,ExternalLink,ChevronDown,Workflow,SlidersHorizontal} from 'lucide-react';
 import {api,newId,setCsrf} from './api';
-import {views,defaults,restore,closeTab,key,type Layout,type View} from './layout';
+import {views,defaults,restore,closeTab,focusView,readView,key,type Layout,type View} from './layout';
 import {appearanceKey,defaultAppearance,restoreAppearance,typographyVersion,type Appearance} from './appearance';
 import {MenuBar,CommandPalette,ResizeHandle,type Command} from './WorkbenchControls';
 import {Module,Inspector,Activity as ActivityPanel,ErrorNote} from './Modules';
@@ -41,8 +41,8 @@ function ProjectNavigation({tick,canCreate,selected,open}:{tick:number;canCreate
 
 class Boundary extends Component<{children:ReactNode},{error:boolean}>{state={error:false};static getDerivedStateFromError(){return {error:true};}render(){return this.state.error?<div className="error">This panel could not render. <button onClick={()=>this.setState({error:false})}>Retry panel</button></div>:this.props.children;}}
 function safeGet(k:string){try{return localStorage.getItem(k);}catch{return null;}}
-const params=new URLSearchParams(location.search),detached=params.has('view');
-function initial(){const l=restore(safeGet(key));const v=params.get('view') as View;return views.includes(v)?{...defaults(),groups:[[v]],active:[v],left:false,bottom:false}:l;}
+const detached=new URLSearchParams(window.location.search).get('detached')==='1';
+function initial(){const l=restore(safeGet(key)),v=readView(window.location.search);return v?(detached?{...defaults(),groups:[[v]],active:[v],left:false,bottom:false}:focusView(l,v)):l;}
 const icons:Record<View,typeof MessageSquare>={Chat:MessageSquare,Setup:Compass,Overview:LayoutDashboard,Projects:Folder,Files,Artifacts:FileText,Agents:Bot,Skills:BookOpen,Tasks:ListTodo,Knowledge:BookOpen,Tools:Wrench,Models:SlidersHorizontal,Integrations:Plug,Operations:Activity,Settings:SettingsIcon,Access:Shield,Capabilities:Shield,Workflows:Workflow};
 const navGroups:{label:string;items:View[]}[]=[{label:'Workspace',items:['Chat','Setup','Projects','Files','Artifacts']},{label:'Build & automate',items:['Agents','Skills','Tasks','Knowledge','Tools','Workflows']},{label:'Manage',items:['Overview','Models','Integrations','Operations','Access','Capabilities','Settings']}];
 const title=(v:View)=>v==='Integrations'?'Connections':v==='Setup'?'Get started':v;
@@ -122,7 +122,7 @@ export default function App(){
  function addChatPane(){if(layout.groups.length<4){split(layout.axis,'Chat');setMobileOpen(false);}}
  function newChat(){window.dispatchEvent(new Event('core-ai-new-chat'));open('Chat');}
  function resetLayout(){setLayout({...defaults(),workspace:layout.workspace});}
- function detach(v:View){window.open('?view='+encodeURIComponent(v),'_blank','noopener,noreferrer');}
+ function detach(v:View){window.open('?view='+encodeURIComponent(v)+'&detached=1','_blank','noopener,noreferrer');}
  function pin(v:View){setPinned(x=>x.includes(v)?x.filter(y=>y!==v):[...x,v]);}
  function close(v:View,g:number){
   if(pinned.includes(v))return;
@@ -141,6 +141,20 @@ export default function App(){
   return()=>observer.disconnect();
  },[session]);
  useEffect(()=>{revealNavigation(active);},[active]);
+ // Address follows the focused main view. Detached windows keep their own layout.
+ useEffect(()=>{
+  const onPop=()=>{const v=readView(window.location.search)||'Chat';setLayout(x=>focusView(x,v));};
+  window.addEventListener('popstate',onPop);
+  return()=>window.removeEventListener('popstate',onPop);
+ },[]);
+ useEffect(()=>{
+  if(!session)return;
+  const url=new URL(window.location.href),prior=readView(url.search);
+  if(prior===active)return;
+  url.searchParams.set('view',active);
+  if(prior)url.hash='';
+  if(prior)window.history.pushState(null,'',url);else window.history.replaceState(null,'',url);
+ },[active,session]);
  useEffect(()=>{
   if(drawerOpen)explorer.current?.querySelector('button')?.focus();
   else if(drawerWasOpen.current&&mobile){
@@ -191,7 +205,7 @@ export default function App(){
     <div id={groupId} hidden={!expanded}>{expanded&&group.items.filter(v=>v!=='Projects').map(v=>{
      const Icon=icons[v];
      return <button key={v} className={'nav-item '+(active===v?'selected':'')} aria-current={active===v?'page':undefined} onClick={()=>go(v)}>
-      <Icon size={15} aria-hidden="true"/><span>{title(v)}</span>{v==='Workflows'&&<small>Planned</small>}
+      <Icon size={15} aria-hidden="true"/><span>{title(v)}</span>
      </button>;
     })}</div>
    </section>
