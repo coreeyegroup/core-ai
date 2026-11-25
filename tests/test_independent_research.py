@@ -36,6 +36,24 @@ class ResearchTests(unittest.TestCase):
             step[5]=str(source)
             result=subprocess.run(step,check=True,capture_output=True,text=True)
             self.assertEqual(len(json.loads(result.stdout)["graph"]["nodes"]),2)
+    def test_mock_cli_requires_research_only_for_no_persistence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source=Path(tmp)/"fixture.py"
+            source.write_text(
+                "import sys,json\n"
+                "if '--no-research-persistence' in sys.argv and '--research-only' not in sys.argv:\n"
+                "    sys.exit(2)\n"
+                "assert '--mock' in sys.argv and '--no-browser-cookies' in sys.argv\n"
+                "assert '--no-research-persistence' in sys.argv\n"
+                "print(json.dumps({'schema_version':'1.4','query':sys.argv[1],"
+                "'results':[],'clusters':[],'source_status':{}}))\n")
+            step=tools.plan("research-mock",IMAGE)["steps"][0][:]
+            step[0]=sys.executable
+            step[5]=str(source)
+            result=subprocess.run(step,check=True,capture_output=True,text=True)
+            data=json.loads(result.stdout)
+            self.assertEqual(data["provenance"],"mock-fixtures-not-live-research")
+            self.assertEqual(data["report"]["query"],"test topic")
     def test_failed_run_no_receipt_and_retry(self):
         with tempfile.TemporaryDirectory() as tmp,patch.object(tools.manager,"run_plan") as run:
             root=Path(tmp)

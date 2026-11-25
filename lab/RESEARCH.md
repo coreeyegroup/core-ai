@@ -24,7 +24,9 @@ Examples after qualification:
     python3 lab/research_programs.py run ml4t-chapter-map --image "$IMAGE" --params '[]'
 
 - research-mock calls the original Last30Days CLI in mock mode with JSON
-  output and validates its report schema. Output is explicitly labeled
+  output and validates its report schema. The pinned CLI requires
+  --research-only together with --no-research-persistence; both are supplied
+  and browser cookies are disabled. Output is explicitly labeled
   fixture data, not fresh findings. Live research requires a separate
   approved provider setup and a network policy.
 - knowledge-graph-merge calls the original graph merge function. Input

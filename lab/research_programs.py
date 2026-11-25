@@ -23,7 +23,7 @@ GRAPH_FIXTURE=[
 RECIPES={
  "research-mock":("mvanhorn/last30days-skill","skills/last30days/scripts/last30days.py",["test topic"],
  """import subprocess
-out=subprocess.check_output([sys.executable,entry,a[0],'--mock','--emit=json','--no-browser-cookies','--no-research-persistence'],text=True)
+out=subprocess.check_output([sys.executable,entry,a[0],'--mock','--emit=json','--no-browser-cookies','--research-only','--no-research-persistence'],text=True)
 d=json.loads(out)
 if d.get('schema_version')!='1.4' or d.get('query')!=a[0] or not all(k in d for k in ('results','clusters','source_status')):
     raise SystemExit('Unexpected mock report schema')
