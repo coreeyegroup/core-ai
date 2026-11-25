@@ -23,6 +23,40 @@ class TradingRecipeTests(unittest.TestCase):
             compile(p["steps"][0][2], "<fixture>", "exec")
             self.assertIn("--network=none", trading.manager.docker_args(Path("/tmp/source"), p, "test"))
 
+    def test_black_scholes_documented_approximation_bound(self):
+        from collections import namedtuple
+        from contextlib import redirect_stdout
+        import io
+        import runpy
+
+        Price = namedtuple("Price", "call put")
+        Greeks = namedtuple("Greeks", "delta gamma")
+        step = trading.plan("black-scholes", IMAGE)["steps"][0]
+        self.assertLessEqual(len(step[2]), 2000)
+
+        def check_fixture(call, put, call_delta=0.63683065):
+            upstream = {
+                "price_option": lambda *a: Price(call, put),
+                "compute_greeks": lambda *a: Greeks(
+                    call_delta if a[-1] == "call" else -0.36316935,
+                    0.018762017345846895),
+            }
+            with patch.object(runpy, "run_path", return_value=upstream), patch.object(sys, "argv", step[2:]), redirect_stdout(io.StringIO()):
+                exec(compile(step[2], "<qualification>", "exec"), {})
+
+        # Reproduce the observed result and the corresponding pinned algorithm's put.
+        check_fixture(10.450575619322287, 5.5735180693936925)
+        check_fixture(10.450583572185565, 5.573526022256971)
+        # Common-mode price errors must fail even when put-call parity is intact.
+        with self.assertRaises(SystemExit):
+            check_fixture(10.450583572185565 + 0.00002, 5.573526022256971 + 0.00002)
+        # A parity error within both individual price bounds must still fail.
+        with self.assertRaises(SystemExit):
+            check_fixture(10.450583572185565 + 0.000005, 5.573526022256971 - 0.000005)
+        # Greek invariants retain their original tolerance.
+        with self.assertRaises(SystemExit):
+            check_fixture(10.450575619322287, 5.5735180693936925, 0.64)
+
     def test_bad_inputs(self):
         for name, args in [("position-sizing", [100, .01, 5, 5, 0, 0]),
                            ("kelly-criterion", [1.2, 2]),

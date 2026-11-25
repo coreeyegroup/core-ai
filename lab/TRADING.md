@@ -28,6 +28,12 @@ options and bond modules label themselves as stubs; numeric fixture success
 does not establish broad production accuracy. Black-Scholes assumes a
 European option without dividends; rate and volatility are annual decimals,
 time is years. Theta is per calendar day; vega/rho per percentage point.
+The AGIPro normal CDF documents maximum absolute approximation error
+7.5e-8. Only its premium fixture uses the propagated absolute bound
+7.5e-8 * (spot + discounted strike) + 1e-9 for reference rounding.
+Put-call parity and the original Greek invariants use the strict existing
+comparison. Other recipes retain their original qualification digests.
+This verifies a fixture, not accuracy across all market conditions.
 Bond pricing assumes regular coupon periods and no default or call risk.
 Sizing uses one currency, unit price distance, fees and estimated slippage;
 it is not a broker quantity and ignores margin, contract multipliers,

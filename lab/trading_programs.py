@@ -33,8 +33,16 @@ RECIPES = {
         "fixture": [100, 100, 1, 0.05, 0.2],
         "body": """prices = m['price_option'](*a)
 result = {'prices': prices._asdict(), 'call_greeks': m['compute_greeks'](*a, 'call')._asdict(), 'put_greeks': m['compute_greeks'](*a, 'put')._asdict()}""",
-        "check": """close(result['prices']['call'], 10.450583572)
-close(result['prices']['put'], 5.573526022)
+        "check": """S, K, T, r, sigma = a
+discount = math.exp(-r*T)
+# Upstream CDF approximation has documented maximum absolute error 7.5e-8.
+# Propagate both weighted CDF errors; allow 1e-9 for reference rounding.
+price_bound = 7.5e-8 * (S + K*discount) + 1e-9
+for kind, reference in [('call', 10.450583572), ('put', 5.573526022)]:
+    actual = result['prices'][kind]
+    if not math.isfinite(actual) or abs(actual-reference) > price_bound:
+        raise SystemExit('Option premium outside CDF error bound: %s %r (bound %r)' % (kind, actual, price_bound))
+close(result['prices']['call'] - result['prices']['put'], S-K*discount)
 close(result['call_greeks']['delta'] - result['put_greeks']['delta'], 1)
 close(result['call_greeks']['gamma'], result['put_greeks']['gamma'])""",
     },
