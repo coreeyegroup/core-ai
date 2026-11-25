@@ -2,6 +2,9 @@ import {useEffect,useRef,useState, type FormEvent} from 'react';
 import {ArrowUpRight} from 'lucide-react';
 import {api} from './api';
 import ProgramsPanel from './ProgramsPanel';
+import MissionPanel from './MissionPanel';
+import ExecutionPolicy from './ExecutionPolicy';
+import {generationModel,modelLabel,type Program} from './CapabilityFields';
 import Chat,{MessageMarkdown} from './Chat';
 import Connections from './Connections';
 import ProjectWorkspace,{type ProjectLocation} from './Projects';
@@ -43,9 +46,9 @@ export function Module({view,tick,refresh,go,appearance,changeAppearance,visible
   case 'Files':return <FilesPanel tick={tick} refresh={refresh}/>;
   case 'Access':return <AccessPanel tick={tick} refresh={refresh}/>;
   case 'Capabilities':return <CapabilitiesPanel tick={tick}/>;
-  case 'Workflows':return <Tasks tick={tick} refresh={refresh} go={go} researchOnly/>;
+  case 'Workflows':return <><MissionPanel tick={tick} visible={visible}/><Tasks tick={tick} refresh={refresh} go={go} researchOnly/></>;
   case 'Models':return <Models tick={tick} refresh={refresh}/>;
-  case 'Tools':return <Tools tick={tick}/>;
+  case 'Tools':return <Tools tick={tick} visible={visible}/>;
   case 'Integrations':return <Connections tick={tick} visible={visible}/>;
   case 'Operations':return <Operations tick={tick}/>;
   case 'Settings':return <Settings appearance={appearance} change={changeAppearance}/>;
@@ -57,10 +60,10 @@ function Overview({tick,go}:{tick:number;go:(v:View)=>void}){
  const pending=d?.runs.filter((r:Row)=>['QUEUED','RUNNING','CANCEL_REQUESTED'].includes(r.status)).reduce((n:number,r:Row)=>n+Number(r.n),0);
  return <section className="page"><PageHead title="Overview" subtitle="Workspace activity and service readiness."><button onClick={()=>go('Setup')}>Get started</button></PageHead><ErrorNote error={error}/><div className="metric-grid">{[['Projects',d?.projects,'Projects'],['Agents',d?.agents,'Agents'],['Active tasks',pending,'Tasks'],['Knowledge documents',d?.documents,'Knowledge']].map(([label,n,v])=><button className="metric" key={label} onClick={()=>go(v as View)}><small>{label}</small><strong>{n??'—'}</strong><ArrowUpRight className="metric-link" size={14} aria-hidden="true"/></button>)}</div><div className="overview-grid"><section className="box"><header>Runtime readiness</header><div className="readiness"><div><span className={'dot '+(d?.worker?.online?'ready':'')}/><b>Task worker</b><span>{d?d.worker?.online?'Online · one inference slot':'Offline or heartbeat stale':'Checking…'}</span></div><div><span className="dot"/><b>Model provider</b><span>{d?.inference.endpoint??'Checking…'}</span><button onClick={()=>go('Models')}>Inspect models</button></div><div><b>Product interfaces</b><span>Independent operation · no connectors required</span><button onClick={()=>go('Integrations')}>Interfaces</button></div></div></section><section className="box"><header>Your workspace</header><div className="pipeline">{(['Projects','Agents','Knowledge','Tasks','Artifacts'] as View[]).map((v,i)=><button key={v} onClick={()=>go(v)}><b>{v}</b><span>{['Define the work','Set instructions','Add project sources','Queue and inspect','Review outputs'][i]}</span></button>)}</div></section></div><div className="two-col overview-notes"><section className="box"><header>Execution boundary</header><p>This release supports local model generation and bounded project tools. Each task records its agent version, tool events and result. Host commands and product actions are unavailable.</p></section><section className="box"><header>Workspace controls</header><p>Use Ctrl K to find a panel or command. Open views together, split your workspace, pin tabs and detach a workspace into its own window.</p><button onClick={()=>go('Tasks')}>Create a task →</button></section></div></section>;
 }
-type AgentProfile = {name:string;instructions:string;enabled:boolean;runtime_mode:string;tools:string[]};
+type AgentProfile = {name:string;instructions:string;enabled:boolean;runtime_mode:string;tools:string[];program_scope?:string[]};
 type AgentRecord = AgentProfile & {id:string;version:number;deleted_at?:string|null;imported_source?:{repository:string;commit:string;path:string}|null};
 const agentTools = ['knowledge.search','project.inspect','artifact.create','program.list','program.run'];
-const initialProfile: AgentProfile = {name:'',instructions:'',enabled:true,runtime_mode:'analysis',tools:agentTools.slice(0,2)};
+const initialProfile: AgentProfile = {name:'',instructions:'',enabled:true,runtime_mode:'analysis',tools:agentTools.slice(0,2),program_scope:[]};
 
 function Agents({tick,refresh,go,handoff,openSkills,openTask,openChat}:{
  tick:number;refresh:()=>void;go:(view:View)=>void;handoff?:AgentHandoff;
@@ -79,6 +82,8 @@ function Agents({tick,refresh,go,handoff,openSkills,openTask,openChat}:{
  const [collectionId,setCollectionId]=useState('');
  const handled=useRef<AgentHandoff>(null);
  const [profile,setProfile] = useState(initialProfile);
+ const {data:programCatalog}=useData('programs',tick);
+ const allowedPrograms:Program[]=Array.isArray(programCatalog?.programs)?programCatalog.programs:[];
  const [dirty,setDirty] = useState(false);
  const [collectionsDirty,setCollectionsDirty] = useState(false);
  const [err,setErr] = useState('');
@@ -99,7 +104,7 @@ function Agents({tick,refresh,go,handoff,openSkills,openTask,openChat}:{
  function open(agent:AgentRecord|null,editing=true,tab:'profile'|'collections'='profile'){
   if ((dirty || collectionsDirty) && !window.confirm('Discard unsaved changes to this agent?')) return false;
   setSelected(agent);
-  setProfile(agent?{name:agent.name,instructions:agent.instructions,enabled:agent.enabled,runtime_mode:agent.runtime_mode||'analysis',tools:agent.tools||[]}:initialProfile);
+  setProfile(agent?{name:agent.name,instructions:agent.instructions,enabled:agent.enabled,runtime_mode:agent.runtime_mode||'analysis',tools:agent.tools||[],program_scope:agent.program_scope??['*']}:initialProfile);
   setSection(editing?tab:null);setErr('');setNotice('');setDirty(false);setCollectionsDirty(false);
   if (editing) window.requestAnimationFrame(()=>heading.current?.focus());
   return true;
@@ -181,7 +186,7 @@ function Agents({tick,refresh,go,handoff,openSkills,openTask,openChat}:{
       <label>Execution mode<select value={profile.runtime_mode} onChange={event=>edit({runtime_mode:event.target.value})}><option value="analysis">Analysis · retrieve and answer</option><option value="tools">Tools · bounded model-directed execution</option></select></label>
       {profile.runtime_mode==='tools'&&<fieldset className="tool-permissions"><legend>Permitted tools</legend>
        {agentTools.map(tool=><label className="checkbox-label" key={tool}><input type="checkbox" checked={profile.tools.includes(tool)} onChange={event=>edit({tools:event.target.checked?[...profile.tools,tool]:profile.tools.filter(value=>value!==tool)})}/>{tool}</label>)}
-       <small>Requires model tool support. Up to six model steps and eight tool calls.</small>
+       <small>Requires model tool support. Limits are configured in Models.</small>{profile.tools.includes('program.run')&&<fieldset><legend>Program capability scope</legend><label className="checkbox-label"><input type="checkbox" checked={profile.program_scope?.includes('*')??false} onChange={e=>edit({program_scope:e.target.checked?['*']:[]})}/>Explicitly permit all qualified programs</label>{!profile.program_scope?.includes('*')&&allowedPrograms.map(p=><label className="checkbox-label" key={p.id}><input type="checkbox" checked={profile.program_scope?.includes(p.id)??false} onChange={e=>edit({program_scope:e.target.checked?[...(profile.program_scope||[]),p.id]:(profile.program_scope||[]).filter(x=>x!==p.id)})}/>{p.id} · {p.state}</label>)}{!allowedPrograms.length&&<small>Program catalog unavailable. Existing selections are preserved.</small>}</fieldset>}
       </fieldset>}
       <label><input type="checkbox" checked={profile.enabled} onChange={event=>edit({enabled:event.target.checked})}/>Enabled for new tasks</label>
      </fieldset>
@@ -214,7 +219,7 @@ function Agents({tick,refresh,go,handoff,openSkills,openTask,openChat}:{
 }
 function Tasks({tick,refresh,go,researchOnly=false,setup}:{tick:number;refresh:()=>void;go:(view:View)=>void;researchOnly?:boolean;setup?:RunSetup}){
  const readonly=useSession().role==='VIEWER';
- const {data:projects}=useData('projects',tick),{data:agents}=useData('agents',tick),{data:models}=useData('models',tick),{data:runs,error}=useData('runs',tick);
+ const {data:projects}=useData('projects',tick),{data:agents}=useData('agents',tick),{data:models}=useData('models?catalog=true',tick),{data:runs,error}=useData('runs',tick);
  const [id,setId]=useState(''),{data:detail,error:detailError}=useData(id?'runs/'+id:'runs',tick);
  const [err,setErr]=useState(''),[busy,setBusy]=useState(false),[research,setResearch]=useState(researchOnly),[calcs,setCalcs]=useState<number[]>([]);
  const formRef=useRef<HTMLFormElement>(null);
@@ -293,7 +298,7 @@ function Tasks({tick,refresh,go,researchOnly=false,setup}:{tick:number;refresh:(
     <div className="fields task-fields">
      <label>Project<select name="project_id" required defaultValue=""><option value="" disabled>Select project</option>{availableProjects?.map((p:Row)=><option key={p.id} value={p.id}>{p.name}</option>)}</select></label>
      <label>Agent<select name="agent_id" required defaultValue=""><option value="" disabled>Select agent</option>{enabled?.map((p:Row)=><option key={p.id} value={p.id}>{p.name} · v{p.version}</option>)}</select></label>
-     <label>Model<select name="model" required defaultValue=""><option value="" disabled>Select model</option>{models?.models.map((p:Row)=><option key={p.name}>{p.name}</option>)}</select></label>
+     <label>Model<select name="model" required defaultValue=""><option value="" disabled>Select model</option>{models?.models.filter((p:Row)=>generationModel(p as {name:string})).map((p:Row)=><option value={p.name} key={p.name}>{modelLabel(p as {name:string})}</option>)}</select></label>
     </div>
     {models&&(!models.available||!models.models?.length)&&<div className="actions setup-task-note"><p className="warn">{models.available?'No models are available.':'The model host is offline.'}</p><button type="button" onClick={()=>go('Models')}>Open Models</button></div>}
     {!researchOnly&&<label>Execution<select value={research?'research':'agent'} onChange={e=>setResearch(e.target.value==='research')}><option value="agent">Agent settings</option><option value="research">Durable research</option></select></label>}
@@ -320,7 +325,7 @@ function Tasks({tick,refresh,go,researchOnly=false,setup}:{tick:number;refresh:(
      </details>
      <label className="checkbox-label"><input type="checkbox" name="require_review" defaultChecked/>Review before saving the private report</label>
     </>}
-    <button className="primary" disabled={busy||readonly||!availableProjects?.length||!enabled?.length||!models?.available||!models?.models.length}>{research?'Queue research':'Queue task'}</button>
+    <button className="primary" disabled={busy||readonly||!availableProjects?.length||!enabled?.length||!models?.available||!models?.models.some((m:Row)=>generationModel(m as {name:string}))}>{research?'Queue research':'Queue task'}</button>
    </form>
   </details>
   {id&&detail?.id===id&&<section className="box result"><header><span>Task result · <Status value={detail.status}/></span>
@@ -404,9 +409,9 @@ export function download(text:string,name:string){const url=URL.createObjectURL(
 function Models({tick,refresh}:{tick:number;refresh:()=>void}){
  const session=useSession();const {data,error}=useData('models',tick),[inspection,setInspection]=useState<Row|null>(null),[err,setErr]=useState(''),[busy,setBusy]=useState(false);
  async function submit(e:FormEvent<HTMLFormElement>){e.preventDefault();const f=new FormData(e.currentTarget);setBusy(true);try{await api('models/config','PUT',Object.fromEntries(f));refresh();setErr('');}catch(e){setErr((e as Error).message);}finally{setBusy(false);}}
- return <section className="page"><PageHead title="Models" subtitle="Ollama inference · laptop now, private VPS endpoint later"><button onClick={refresh}>Refresh</button></PageHead><ErrorNote error={error||err||data?.error||''}/>{data&&<form className="box form" key={JSON.stringify(data.config)} onSubmit={submit}><header>Inference connection <Status value={data.available?'ONLINE':'OFFLINE'}/></header><div className="fields"><label>Private Ollama endpoint<input name="endpoint" required defaultValue={data.config.endpoint}/></label><label>Default model<input name="model" required defaultValue={data.config.model}/></label></div><p>Only private or loopback IPv4 endpoints are accepted. Changing the endpoint does not move model files.</p><button className="primary" disabled={busy||session.role!=='ADMIN'}>Save connection</button>{session.role!=='ADMIN'&&<small>Administrator access is required to change inference configuration.</small>}</form>}<section className="box"><header>Installed models <span>{data?.models.length??'—'}</span></header><div className="table-scroll"><table><thead><tr><th>Name</th><th>Size</th><th>Family</th><th>Quantization</th><th>Capabilities</th></tr></thead><tbody>{data?.models.map((m:Row)=><tr key={m.name}><td>{m.name}</td><td>{(m.size/1e9).toFixed(2)} GB</td><td>{m.details?.family??'—'}</td><td>{m.details?.quantization_level??'—'}</td><td><button onClick={async()=>{try{setInspection(await api('models/inspect?model='+encodeURIComponent(m.name)));setErr('');}catch(e){setErr((e as Error).message);}}}>Inspect</button></td></tr>)}</tbody></table></div><p className="panel-note">Installed models are not certified for every task. Embedding models should not be selected for text generation; model errors are recorded against the task.</p></section>{inspection&&<section className="box"><header>{inspection.model} · Provider-reported capabilities</header><div className="settings-content"><p>{inspection.capabilities.length?inspection.capabilities.join(', '):'Provider did not report capabilities.'}</p><pre>{JSON.stringify(inspection.context_windows,null,2)}</pre><details><summary>Model parameters and license</summary><pre>{inspection.parameters}{'\n'}{inspection.license}</pre></details></div></section>}</section>;
+ return <section className="page"><PageHead title="Models" subtitle="Ollama inference · laptop now, private VPS endpoint later"><button onClick={refresh}>Refresh</button></PageHead><ExecutionPolicy tick={tick}/><ErrorNote error={error||err||data?.error||''}/>{data&&<form className="box form" key={JSON.stringify(data.config)} onSubmit={submit}><header>Inference connection <Status value={data.available?'ONLINE':'OFFLINE'}/></header><div className="fields"><label>Private Ollama endpoint<input name="endpoint" required defaultValue={data.config.endpoint}/></label><label>Default model<input name="model" required defaultValue={data.config.model}/></label></div><p>Only private or loopback IPv4 endpoints are accepted. Changing the endpoint does not move model files.</p><button className="primary" disabled={busy||session.role!=='ADMIN'}>Save connection</button>{session.role!=='ADMIN'&&<small>Administrator access is required to change inference configuration.</small>}</form>}<section className="box"><header>Installed models <span>{data?.models.length??'—'}</span></header><div className="table-scroll"><table><thead><tr><th>Name</th><th>Size</th><th>Family</th><th>Quantization</th><th>Capabilities</th></tr></thead><tbody>{data?.models.map((m:Row)=><tr key={m.name}><td>{m.name}</td><td>{(m.size/1e9).toFixed(2)} GB</td><td>{m.details?.family??'—'}</td><td>{m.details?.quantization_level??'—'}</td><td><button onClick={async()=>{try{setInspection(await api('models/inspect?model='+encodeURIComponent(m.name)));setErr('');}catch(e){setErr((e as Error).message);}}}>Inspect</button></td></tr>)}</tbody></table></div><p className="panel-note">Installed models are not certified for every task. Embedding models should not be selected for text generation; model errors are recorded against the task.</p></section>{inspection&&<section className="box"><header>{inspection.model} · Provider-reported capabilities</header><div className="settings-content"><p>{inspection.capabilities.length?inspection.capabilities.join(', '):'Provider did not report capabilities.'}</p><pre>{JSON.stringify(inspection.context_windows,null,2)}</pre><details><summary>Model parameters and license</summary><pre>{inspection.parameters}{'\n'}{inspection.license}</pre></details></div></section>}</section>;
 }
-function Tools({tick}:{tick:number}){const {data,error}=useData('tools',tick);return <section className="page"><PageHead title="Tools" subtitle="Backend-enforced capabilities · no unrestricted host execution"/><ErrorNote error={error}/><section className="box"><header>Available tools</header>{data?.map((r:Row)=><div className="document-row" key={r.id}><div><b>{r.id}</b><p>{r.description}</p></div><Status value={r.enabled?'ENABLED':'DISABLED'}/></div>)}</section><p>Analysis mode retrieves and answers. Tools mode performs bounded, recorded calls to the agent’s permitted tools using a tools-capable model. Host shell and live external actions remain unavailable.</p><ProgramsPanel tick={tick}/></section>;}
+function Tools({tick,visible}:{tick:number;visible?:boolean}){const {data,error}=useData('tools',tick);return <section className="page"><PageHead title="Tools" subtitle="Backend-enforced capabilities · no unrestricted host execution"/><ErrorNote error={error}/><section className="box"><header>Available tools</header>{data?.map((r:Row)=><div className="document-row" key={r.id}><div><b>{r.id}</b><p>{r.description}</p></div><Status value={r.enabled?'ENABLED':'DISABLED'}/></div>)}</section><p>Analysis mode retrieves and answers. Tools mode performs bounded, recorded calls to the agent’s permitted tools using a tools-capable model. Host shell and live external actions remain unavailable.</p><ProgramsPanel tick={tick} visible={visible}/></section>;}
 
 export function Operations({tick}:{tick:number}){const {data,error}=useData('events',tick),{data:metrics}=useResource('operations/metrics',tick);return <section className="page"><PageHead title="Operations" subtitle="Persisted audit events · latest 200 · local service logs through ./core-ai logs"/><ErrorNote error={error}/><section className="box"><header>Observed inference metrics · latest requests</header><div className="table-scroll"><table><thead><tr><th>Model</th><th>Status</th><th>Duration</th><th>Tokens/s</th></tr></thead><tbody>{[...(metrics?.chats||[]),...(metrics?.tasks||[])].slice(0,30).map((r:Row)=><tr key={r.id}><td>{r.model}</td><td>{r.status}</td><td>{r.metrics.duration_ms!==undefined?(r.metrics.duration_ms/1000).toFixed(2)+' s':'—'}</td><td>{r.metrics.tokens_per_second??'Not reported'}</td></tr>)}</tbody></table></div></section><section className="box"><header>Audit timeline</header>{data?.map((e:Row)=><div className="log-line" key={e.id}><time>{when(e.created_at)}</time><b>{e.action}</b><code>{JSON.stringify(e.detail)}</code></div>)}{data?.length===0&&<Empty>No events recorded.</Empty>}</section></section>;}
 export function Inspector({view,tick}:{view:View;tick:number}){const {data}=useData('overview',tick);return <><div className="panel-heading">CONTEXT</div><div className="inspector-body"><span className="eyebrow">ACTIVE PANEL</span><h2>{view}</h2><dl><dt>Product</dt><dd>CORE-AI</dd><dt>Release</dt><dd>{data?.release??'—'}</dd><dt>Worker</dt><dd>{data?.worker?.online?'Online':'Unavailable'}</dd><dt>Provider</dt><dd>{data?.inference.endpoint??'—'}</dd><dt>Execution</dt><dd>Read project sources + local inference</dd></dl><p>No mandatory product connections. No host commands enabled.</p></div></>;}

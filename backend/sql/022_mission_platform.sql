@@ -8,8 +8,8 @@ ALTER TABLE chat_generations ALTER COLUMN program_scope SET DEFAULT '[]';
 
 CREATE TABLE program_jobs (
  id uuid PRIMARY KEY, owner_id uuid NOT NULL REFERENCES users(id),
- project_id uuid REFERENCES projects(id), parent_run uuid REFERENCES runs(id) ON DELETE SET NULL,
- parent_chat uuid REFERENCES chat_generations(id) ON DELETE SET NULL,
+ project_id uuid REFERENCES projects(id), parent_run uuid REFERENCES runs(id) ON DELETE CASCADE,
+ parent_chat uuid REFERENCES chat_generations(id) ON DELETE CASCADE,
  recipe text NOT NULL, request_id uuid NOT NULL, input_digest text NOT NULL,
  input_data jsonb NOT NULL, expected_commit text NOT NULL, expected_image text NOT NULL,
  status text NOT NULL CHECK(status IN ('QUEUED','RUNNING','CANCEL_REQUESTED','CANCELLED','FAILED','SUCCEEDED')),
