@@ -223,7 +223,13 @@ def advance_one(conn,row):
         cancel_child(conn,row)
         # Await a running child before releasing the execution state.
         if row["child_id"]:
-            set_state(conn,row,"CANCEL_REQUESTED","Access revoked.")
+            table="program_jobs" if row["child_kind"]=="program" else "runs"
+            child=conn.execute("SELECT status FROM "+table+" WHERE id=%s",(row["child_id"],)).fetchone()
+            if child and child["status"] in ("QUEUED","RUNNING","CANCEL_REQUESTED"):
+                set_state(conn,row,"CANCEL_REQUESTED","Access revoked.")
+            else:
+                conn.execute("UPDATE mission_runs SET child_id=NULL,child_kind=NULL WHERE id=%s",(row["id"],))
+                set_state(conn,row,"CANCELLED","Access revoked.")
         else:set_state(conn,row,"FAILED","Project or account access revoked.")
         return
     if row["child_id"]:
