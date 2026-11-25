@@ -14,6 +14,7 @@ import manager
 REPO="obra/superpowers"
 COMMIT="22f0b463e7a5e579904dd6211a520321035526f7"
 IMAGE_TAG="core-ai-lab-opencode:0.1.0"
+BOOTSTRAP='set -eu; mkdir -p "$XDG_CONFIG_HOME/opencode"; cp /opt/lab/opencode.json "$XDG_CONFIG_HOME/opencode/opencode.json"; unset OPENCODE_CONFIG; cd /workspace; exec /opt/opencode/node_modules/.bin/opencode "$@"'
 
 def inspect_image(tag):
     data=json.loads(subprocess.check_output(["docker","image","inspect",tag],text=True,timeout=15))
@@ -38,7 +39,8 @@ def plan(root,image_tag):
     image,version=inspect_image(image_tag)
     return {"schema":1,"repo":REPO,"commit":COMMIT,"source":str(source),
             "image":image,"host_version":version,
-            "checks":[["--version"],["plugin","list"]],
+            "checks":[["--version"],["api","GET","/api/plugin"],["api","GET","/api/skill"]],
+            "bootstrap":BOOTSTRAP,
             "network":"none","timeout":90}
 
 def digest(p):
@@ -53,7 +55,7 @@ def command(p,args,name):
             "--tmpfs","/home/node:rw,nosuid,nodev,size=256m,uid=1000,gid=1000,mode=0700",
             "--tmpfs","/workspace:rw,nosuid,nodev,size=64m,uid=1000,gid=1000,mode=0700",
             "--mount","type=bind,src="+p["source"]+",dst=/plugins/superpowers,readonly",
-            p["image"],*args]
+            "--entrypoint","/bin/sh",p["image"],"-c",p["bootstrap"],"probe",*args]
 
 def verify(root,image_tag,approved):
     p=plan(root,image_tag)
@@ -66,16 +68,32 @@ def verify(root,image_tag,approved):
         try:
             proc=subprocess.run(command(p,args,name),timeout=p["timeout"],
                                 capture_output=True,text=True,check=False)
-            print(proc.stdout,end="")
-            if proc.stderr: print(proc.stderr,end="",file=sys.stderr)
             result["exit_code"]=proc.returncode
             if proc.returncode==0:
                 if args==["--version"]:
+                    print(proc.stdout.strip())
                     result["state"]="version-matched" if p["host_version"] in proc.stdout else "version-mismatch"
                 else:
-                    # The CLI's text output is not a stable machine-readable
-                    # registration contract. Require a human to inspect it.
-                    result["state"]="registration-review-required" if re.search(r"\bsuperpowers\b",proc.stdout,re.I) else "plugin-not-listed"
+                    try:
+                        response=json.loads(proc.stdout)
+                        rows=response["data"]
+                        if not isinstance(rows,list): raise ValueError("Expected list")
+                        # Only identifiers/status, never plugin instructions or secrets.
+                        if args[-1]=="/api/plugin":
+                            result["plugins"]=[{k:r[k] for k in ("id","name","status") if k in r and isinstance(r[k],str)} for r in rows if isinstance(r,dict)]
+                            result["state"]="registration-review-required" if any(
+                                "superpowers" in (str(r.get("id","")).lower(),str(r.get("name","")).lower())
+                                or "superpowers" in str(r.get("id","")).lower().split("/") for r in result["plugins"]) else "plugin-not-listed"
+                        else:
+                            result["skill_ids"]=[r["id"] for r in rows if isinstance(r,dict) and isinstance(r.get("id"),str)]
+                            expected={entry.name for entry in (Path(p["source"])/"skills").iterdir() if entry.is_dir() and (entry/"SKILL.md").is_file()}
+                            result["expected_skill_ids"]=sorted(expected)
+                            result["state"]="skills-visible" if expected and expected<=set(result["skill_ids"]) else "skills-missing"
+                    except (ValueError,KeyError,TypeError,OSError):
+                        result["state"]="invalid-or-unavailable-api-result"
+                    print(json.dumps(result,indent=2))
+            else:
+                print("Native check failed:",args,"exit",proc.returncode)
         except subprocess.TimeoutExpired:
             result["state"]="timeout"
             subprocess.run(["docker","kill",name],timeout=15,check=False,capture_output=True)
@@ -84,7 +102,7 @@ def verify(root,image_tag,approved):
     manager.write_new(record,{"plan":p,"approval":approved,"results":results,
                               "qualification":"manual-plugin-status-review-required"})
     print("Native probe record:",record)
-    return int([r["state"] for r in results]!=["version-matched","registration-review-required"])
+    return int([r["state"] for r in results]!=["version-matched","registration-review-required","skills-visible"])
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)

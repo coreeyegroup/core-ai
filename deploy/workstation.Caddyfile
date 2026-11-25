@@ -16,6 +16,16 @@ DOMAIN {
         }
         reverse_proxy 127.0.0.1:18787
     }
+    @program_run {
+        path /api/v1/programs/run
+        method POST
+    }
+    handle @program_run {
+        request_body {
+            max_size 7MB
+        }
+        reverse_proxy 127.0.0.1:18787
+    }
     @api path /api /api/* /health
     handle @api {
         request_body {

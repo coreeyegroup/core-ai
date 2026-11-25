@@ -2,7 +2,7 @@
 
 This release connects the independent lab to CORE-AI, using the existing
 Tools page and Agents/Tasks workflow. It preserves standalone use and
-requires no new database migration. Programs are discovered from the
+adds a backward-compatible migration for opt-in chat tool permission snapshots and execution history. Apply it only through the normal approved deployment. Programs are discovered from the
 reviewed recipe catalog and matching qualification receipts; no arbitrary
 shell or installer endpoint is exposed. Input schema validation remains
 in each original wrapper. The gateway has a single execution slot and
@@ -61,8 +61,7 @@ a project. Agent file inputs must be in that project and authorized by
 existing file ACLs. Generated documents go into the existing project file
 library subject to quota and queue limits. Notebook JSON is retained as
 a .ipynb.json file; manual download uses .ipynb. Agent results are
-bounded for model context. Standard conversation generation is unchanged:
-use Tasks for tool-driven requests until direct chat invocation is built.
+bounded for model context. Standard conversation generation is unchanged by default. In Chat, select a Tools-mode agent with program.run permission and explicitly enable Use programs. Chat executes the bounded tool loop and shows recorded results; attached file access is limited to current-message attachments in the current project (or private files for a private chat).
 No autonomous install, live research, shell, broker action or production
 file access is granted. Cancellation of an in-flight offline program is
 bounded by its timeout; immediate process cancellation and durable
@@ -79,6 +78,7 @@ manual run queues remain future work.
 - As VIEWER, POST execution must fail. As a permitted agent, run
   program.list then program.run using the same example; inspect steps.
 - Verify offline gateway does not prevent normal chat or other modules.
+- Check Chat with Use programs on and off, including permission revocation and attached-file scope.
 - Review native OpenCode registration separately; package installation
   alone is not an agent qualification.
 

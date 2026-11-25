@@ -66,7 +66,7 @@ export default function ProgramsPanel({tick}:{tick:number}){
    {busy&&<p role="status">Execution in progress. Do not submit again.</p>}
    {result&&<section className="box"><header>Execution result · {result.state}</header><p>{result.recipe} · {result.provenance} · ID {result.id}</p><pre style={{whiteSpace:'pre-wrap',overflowWrap:'anywhere',maxHeight:'30rem',overflow:'auto'}}>{JSON.stringify(result.result,null,2)}</pre>{result.file&&<button onClick={()=>save(result.file!.name,result.file!.data)}>Download new file</button>}</section>}
    <details><summary>Repository coverage ({catalog.repositories.length})</summary><div className="table-scroll"><table><thead><tr><th>Repository</th><th>Source</th><th>Reviewed recipes</th></tr></thead><tbody>{catalog.repositories.map(r=><tr key={r.repository}><td>{r.repository}</td><td>{r.source_present?'Verified':'Unavailable'}</td><td>{r.recipes.length} · {r.coverage}</td></tr>)}</tbody></table></div></details>
-   <p className="panel-note">For agent execution, enable Tools mode and assign program.list and program.run in Agents, then launch a project task. Standard chat remains a separate inference workflow.</p>
+   <p className="panel-note">For agent execution, enable Tools mode and assign program.list and program.run in Agents, then launch a project task. In Chat, select the permitted agent and explicitly enable Use programs.</p>
   </>}
  </section>;
 }

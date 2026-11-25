@@ -25,7 +25,9 @@ class NativeHostTests(unittest.TestCase):
             self.assertIn("--read-only",args)
             self.assertIn("1000:1000",args)
             self.assertIn("type=bind,src="+p["source"]+",dst=/plugins/superpowers,readonly",args)
-            self.assertEqual(args[-3:],[IMAGE,"plugin","list"])
+            self.assertEqual(args[-2:],["plugin","list"])
+            self.assertIn("--entrypoint",args)
+            self.assertIn('$XDG_CONFIG_HOME/opencode/opencode.json',p["bootstrap"])
     def test_review_required_before_run(self):
         with tempfile.TemporaryDirectory() as tmp,patch.object(native.manager,"verify"),patch.object(native,"inspect_image",return_value=(IMAGE,"2.2.7")),patch.object(native.subprocess,"run") as run:
             with self.assertRaises(ValueError):
@@ -35,7 +37,10 @@ class NativeHostTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp,patch.object(native.manager,"verify"),patch.object(native,"inspect_image",return_value=(IMAGE,"2.2.7")),patch.object(native.subprocess,"run") as run:
             root=Path(tmp)
             p=native.plan(root,"test")
-            run.side_effect=[subprocess.CompletedProcess([],0,"2.2.7\n",""),subprocess.CompletedProcess([],0,"superpowers\n","")]
+            skill=Path(p["source"])/"skills"/"brainstorming"
+            skill.mkdir(parents=True)
+            (skill/"SKILL.md").write_text("fixture")
+            run.side_effect=[subprocess.CompletedProcess([],0,"2.2.7\n",""),subprocess.CompletedProcess([],0,'{"data":[{"id":"superpowers"}]}',""),subprocess.CompletedProcess([],0,'{"data":[{"id":"brainstorming"}]}',"")]
             self.assertEqual(native.verify(root,"test",native.digest(p)),0)
             self.assertFalse((root/"packages").exists())
             self.assertEqual(len(list((root/"reports"/"native").glob("*.json"))),1)

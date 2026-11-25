@@ -84,7 +84,9 @@ def agent_run(body,user,run):
     if body.file_id is not None:
         from pathlib import PurePath
         with db.connect() as conn:
-            access.project(conn,user,run["project_id"])
+            if run["project_id"] is not None:access.project(conn,user,run["project_id"])
+            if run.get("chat_generation") and str(body.file_id) not in run["attached_file_ids"]:
+                raise HTTPException(403,"Choose an attachment from the current message.")
             row=files.owned(conn,user,body.file_id)
             if row["project_id"]!=run["project_id"]:
                 raise HTTPException(403,"Choose a file in the current project.")
@@ -102,8 +104,9 @@ def agent_run(body,user,run):
         if name not in ("result.docx","result.xlsx","result.ipynb.json") or len(raw)>files.MAX_BYTES:
             raise HTTPException(422,"Unexpected generated file.")
         with db.connect() as conn:
-            access.project(conn,user,run["project_id"],True)
-            state=conn.execute("SELECT status FROM runs WHERE id=%s FOR UPDATE",(run["id"],)).fetchone()
+            if run["project_id"] is not None:access.project(conn,user,run["project_id"],True)
+            table="chat_generations" if run.get("chat_generation") else "runs"
+            state=conn.execute(f"SELECT status FROM {table} WHERE id=%s FOR UPDATE",(run["id"],)).fetchone()
             if not state or state["status"]!="RUNNING": raise InterruptedError("Run stopped before saving output.")
             conn.execute("SELECT pg_advisory_xact_lock(187875438)")
             quota=conn.execute("SELECT coalesce(sum(size_bytes),0) AS n FROM workspace_files WHERE owner_id=%s",(user["id"],)).fetchone()["n"]

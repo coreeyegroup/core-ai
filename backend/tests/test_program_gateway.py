@@ -17,3 +17,20 @@ def test_viewer_cannot_execute():
             program_gateway.manual_run(program_gateway.RunInput(recipe="position-sizing"),{"id":"viewer","role":"VIEWER"})
         assert error.value.status_code==403
         invoke.assert_not_called()
+
+def test_chat_programs_requires_explicit_permission(signed):
+    import uuid
+    from core_ai import db
+    r=signed.post('/api/v1/chat/conversations',json={'model':'test:latest'})
+    assert r.status_code==201
+    ident=r.json()['id']
+    body={'model':'test:latest','content':'calculate','request_id':str(uuid.uuid4()),'use_programs':True}
+    assert signed.post('/api/v1/chat/conversations/'+ident+'/messages',json=body).status_code==422
+    agent=signed.post('/api/v1/agents',json={'name':'Program agent','instructions':'Use qualified programs only.',
+        'runtime_mode':'tools','tools':['program.list','program.run']})
+    assert agent.status_code==201,agent.text
+    body['agent_id']=agent.json()['id']
+    reply=signed.post('/api/v1/chat/conversations/'+ident+'/messages',json=body)
+    assert reply.status_code==201,reply.text
+    snapshot=db.query('SELECT program_tools FROM chat_generations WHERE id=%s',(reply.json()['id'],),one=True)
+    assert snapshot['program_tools']==['program.list','program.run']
