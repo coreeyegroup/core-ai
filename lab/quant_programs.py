@@ -70,14 +70,19 @@ result={'source':'provided' if rows else 'synthetic','bars':len(df),'initial_cas
     "assert result['bars']==120;assert result['closed_trades']>0;assert math.isfinite(result['final_value']);assert result['max_drawdown_pct']>=0")
 }
 
-PREFIX="""import json,math,runpy,sys
+PREFIX="""import json,math,sys
 a=json.loads(''.join(sys.argv[2:]))
 if sys.argv[1]=='core/tradekit/montecarlo.py':
     sys.path.insert(0,'core')
     from tradekit import montecarlo
     m=vars(montecarlo)
 else:
-    m=runpy.run_path(sys.argv[1])
+    import importlib.util
+    spec=importlib.util.spec_from_file_location('core_lab_upstream',sys.argv[1])
+    mod=importlib.util.module_from_spec(spec)
+    sys.modules[spec.name]=mod
+    spec.loader.exec_module(mod)
+    m=vars(mod)
 def close(x,y):
     if not math.isclose(x,y,rel_tol=1e-7,abs_tol=1e-7):
         raise SystemExit('Unexpected fixture result: %r != %r'%(x,y))

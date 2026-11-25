@@ -19,8 +19,20 @@ class QuantTests(unittest.TestCase):
             p=q.plan(name,IMAGE)
             self.assertEqual(p["commit"],pins[p["repo"]])
             compile(p["steps"][0][2],"<fixture>","exec")
+            compile(p["steps"][0][3]+p["steps"][0][4],"<recipe>","exec")
             self.assertIn("--network=none",q.manager.docker_args(Path("/tmp/source"),p,"test"))
             self.assertEqual(recipe["runtime"],q.PYTHON if name in ("technical-indicators","monte-carlo") else q.QUANT)
+    def test_loader_preserves_module_identity(self):
+        import subprocess
+        import json
+        with tempfile.TemporaryDirectory() as tmp:
+            module=Path(tmp)/"fixture.py"
+            module.write_text("import sys\ndef sma(x,n):\n    assert sys.modules[__name__].sma is sma\n    return [None,None,2,3,4]\nema=sma\ndef rsi(x,n):\n    return [None,None,None,100,100]\n")
+            step=q.plan("technical-indicators",IMAGE)["steps"][0][:]
+            step[0]=sys.executable
+            step[5]=str(module)
+            result=subprocess.run(step,check=True,capture_output=True,text=True)
+            self.assertEqual(json.loads(result.stdout)["rsi"][-1],100)
     def test_validation_and_large_payload(self):
         for name,a in [("technical-indicators",[[1,2],3]),("monte-carlo",[[1]*5,100,5,10,10000,7]),("correlation-matrix",[[1,1,1],[2,3,4]]),("numpy-drawdown",[100,0]),("ema-backtest",[10,5,10000,.001,.001,1,42,500,[]]),("scipy-option-price",[100,100,0,.05,.2,0])]:
             with self.assertRaises(ValueError): q.plan(name,IMAGE,a)
