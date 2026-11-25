@@ -20,12 +20,13 @@ export default function ProgramsPanel({tick,visible=true}:{tick:number;visible?:
  useEffect(()=>{if(!visible)return;let alive=true;const read=()=>api('programs/jobs').then(d=>{if(alive&&Array.isArray(d))setJobs(d);}).catch(e=>{if(alive)setError(e.message);});void read();const timer=setInterval(read,5000);return()=>{alive=false;clearInterval(timer);};},[visible,refresh]);
  useEffect(()=>{if(!jobId||!visible||(job?.id===jobId&&!active(job.status)))return;let alive=true;const read=()=>api('programs/jobs/'+jobId).then(d=>{if(alive&&d?.id===jobId)setJob(d);}).catch(e=>{if(alive)setError(e.message);});void read();const timer=setInterval(read,1800);return()=>{alive=false;clearInterval(timer);};},[jobId,visible,job?.id,job?.status]);
  const coverageRef=useRef<HTMLDetailsElement>(null);
+ const catalogReady=catalog!==null;
  useEffect(()=>{
-  if(!visible||!catalog)return;
+  if(!visible||!catalogReady)return;
   const reveal=()=>{if(window.location.hash==='#repository-coverage'&&coverageRef.current){coverageRef.current.open=true;coverageRef.current.scrollIntoView?.({block:'start'});}};
   reveal();window.addEventListener('hashchange',reveal);window.addEventListener('popstate',reveal);
   return()=>{window.removeEventListener('hashchange',reveal);window.removeEventListener('popstate',reveal);};
- },[visible,catalog]);
+ },[visible,catalogReady]);
  const current=catalog?.programs.find(p=>p.id===selected);
  const qualified=catalog?.programs.filter(p=>p.state==='qualified-receipt').length??0;
  function select(p:Program){setSelected(p.id);setValues(JSON.stringify(p.example,null,2));setFile(null);setError('');request.current=null;}
