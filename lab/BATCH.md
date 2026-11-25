@@ -1,6 +1,6 @@
 # Batch qualification of independent programs
 
-This is a consolidated installer for the 16 currently reviewed standalone
+This is a consolidated installer for the 22 currently reviewed standalone
 recipes. It does not install every source file in the 24 repositories. The
 remaining repository capabilities require individual source and license review,
 native runtimes, dependencies, and functional fixtures. The batch status
@@ -8,11 +8,11 @@ command reports all 24 pinned repositories and partial coverage explicitly.
 
 Use a dedicated test VM/host. Review the pinned upstream programs and existing
 runtime definitions before executing. No repository code runs during review.
-The batch uses only the existing local Python, document and Office Docker
+The batch uses only the existing local Python, document, Office and quantitative Docker
 images; it never pulls or builds images, changes production services, connects
 brokers, installs native agent hosts, or deletes existing data. On another host,
-prepare the three images using the documented recipe-specific instructions
-first. Docker does not provide a complete boundary for hostile source.
+prepare the four images using the documented recipe-specific instructions
+first (see QUANT.md for the quantitative image). Docker does not provide a complete boundary for hostile source.
 
 From the independent manager checkout:
 

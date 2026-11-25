@@ -13,6 +13,7 @@ import programs
 import document_programs as docs
 import trading_programs as trading
 import more_programs as more
+import quant_programs as quant
 
 PYTHON="python:3.12-slim"
 DOCUMENTS="core-ai-lab-documents:0.1.0"
@@ -23,6 +24,7 @@ def catalog():
     entries += [(n,OFFICE if n in docs.EDIT_RECIPES else DOCUMENTS,docs) for n in docs.RECIPES]
     entries += [(n,PYTHON,trading) for n in trading.RECIPES]
     entries += [(n,PYTHON,more) for n in more.RECIPES]
+    entries += [(n,r["runtime"],quant) for n,r in quant.RECIPES.items()]
     if len({n for n,_,_ in entries})!=len(entries):
         raise ValueError("Duplicate recipe identifier")
     return entries
