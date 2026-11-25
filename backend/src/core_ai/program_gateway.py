@@ -66,7 +66,8 @@ def manual_run(body:RunInput,user=Depends(auth.session)):
     access.writer(user)
     db.event("program.requested",user["id"],{"recipe":body.recipe})
     try:
-        result=invoke(body)
+        from . import program_jobs
+        result=program_jobs.wait_manual(user,body)
     except HTTPException:
         db.event("program.failed",user["id"],{"recipe":body.recipe})
         raise

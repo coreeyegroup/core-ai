@@ -46,7 +46,7 @@ def insert(conn,user,body,request_id,project_id,pin,*,parent=None,retry_of=None)
        coalesce(sum(octet_length(input_data::text)+coalesce(octet_length(result::text),0)+coalesce(octet_length(file_data),0)),0) AS bytes
        FROM program_jobs WHERE owner_id=%s""",(user["id"],)).fetchone()
     pending=conn.execute("SELECT count(*) AS n FROM program_jobs WHERE status IN ('QUEUED','RUNNING','CANCEL_REQUESTED')").fetchone()["n"]
-    if usage["total"]>=MAX_JOBS or usage["bytes"]+usage["pending"]*8*1024**2+len(json.dumps(data).encode())+8*1024**2>MAX_STORE:
+    if usage["total"]>=MAX_JOBS or usage["bytes"]+usage["pending"]*12*1024**2+len(json.dumps(data).encode())+12*1024**2>MAX_STORE:
         raise HTTPException(409,"Program history storage limit reached. Export and manage stored jobs.")
     if pending>=30 or usage["pending"]>=10: raise HTTPException(409,"Program queue is full.")
     ident=uuid.uuid4()
@@ -206,6 +206,19 @@ def process(row,stopping=None):
         finish(row,"FAILED",code="GATEWAY_"+str(exc.status_code),error="Gateway unavailable, busy, or request rejected. Review qualification and inputs before retry.")
     except Exception as exc:
         finish(row,"FAILED",code=type(exc).__name__,error="Program execution stopped. Review permissions, inputs and service health.")
+
+def wait_manual(user,body):
+    ident=enqueue(user,body,uuid.uuid4())
+    deadline=time.monotonic()+205
+    while time.monotonic()<deadline:
+        with db.connect() as conn: row=owned(conn,user,ident)
+        if row["status"]=="SUCCEEDED":
+            result={**row["result"],"job_id":str(ident)}
+            result["file"]={"name":row["file_name"],"data":base64.b64encode(bytes(row["file_data"])).decode()} if row["file_data"] else None
+            return result
+        if row["status"] in ("FAILED","CANCELLED"):raise HTTPException(422,"Program job "+str(ident)+" ended "+row["status"]+".")
+        time.sleep(.5)
+    raise HTTPException(504,"Program job "+str(ident)+" remains in the durable queue; inspect its history.")
 
 def wait(user,body,parent):
     ident=enqueue(user,body,uuid.uuid4(),parent["project_id"],parent=parent)
