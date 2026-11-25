@@ -14,6 +14,7 @@ import document_programs as docs
 import trading_programs as trading
 import more_programs as more
 import quant_programs as quant
+import research_programs as research
 
 PYTHON="python:3.12-slim"
 DOCUMENTS="core-ai-lab-documents:0.1.0"
@@ -25,6 +26,7 @@ def catalog():
     entries += [(n,PYTHON,trading) for n in trading.RECIPES]
     entries += [(n,PYTHON,more) for n in more.RECIPES]
     entries += [(n,r["runtime"],quant) for n,r in quant.RECIPES.items()]
+    entries += [(n,PYTHON,research) for n in research.RECIPES]
     if len({n for n,_,_ in entries})!=len(entries):
         raise ValueError("Duplicate recipe identifier")
     return entries

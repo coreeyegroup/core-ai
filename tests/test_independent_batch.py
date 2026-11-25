@@ -19,7 +19,7 @@ IMAGE="sha256:"+"e"*64
 class BatchTests(unittest.TestCase):
     def test_all_recipe_plans_and_pins(self):
         pins=batch.manager.load_manifest(batch.manager.HERE/"repositories.json")
-        self.assertEqual(len(batch.catalog()),22)
+        self.assertEqual(len(batch.catalog()),26)
         for name,tag,module in batch.catalog():
             p=batch.plan_for(module,name,IMAGE)
             self.assertEqual(p["commit"],pins[p["repo"]])
@@ -34,17 +34,17 @@ class BatchTests(unittest.TestCase):
             with patch.object(batch.programs,"install") as install:
                 with self.assertRaises(ValueError): batch.install(root,"wrong")
                 install.assert_not_called()
-            with patch.object(batch.programs,"install",return_value=1) as ui, patch.object(batch.docs,"install",return_value=1) as docs, patch.object(batch.trading,"install",return_value=1) as trading, patch.object(more,"install",return_value=1) as extra, patch.object(batch.quant,"install",return_value=1) as quant:
+            with patch.object(batch.programs,"install",return_value=1) as ui, patch.object(batch.docs,"install",return_value=1) as docs, patch.object(batch.trading,"install",return_value=1) as trading, patch.object(more,"install",return_value=1) as extra, patch.object(batch.quant,"install",return_value=1) as quant, patch.object(batch.research,"install",return_value=1) as research:
                 self.assertEqual(batch.install(root,batch.digest(p)),1)
-                self.assertEqual(sum(m.call_count for m in (ui,docs,trading,extra,quant)),22)
+                self.assertEqual(sum(m.call_count for m in (ui,docs,trading,extra,quant,research)),26)
                 report=json.loads(next((root/"reports"/"batches").glob("*.json")).read_text())
-                self.assertEqual(len(report["results"]),22)
+                self.assertEqual(len(report["results"]),26)
                 self.assertTrue(all(r["state"]=="failed" for r in report["results"]))
     def test_resume_skips_qualified(self):
-        with tempfile.TemporaryDirectory() as tmp, patch.object(batch,"image_id",return_value=IMAGE), patch.object(batch.manager,"verify"), patch.object(batch,"verified_receipt",return_value=True), patch.object(batch.programs,"install") as ui, patch.object(batch.docs,"install") as docs, patch.object(batch.trading,"install") as trading, patch.object(more,"install") as extra, patch.object(batch.quant,"install") as quant:
+        with tempfile.TemporaryDirectory() as tmp, patch.object(batch,"image_id",return_value=IMAGE), patch.object(batch.manager,"verify"), patch.object(batch,"verified_receipt",return_value=True), patch.object(batch.programs,"install") as ui, patch.object(batch.docs,"install") as docs, patch.object(batch.trading,"install") as trading, patch.object(more,"install") as extra, patch.object(batch.quant,"install") as quant, patch.object(batch.research,"install") as research:
             root=Path(tmp)
             self.assertEqual(batch.install(root,batch.digest(batch.reviewed_plan(root))),0)
-            for m in (ui,docs,trading,extra,quant): m.assert_not_called()
+            for m in (ui,docs,trading,extra,quant,research): m.assert_not_called()
     def test_image_change_invalidates_approval(self):
         with tempfile.TemporaryDirectory() as tmp, patch.object(batch.manager,"verify"),patch.object(batch,"image_id",return_value=IMAGE) as image:
             root=Path(tmp)

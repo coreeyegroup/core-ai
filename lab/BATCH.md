@@ -1,6 +1,6 @@
 # Batch qualification of independent programs
 
-This is a consolidated installer for the 22 currently reviewed standalone
+This is a consolidated installer for the 26 currently reviewed standalone
 recipes. It does not install every source file in the 24 repositories. The
 remaining repository capabilities require individual source and license review,
 native runtimes, dependencies, and functional fixtures. The batch status
