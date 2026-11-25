@@ -57,6 +57,10 @@ def native_evidence(root):
             if plan.get("image")!=image or plan.get("commit")!=native_host.COMMIT or record.get("approval")!=native_host.digest(plan):continue
             checks=[{"arguments":r.get("arguments"),"state":r.get("state")} for r in record.get("results",[]) if isinstance(r,dict)]
             evidence.update(state="registration-probe-recorded",checks=checks,report_id=path.stem)
+            expected=native_host.plan(root,native_host.IMAGE_TAG)
+            if plan!=expected:
+                evidence["state"]="previous-probe-requires-current-review"
+                continue
             if [r["state"] for r in checks]==["version-matched","registration-review-required","skills-visible"]:
                 evidence["state"]="skills-visible-review-required"
             break

@@ -152,3 +152,28 @@ new functional evidence is needed. In the browser, use Tools to submit
 a real program job and inspect its persisted result. All repositories
 must have their own capability-specific functional acceptance tests
 before their entire installations can be considered complete.
+
+## Expanded offline coverage
+
+The consolidated batch adds 12 original upstream components, giving 38 reviewed recipes
+across 23 executable-bearing repositories. The remaining Karpathy collection is
+instruction-only. These are not full installations of all upstream applications.
+The original 26 plans and receipts are unchanged. The existing OpenCode image is
+reused only as a Node runtime for isolated tests and validators; its presence
+does not prove plugin registration. No third-party installation scripts or
+external provider credentials are required for this batch.
+
+Review the exact plans and images before approving execution:
+    python3 lab/batch_install.py review
+    # Use the exact reviewed digest, then:
+    python3 lab/batch_install.py install --approve REVIEWED_DIGEST
+    python3 lab/batch_install.py status
+
+The batch skips valid existing receipts and continues independent checks if one
+fails. Failed components receive no receipt. Only qualified recipes may execute
+via CORE-AI. Run the normal integration installer after qualification gates pass.
+The native OpenCode registration probe must be re-run separately with its current
+reviewed digest; an older plugin-list report is not evidence of the revised probe.
+Full host integrations, provider-backed features and upstream libraries require
+their own functional acceptance. The DCF assumptions check is a synthetic workbook,
+and the Vercel check uses static upstream heuristics, not current rate-limit data.

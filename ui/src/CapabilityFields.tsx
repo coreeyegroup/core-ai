@@ -1,6 +1,6 @@
 import {useState} from 'react';
 
-export type Program={id:string;repository:string;commit:string;runtime:string;fields:string|string[];example:unknown[];extensions:string[];output_file:boolean;mode:string;state:string;image?:string};
+export type Program={id:string;repository:string;commit:string;runtime:string;fields:string|string[];example:unknown[];extensions:string[];output_file:boolean;mode:string;state:string;image?:string;scope?:string|null};
 export type Model={name:string;size?:number;capabilities?:string[]|null};
 export function generationModel(m:Model){
  return Array.isArray(m.capabilities)?m.capabilities.includes('completion'):!/(embed|bge-m3)/i.test(m.name);

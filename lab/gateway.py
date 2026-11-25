@@ -61,12 +61,16 @@ def metadata(name,tag,module):
                 "diagram-prism":"Width, depth, height, corner radius",
                 "ml4t-chapter-map":"No arguments"}[name]
         example=r[2]
+    elif module is batch.coverage:
+        fields=r["fields"]
+        example=r["fixture"]
     else:
         raise ValueError("Recipe has no gateway adapter")
     return {"id":name,"repository":plan["repo"],"commit":plan["commit"],
             "runtime":tag,"fields":fields,"example":example,"extensions":ext,
             "output_file":name in batch.docs.EDIT_RECIPES or name=="notebook-scaffold",
-            "mode":"mock" if name=="research-mock" else "offline",
+            "mode":r["mode"] if module is batch.coverage else ("mock" if name=="research-mock" else "offline"),
+            "scope":r["scope"] if module is batch.coverage else None,
             "state":"pending"}
 
 def build_catalog(root):

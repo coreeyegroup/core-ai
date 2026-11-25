@@ -17,7 +17,7 @@ IMAGE="sha256:"+"a"*64
 class GatewayTests(unittest.TestCase):
     def test_catalog_covers_all_reviewed_recipes(self):
         rows=[g.metadata(n,t,m) for n,t,m in g.batch.catalog()]
-        self.assertEqual(len(rows),26)
+        self.assertEqual(len(rows),38)
         self.assertEqual(len({r["id"] for r in rows}),len(rows))
         self.assertEqual(sum(bool(r["extensions"]) for r in rows),4)
     def test_unknown_and_unapproved_recipes(self):
