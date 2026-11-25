@@ -213,13 +213,16 @@ def process_files():
 
 
 def process_programs():
+    import logging
+    log=logging.getLogger('core_ai.programs')
     while not stopping.is_set():
         try:
             missions.advance()
             job=program_jobs.claim()
             if job: program_jobs.process(job,stopping)
             else: stopping.wait(.5)
-        except Exception:
+        except Exception as exc:
+            log.error('Program/mission worker interrupted: %s',type(exc).__name__)
             stopping.wait(2)
 
 def main():

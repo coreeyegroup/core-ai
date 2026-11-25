@@ -3,7 +3,7 @@ import {api,newId} from './api';
 import {useSession} from './Session';
 import {ParameterEditor,title,type Program} from './CapabilityFields';
 
-type Repo={repository:string;commit:string;source_present:boolean;recipes:string[];coverage:string;inventory_counts?:Record<string,number>;file_count?:number;next_action?:string};
+type Repo={repository:string;commit:string;source_present:boolean;recipes:string[];coverage:string;inventory_counts?:Record<string,number>;file_count?:number;next_action?:string;family?:string;installation_state?:string;entrypoints?:{path:string;present:boolean}[]};
 type Catalog={schema:number;programs:Program[];repositories:Repo[];native?:unknown};
 type Job={id:string;recipe:string;status:string;created_at:string;error?:string;error_code?:string;file_name?:string;result?:{id:string;result:unknown;provenance:string;commit:string;image:string};retry_of?:string;parent_run?:string;parent_chat?:string;connection_id?:string};
 const active=(s:string)=>['QUEUED','RUNNING','CANCEL_REQUESTED'].includes(s);
@@ -60,11 +60,11 @@ export default function ProgramsPanel({tick,visible=true}:{tick:number;visible?:
     <button type="submit" className="primary" disabled={busy||readonly||!!loadError||current.state!=='qualified-receipt'}>{busy?'Submitting…':'Run qualified program'}</button>
     {readonly&&<small>Read-only account.</small>}
    </form>}
-   <details><summary>Repository coverage ({catalog.repositories.length})</summary><div className="table-scroll"><table><thead><tr><th>Repository</th><th>Source</th><th>Inventory</th><th>Installation coverage</th></tr></thead><tbody>{catalog.repositories.map(r=><tr key={r.repository}><td>{r.repository}</td><td>{r.source_present?'Verified':'Unavailable'}</td><td>{r.file_count===undefined?'—':r.file_count+' files'}{r.inventory_counts&&<p>{['program','hook','manifest','skill','agent-candidate'].map(k=>k+': '+(r.inventory_counts?.[k]??0)).join(' · ')}</p>}</td><td>{r.recipes.length} · {r.coverage}<p>{r.next_action||''}</p></td></tr>)}</tbody></table></div></details>
+   <details><summary>Repository coverage ({catalog.repositories.length})</summary><div className="table-scroll"><table><thead><tr><th>Repository</th><th>Source</th><th>Inventory</th><th>Installation coverage</th></tr></thead><tbody>{catalog.repositories.map(r=><tr key={r.repository}><td>{r.repository}</td><td>{r.source_present?'Verified':'Unavailable'}</td><td>{r.file_count===undefined?'—':r.file_count+' files'}{r.inventory_counts&&<p>{['program','hook','manifest','skill','agent-candidate'].map(k=>k+': '+(r.inventory_counts?.[k]??0)).join(' · ')}</p>}</td><td>{r.recipes.length} · {r.coverage}<p>{r.family} · {r.installation_state}</p><p>{r.next_action||''}</p>{!!r.entrypoints?.length&&<details><summary>Candidate entry points</summary>{r.entrypoints.map(e=><p key={e.path}>{e.path} · {e.present?'Present':'Verify path'}</p>)}</details></td></tr>)}</tbody></table></div></details>
    {catalog.native!=null&&<details><summary>Native runtime evidence</summary><pre style={{whiteSpace:'pre-wrap'}}>{JSON.stringify(catalog.native,null,2)}</pre></details>}
   </>}
   {error&&<div className="error" role="alert">{error}</div>}
-  <section className="box"><header>Execution history <span>{jobs.length}</span></header>
+  <section className="box"><header>Execution history <span>{jobs.length}</span></header><p className="panel-note">Full results and generated files persist here. Native/provider installations require a separate reviewed qualification; see repository coverage.</p>
    {jobs.length===0?<p>No program jobs recorded for this account.</p>:<div className="table-scroll"><table><thead><tr><th>Program</th><th>Status</th><th>Created</th></tr></thead><tbody>{jobs.map(j=><tr key={j.id}><td><button aria-pressed={jobId===j.id} onClick={()=>{setJob(null);setJobId(j.id);}}>{title(j.recipe)}</button></td><td>{j.status}</td><td>{new Date(j.created_at).toLocaleString()}</td></tr>)}</tbody></table></div>}
    {job&&<section className="box"><header>{title(job.recipe)} · {job.status}</header><p>{job.id}</p>
     {job.error&&<p role="alert">{job.error_code} · {job.error}</p>}

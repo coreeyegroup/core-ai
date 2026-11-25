@@ -16,6 +16,7 @@ import uuid
 
 import batch_install as batch
 import manager
+import installation_review
 
 MAX_FILE=4*1024*1024
 MAX_OUTPUT=6*1024*1024
@@ -78,6 +79,7 @@ def build_catalog(root):
             row["source_present"]=True
             row["inventory_counts"]=inventory["counts"]
             row["file_count"]=inventory["file_count"]
+            row.update(installation_review.classify(repo,inventory))
         except (ValueError,OSError,subprocess.SubprocessError):
             pass
     images={}
@@ -96,7 +98,9 @@ def build_catalog(root):
             item["state"]="review-required"
         row["recipes"].append(name)
         programs.append(item)
-    return {"schema":1,"programs":programs,"repositories":list(rows.values())}
+    for row in rows.values():
+        if "next_action" not in row:row.update(installation_review.classify(row["repository"],{}))
+    return {"schema":1,"programs":programs,"repositories":list(rows.values()),"native":installation_review.native_evidence(root)}
 
 def catalog(root):
     with CATALOG_LOCK:

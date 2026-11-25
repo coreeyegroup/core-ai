@@ -99,3 +99,7 @@ Staskh/ML4T libraries, live research providers, Wshobson, Superpowers,
 Caveman, Ponytail and the other collected skill ecosystems. A complete
 coverage inventory, host-specific install approval, and functionality
 checks are required before declaring any entire repository installed.
+
+## Mission platform release
+
+See `lab/MISSION_PLATFORM.md` for the new durable jobs, mission workspace, scoped execution, agent factory and MCP bridge. The same consolidated deployment command applies; review migration 022 before approving.
