@@ -93,3 +93,38 @@ def test_mission_rejects_forward_dependency(signed,work):
              "steps":[{"id":"a","kind":"program","recipe":"position-sizing","values":[],"depends_on":["b"]},
                       {"id":"b","kind":"program","recipe":"position-sizing","values":[]}]}
     assert signed.post("/api/v1/missions",json=payload).status_code==422
+
+def test_factory_publish_disabled_and_scoped(signed,work):
+    from core_ai import agent_factory
+    run=signed.post("/api/v1/runs",json=work).json()["id"]
+    draft={"name":"Generated agent","instructions":"Use sizing only","runtime_mode":"tools",
+           "tools":["program.run"],"program_scope":["position-sizing"]}
+    db.query("UPDATE runs SET status='SUCCEEDED',output=%s WHERE id=%s",(json.dumps(draft),run))
+    r=signed.post("/api/v1/agent-factory/drafts",json={"run_id":run})
+    assert r.status_code==201,r.text
+    row=r.json()
+    assert signed.post("/api/v1/agent-factory/drafts/"+row["id"]+"/publish",json={"digest":"a"*64}).status_code==409
+    p=signed.post("/api/v1/agent-factory/drafts/"+row["id"]+"/publish",json={"digest":row["digest"]})
+    assert p.status_code==201,p.text
+    agent=db.query("SELECT enabled,program_scope FROM agents WHERE id=%s",(p.json()["id"],),one=True)
+    assert not agent["enabled"] and agent["program_scope"]==["position-sizing"]
+    with pytest.raises(ValueError):agent_factory.draft_for(json.dumps({**draft,"program_scope":["*"]}))
+
+def test_automation_program_key_scope(signed):
+    c=signed.post("/api/v1/connections",json={"name":"Program client","model":"test:latest","can_cancel":True})
+    assert c.status_code==201,c.text
+    key={"Authorization":"Bearer "+c.json()["token"]}
+    cat=catalog();cat["programs"][0]["output_file"]=False
+    with patch.object(program_gateway,"get_catalog",return_value=cat),patch.object(program_gateway,"invoke",return_value=result()):
+        submit={"recipe":"position-sizing","values":[10000,.01,100,95,0,0],"request_id":str(uuid.uuid4())}
+        assert signed.post("/api/v1/automation/programs/jobs",headers=key,json=submit).status_code==403
+        scope=signed.put("/api/v1/connections/"+c.json()["id"]+"/program-scope",json={"recipes":["position-sizing"]})
+        assert scope.status_code==200,scope.text
+        job=signed.post("/api/v1/automation/programs/jobs",headers=key,json=submit)
+        assert job.status_code==202,job.text
+        from core_ai import program_jobs
+        row=program_jobs.claim()
+        assert str(row["id"])==job.json()["id"]
+        program_jobs.process(row)
+        r=signed.get("/api/v1/automation/programs/jobs/"+job.json()["id"],headers=key)
+        assert r.status_code==200 and r.json()["status"]=="SUCCEEDED"

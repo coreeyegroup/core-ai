@@ -467,7 +467,7 @@ test('custom workbench navigates, splits and opens every implemented module',asy
   for(const [name,value] of Object.entries({project_id:'project',agent_id:'agent',model:'test:latest',prompt:'Explain liquidity',criteria:'Use source citations',queries:'liquidity'})){
    researchForm.elements.namedItem(name).value=value;
   }
-  await act(async()=>{submit(workflow());await wait();});
+  await act(async()=>{researchForm.dispatchEvent(new dom.window.Event('submit',{bubbles:true,cancelable:true}));await wait();});
   assert.equal(researchWrites.length,1);
   assert.deepEqual(researchWrites[0].research.queries,['liquidity']);
   assert.equal(researchWrites[0].research.require_review,true);

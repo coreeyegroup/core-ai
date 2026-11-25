@@ -37,3 +37,15 @@ CREATE TABLE mission_runs (
  created_at timestamptz NOT NULL DEFAULT now(), finished_at timestamptz
 );
 CREATE INDEX mission_run_queue ON mission_runs(created_at,id) WHERE status IN ('QUEUED','RUNNING','PAUSE_REQUESTED','CANCEL_REQUESTED');
+
+ALTER TABLE automation_connections ADD COLUMN program_scope jsonb NOT NULL DEFAULT '[]';
+ALTER TABLE program_jobs ADD COLUMN connection_id uuid REFERENCES automation_connections(id);
+CREATE INDEX program_job_connection ON program_jobs(connection_id,created_at DESC) WHERE connection_id IS NOT NULL;
+CREATE TABLE agent_factory_records (
+ id uuid PRIMARY KEY, owner_id uuid NOT NULL REFERENCES users(id), project_id uuid NOT NULL REFERENCES projects(id),
+ source_run uuid NOT NULL REFERENCES runs(id), digest text NOT NULL, draft jsonb NOT NULL,
+ agent_id uuid REFERENCES agents(id), created_at timestamptz NOT NULL DEFAULT now(),
+ published_at timestamptz, qualification_run uuid REFERENCES runs(id),
+ qualification_version integer, reviewer_notes text, qualified_at timestamptz,
+ UNIQUE(owner_id,source_run)
+);

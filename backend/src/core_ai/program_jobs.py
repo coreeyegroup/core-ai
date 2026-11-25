@@ -13,7 +13,7 @@ from . import access,auth,db,program_gateway as gateway,capability_policy
 
 router=APIRouter(prefix="/api/v1/programs/jobs")
 ACTIVE=("QUEUED","RUNNING","CANCEL_REQUESTED")
-PUBLIC="id,owner_id,project_id,recipe,status,expected_commit,expected_image,created_at,started_at,finished_at,error_code,error,retry_of,file_name,parent_run,parent_chat"
+PUBLIC="id,owner_id,project_id,recipe,status,expected_commit,expected_image,created_at,started_at,finished_at,error_code,error,retry_of,file_name,parent_run,parent_chat,connection_id"
 MAX_STORE=128*1024*1024
 MAX_JOBS=500
 
@@ -32,11 +32,11 @@ def digest(data):
     if len(raw)>6*1024*1024: raise HTTPException(413,"Program input exceeds its size limit.")
     return hashlib.sha256(raw).hexdigest()
 
-def insert(conn,user,body,request_id,project_id,pin,*,parent=None,retry_of=None):
+def insert(conn,user,body,request_id,project_id,pin,*,parent=None,retry_of=None,connection_id=None):
     access.writer(user)
     if project_id: access.project(conn,user,project_id,True)
     data=body.model_dump(mode="json")
-    fingerprint=digest({"body":data,"project":str(project_id),"parent":str(parent["id"]) if parent else None})
+    fingerprint=digest({"body":data,"project":str(project_id),"parent":str(parent["id"]) if parent else None,"connection":str(connection_id)})
     conn.execute("SELECT pg_advisory_xact_lock(187875441)")
     previous=conn.execute("SELECT id,input_digest FROM program_jobs WHERE owner_id=%s AND request_id=%s",(user["id"],request_id)).fetchone()
     if previous:
@@ -51,10 +51,10 @@ def insert(conn,user,body,request_id,project_id,pin,*,parent=None,retry_of=None)
     if pending>=30 or usage["pending"]>=10: raise HTTPException(409,"Program queue is full.")
     ident=uuid.uuid4()
     conn.execute("""INSERT INTO program_jobs(id,owner_id,project_id,parent_run,parent_chat,recipe,request_id,input_digest,input_data,
-                 expected_commit,expected_image,status,retry_of) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'QUEUED',%s)""",
+                 expected_commit,expected_image,status,retry_of,connection_id) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'QUEUED',%s,%s)""",
                  (ident,user["id"],project_id,parent["id"] if parent and not parent.get("chat_generation") else None,
                   parent["id"] if parent and parent.get("chat_generation") else None,body.recipe,request_id,fingerprint,Jsonb(data),
-                  pin["commit"],pin["image"],retry_of))
+                  pin["commit"],pin["image"],retry_of,connection_id))
     db.event("program.queued",user["id"],{"id":str(ident),"recipe":body.recipe},conn=conn)
     return ident
 
@@ -113,7 +113,7 @@ def cancel(ident:uuid.UUID,user=Depends(auth.session)):
 def retry(ident:uuid.UUID,user=Depends(auth.session)):
     access.writer(user)
     with db.connect() as conn: row=owned(conn,user,ident)
-    if row["status"] not in ("FAILED","CANCELLED") or row["parent_run"] or row["parent_chat"]:
+    if row["status"] not in ("FAILED","CANCELLED") or row["parent_run"] or row["parent_chat"] or row["connection_id"]:
         raise HTTPException(409,"Retry a failed or cancelled standalone job, or retry its parent workflow.")
     body=gateway.RunInput.model_validate(row["input_data"])
     pin=qualified(body.recipe)
@@ -129,7 +129,7 @@ def claim():
                      error_code='LEASE_EXPIRED',error='Worker interrupted; review before retry.',finished_at=now(),lease_until=NULL,claim_token=NULL
                      WHERE status IN ('RUNNING','CANCEL_REQUESTED') AND lease_until<now()""")
         if conn.execute("SELECT id FROM program_jobs WHERE status IN ('RUNNING','CANCEL_REQUESTED') LIMIT 1").fetchone(): return None
-        row=conn.execute("SELECT * FROM program_jobs WHERE status='QUEUED' ORDER BY created_at,id FOR UPDATE SKIP LOCKED LIMIT 1").fetchone()
+        row=conn.execute("SELECT * FROM program_jobs WHERE status='QUEUED' ORDER BY (parent_run IS NULL AND parent_chat IS NULL),created_at,id FOR UPDATE SKIP LOCKED LIMIT 1").fetchone()
         if not row:return None
         token=uuid.uuid4()
         conn.execute("UPDATE program_jobs SET status='RUNNING',claim_token=%s,lease_until=now()+interval '30 seconds',started_at=now() WHERE id=%s",(token,row["id"]))
@@ -141,6 +141,12 @@ def authorize(row):
         if not user: raise ValueError("Account disabled.")
         access.writer(user)
         if row["project_id"]: access.project(conn,user,row["project_id"],True)
+        if row["connection_id"]:
+            c=conn.execute("""SELECT id,program_scope,can_submit,project_id FROM automation_connections
+                WHERE id=%s AND created_by=%s AND revoked_at IS NULL AND NOT paused
+                AND (expires_at IS NULL OR expires_at>now())""",(row["connection_id"],user["id"])).fetchone()
+            if not c or user["role"]!="ADMIN" or not c["can_submit"] or row["recipe"] not in c["program_scope"] or c["project_id"]!=row["project_id"]:
+                raise ValueError("Connection program permission revoked.")
         parent=None
         if row["parent_run"]:
             parent=conn.execute("SELECT * FROM runs WHERE id=%s",(row["parent_run"],)).fetchone()

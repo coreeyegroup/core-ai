@@ -12,6 +12,7 @@ router=APIRouter(prefix="/api/v1/execution-policy")
 class Policy(BaseModel):
     model_config=ConfigDict(extra="forbid")
     model_read_seconds:int=Field(default=120,ge=15,le=600)
+    tool_read_seconds:int=Field(default=300,ge=15,le=600)
     chat_seconds:int=Field(default=600,ge=60,le=3600)
     task_seconds:int=Field(default=600,ge=60,le=3600)
     max_turns:int=Field(default=6,ge=1,le=24)
@@ -68,7 +69,7 @@ def loop(*,model,messages,allowed,schemas,check,dispatch,record_model,record_met
     for turn in range(1,policy.max_turns+1):
         remaining=gate()
         record_model(turn)
-        with httpx.Client(timeout=timeout(min(policy.model_read_seconds,remaining)),trust_env=False,follow_redirects=False) as client:
+        with httpx.Client(timeout=timeout(min(policy.tool_read_seconds,remaining)),trust_env=False,follow_redirects=False) as client:
             response=client.post(models.config()["endpoint"]+"/api/chat",json={"model":model,"messages":messages,
                 "tools":specs,"stream":False,"options":options})
             response.raise_for_status()

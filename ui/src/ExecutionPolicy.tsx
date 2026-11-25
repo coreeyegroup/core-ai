@@ -1,8 +1,8 @@
 import {useEffect,useState,type FormEvent} from 'react';
 import {api} from './api';
 import {useSession} from './Session';
-type Policy={model_read_seconds:number;chat_seconds:number;task_seconds:number;max_turns:number;max_calls:number;max_model_gib:number};
-const fields:[keyof Policy,string,number,number][]=[['model_read_seconds','Model idle/read timeout (s)',15,600],['chat_seconds','Chat budget (s)',60,3600],['task_seconds','Task budget (s)',60,3600],['max_turns','Tool model turns',1,24],['max_calls','Tool calls',1,40],['max_model_gib','Model size cap (GiB; 0 disables)',0,1024]];
+type Policy={model_read_seconds:number;tool_read_seconds:number;chat_seconds:number;task_seconds:number;max_turns:number;max_calls:number;max_model_gib:number};
+const fields:[keyof Policy,string,number,number][]=[['model_read_seconds','Model idle/read timeout (s)',15,600],['tool_read_seconds','Tool-model read timeout (s)',15,600],['chat_seconds','Chat budget (s)',60,3600],['task_seconds','Task budget (s)',60,3600],['max_turns','Tool model turns',1,24],['max_calls','Tool calls',1,40],['max_model_gib','Model size cap (GiB; 0 disables)',0,1024]];
 export default function ExecutionPolicy({tick}:{tick:number}){
  const admin=useSession().role==='ADMIN';const [data,setData]=useState<Policy|null>(null),[error,setError]=useState(''),[dirty,setDirty]=useState(false),[busy,setBusy]=useState(false);
  useEffect(()=>{if(dirty)return;let active=true;api('execution-policy').then(d=>{if(active&&typeof d?.chat_seconds==='number')setData(d);}).catch(e=>{if(active)setError(e.message);});return()=>{active=false;};},[tick,dirty]);

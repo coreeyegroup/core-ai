@@ -3,6 +3,7 @@ import {ArrowUpRight} from 'lucide-react';
 import {api} from './api';
 import ProgramsPanel from './ProgramsPanel';
 import MissionPanel from './MissionPanel';
+import AgentFactory from './AgentFactory';
 import ExecutionPolicy from './ExecutionPolicy';
 import {generationModel,modelLabel,type Program} from './CapabilityFields';
 import Chat,{MessageMarkdown} from './Chat';
@@ -46,7 +47,7 @@ export function Module({view,tick,refresh,go,appearance,changeAppearance,visible
   case 'Files':return <FilesPanel tick={tick} refresh={refresh}/>;
   case 'Access':return <AccessPanel tick={tick} refresh={refresh}/>;
   case 'Capabilities':return <CapabilitiesPanel tick={tick}/>;
-  case 'Workflows':return <><MissionPanel tick={tick} visible={visible}/><Tasks tick={tick} refresh={refresh} go={go} researchOnly/></>;
+  case 'Workflows':return <><MissionPanel tick={tick} visible={visible}/><AgentFactory tick={tick}/><Tasks tick={tick} refresh={refresh} go={go} researchOnly/></>;
   case 'Models':return <Models tick={tick} refresh={refresh}/>;
   case 'Tools':return <Tools tick={tick} visible={visible}/>;
   case 'Integrations':return <Connections tick={tick} visible={visible}/>;

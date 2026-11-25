@@ -5,7 +5,7 @@ import {ParameterEditor,title,type Program} from './CapabilityFields';
 
 type Repo={repository:string;commit:string;source_present:boolean;recipes:string[];coverage:string;inventory_counts?:Record<string,number>;file_count?:number;next_action?:string};
 type Catalog={schema:number;programs:Program[];repositories:Repo[];native?:unknown};
-type Job={id:string;recipe:string;status:string;created_at:string;error?:string;error_code?:string;file_name?:string;result?:{id:string;result:unknown;provenance:string;commit:string;image:string};retry_of?:string;parent_run?:string;parent_chat?:string};
+type Job={id:string;recipe:string;status:string;created_at:string;error?:string;error_code?:string;file_name?:string;result?:{id:string;result:unknown;provenance:string;commit:string;image:string};retry_of?:string;parent_run?:string;parent_chat?:string;connection_id?:string};
 const active=(s:string)=>['QUEUED','RUNNING','CANCEL_REQUESTED'].includes(s);
 function encode(file:File):Promise<string>{return new Promise((resolve,reject)=>{const r=new FileReader();r.onerror=()=>reject(new Error('Unable to read file.'));r.onload=()=>{const t=String(r.result);resolve(t.slice(t.indexOf(',')+1));};r.readAsDataURL(file);});}
 function group(id:string){return /pdf|pptx|docx|xlsx|notebook/.test(id)?'Documents':/research/.test(id)?'Research':/diagram|ui-ux|graph|chapter/.test(id)?'Engineering':'Finance & analytics';}
@@ -61,7 +61,7 @@ export default function ProgramsPanel({tick,visible=true}:{tick:number;visible?:
     {readonly&&<small>Read-only account.</small>}
    </form>}
    <details><summary>Repository coverage ({catalog.repositories.length})</summary><div className="table-scroll"><table><thead><tr><th>Repository</th><th>Source</th><th>Inventory</th><th>Installation coverage</th></tr></thead><tbody>{catalog.repositories.map(r=><tr key={r.repository}><td>{r.repository}</td><td>{r.source_present?'Verified':'Unavailable'}</td><td>{r.file_count===undefined?'—':r.file_count+' files'}{r.inventory_counts&&<p>{['program','hook','manifest','skill','agent-candidate'].map(k=>k+': '+(r.inventory_counts?.[k]??0)).join(' · ')}</p>}</td><td>{r.recipes.length} · {r.coverage}<p>{r.next_action||''}</p></td></tr>)}</tbody></table></div></details>
-   {catalog.native&&<details><summary>Native runtime evidence</summary><pre style={{whiteSpace:'pre-wrap'}}>{JSON.stringify(catalog.native,null,2)}</pre></details>}
+   {catalog.native!=null&&<details><summary>Native runtime evidence</summary><pre style={{whiteSpace:'pre-wrap'}}>{JSON.stringify(catalog.native,null,2)}</pre></details>}
   </>}
   {error&&<div className="error" role="alert">{error}</div>}
   <section className="box"><header>Execution history <span>{jobs.length}</span></header>
@@ -70,7 +70,7 @@ export default function ProgramsPanel({tick,visible=true}:{tick:number;visible?:
     {job.error&&<p role="alert">{job.error_code} · {job.error}</p>}
     {active(job.status)&&<p role="status">Job is retained even if you close this screen.</p>}
     {!readonly&&active(job.status)&&<button disabled={busy||job.status==='CANCEL_REQUESTED'} onClick={()=>void control('cancel')}>Cancel job</button>}
-    {!readonly&&!job.parent_run&&!job.parent_chat&&['FAILED','CANCELLED'].includes(job.status)&&<button disabled={busy} onClick={()=>void control('retry')}>Retry reviewed version</button>}
+    {!readonly&&!job.parent_run&&!job.parent_chat&&!job.connection_id&&['FAILED','CANCELLED'].includes(job.status)&&<button disabled={busy} onClick={()=>void control('retry')}>Retry reviewed version</button>}
     {job.result&&<><p>{job.result.provenance} · Execution {job.result.id}</p><p>Source {job.result.commit} · Image {job.result.image}</p><pre style={{whiteSpace:'pre-wrap',overflowWrap:'anywhere',maxHeight:'30rem',overflow:'auto'}}>{JSON.stringify(job.result.result,null,2)}</pre></>}
     {job.file_name&&<a href={'/api/v1/programs/jobs/'+encodeURIComponent(job.id)+'/download'}>Download {job.file_name}</a>}
    </section>}

@@ -1,3 +1,4 @@
+import ConnectionProgramScope from './ConnectionProgramScope';
 import {useEffect,useRef,useState,type FormEvent} from 'react';
 import {ArrowLeft,ChevronDown,Ellipsis,Plus,Search} from 'lucide-react';
 import {api,newId} from './api';
@@ -180,6 +181,7 @@ function Manager({tick,visible}:{tick:number;visible:boolean}){
     {selected.overlap_until&&<div><dt>Previous key accepted until</dt><dd>{dateTime(selected.overlap_until)}</dd></div>}
     <div><dt>Last used</dt><dd>{dateTime(selected.last_used_at)}</dd></div>
    </dl>
+   <ConnectionProgramScope key={selected.id} id={selected.id} revoked={!!selected.revoked_at}/>
    <ConnectionActivity key={selected.id} connection={selected} tick={tick+revision}/>
   </section>}
   </>}
