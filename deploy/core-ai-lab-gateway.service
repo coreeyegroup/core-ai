@@ -1,0 +1,32 @@
+[Unit]
+Description=CORE-AI independent allowlisted program gateway
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+User=coreeye
+Group=core-ai
+SupplementaryGroups=docker
+WorkingDirectory=/home/coreeye/core-ai-lab/manager
+Environment=HOME=/home/coreeye
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=DOCKER_HOST=unix:///var/run/docker.sock
+Environment=DOCKER_CONFIG=/run/core-ai-lab/docker-config
+RuntimeDirectory=core-ai-lab
+RuntimeDirectoryMode=0750
+ExecStart=/usr/bin/python3 /home/coreeye/core-ai-lab/manager/lab/gateway.py --root /home/coreeye/core-ai-lab
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=25
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/coreeye/core-ai-lab/reports /run/core-ai-lab
+RestrictSUIDSGID=true
+UMask=0077
+MemoryMax=768M
+TasksMax=64
+
+[Install]
+WantedBy=multi-user.target
