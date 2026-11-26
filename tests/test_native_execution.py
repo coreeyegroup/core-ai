@@ -1,4 +1,9 @@
 import json
+import http.client
+from http.server import BaseHTTPRequestHandler, HTTPServer
+import socket
+import tempfile
+import threading
 from pathlib import Path
 import sys
 import unittest
@@ -33,5 +38,50 @@ class NativeExecutionTest(unittest.TestCase):
         self.assertTrue(n.qualification_ok("combined",result,True,1))
         self.assertFalse(n.qualification_ok("superpowers",n.parse_events(json.dumps(events[0])),False,1))
         with self.assertRaises(ValueError): n.parse_events(json.dumps({"type":"error"}))
+
+    def test_socket_relay_filters_and_observes_actual_model_request(self):
+        requests=[]
+        class Model(BaseHTTPRequestHandler):
+            def log_message(self,*args):pass
+            def do_POST(self):
+                body=json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+                requests.append((self.path,body,self.headers.get("Authorization")))
+                self.send_response(200)
+                self.send_header("Content-Type","text/event-stream")
+                self.end_headers()
+                self.wfile.write(b"data: [DONE]\n\n")
+        with HTTPServer(("127.0.0.1",0),Model) as provider,tempfile.TemporaryDirectory() as d:
+            t=threading.Thread(target=provider.serve_forever,daemon=True);t.start()
+            p={"endpoint":"http://127.0.0.1:"+str(provider.server_port),"model":"local","mode":"full"}
+            path=Path(d)/"relay.sock"
+            with n.Relay(path,p,{"model":"local"},{"capabilities":["tools","completion"]}) as relay:
+                thread=threading.Thread(target=relay.serve_forever,daemon=True);thread.start()
+                class UnixConnection(http.client.HTTPConnection):
+                    def connect(self):
+                        self.sock=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM)
+                        self.sock.settimeout(5);self.sock.connect(str(path))
+                def call(method,route,body=None):
+                    conn=UnixConnection("localhost",timeout=5)
+                    try:
+                        conn.request(method,route,None if body is None else json.dumps(body).encode(),
+                                     {"Content-Type":"application/json","Authorization":"Bearer fixture-not-forwarded"})
+                        resp=conn.getresponse()
+                        return resp.status,resp.read()
+                    finally:conn.close()
+                try:
+                    self.assertEqual(json.loads(call("GET","/api/tags")[1]),{"models":[{"model":"local"}]})
+                    self.assertEqual(call("POST","/api/pull",{"model":"local"})[0],422)
+                    self.assertEqual(call("POST","/v1/chat/completions",{"model":"wrong","messages":[]})[0],422)
+                    self.assertEqual(requests,[])
+                    status,raw=call("POST","/v1/chat/completions",{"model":"local","max_tokens":9000,
+                        "messages":[{"role":"system","content":"PONYTAIL MODE ACTIVE — level: full"}]})
+                    self.assertEqual((status,raw),(200,b"data: [DONE]\n\n"))
+                    self.assertEqual(requests[0][1]["max_tokens"],4096)
+                    self.assertIsNone(requests[0][2])
+                    self.assertEqual(relay.calls,1)
+                    self.assertTrue(relay.hook)
+                finally:
+                    relay.shutdown();thread.join(timeout=5)
+                    provider.shutdown();t.join(timeout=5)
 
 if __name__=="__main__": unittest.main()
