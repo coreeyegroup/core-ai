@@ -99,6 +99,7 @@ def command(p,name,socket_path):
     for src in p["sources"]:
         args.extend(["--mount","type=bind,src="+src["source"]+",dst=/profiles/"+src["profile"]+",readonly"])
     return args+["--env","NATIVE_CONFIG="+json.dumps(p["config"]),"--env","NATIVE_MODEL="+p["model"],
+        "--env","NATIVE_EXPECTED="+json.dumps({"version":p["version"],"sources":[{"profile":x["profile"],"expected_skills":x["expected_skills"]} for x in p["sources"]]}),
         "--env","PONYTAIL_DEFAULT_MODE="+p["mode"],"--env","OPENCODE_DISABLE_MODELS_FETCH=1",
         "--entrypoint","node",p["image"],"--input-type=module","-e",p["runner"]]
 
@@ -211,7 +212,11 @@ def run(root,p,prompt,temp_root=None):
                 with tempfile.TemporaryFile(dir=directory) as out,tempfile.TemporaryFile(dir=directory) as err:
                     proc=subprocess.run(["prlimit","--fsize="+str(MAX_RESPONSE),"--",*command(p,name,path)],
                         input=prompt.encode(),stdout=out,stderr=err,timeout=p["timeout"],check=False)
-                    if proc.returncode or out.seek(0,os.SEEK_END)>=MAX_RESPONSE:raise ValueError("Native CLI failed or output limit reached")
+                    if proc.returncode or out.seek(0,os.SEEK_END)>=MAX_RESPONSE:
+                        err.seek(max(0,err.seek(0,os.SEEK_END)-16384))
+                        detail=err.read().decode("utf-8","replace").lower()
+                        tags=[tag for tag in ("native readiness failed","model not found","permission denied","module not found","connection refused","read-only file system","out of memory") if tag in detail]
+                        raise ValueError("Native CLI failed or output limit reached"+(": "+", ".join(tags) if tags else ""))
                     out.seek(0);result=parse_events(out.read().decode("utf-8"))
                 return {**result,"hook_observed":server.hook,"model_calls":server.calls}
             finally:

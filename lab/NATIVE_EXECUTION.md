@@ -1,6 +1,6 @@
 # Native model execution
 
-The standard CORE-AI worker stays unchanged. Native Superpowers, Ponytail and combined profiles are optional Tools-mode agent capabilities, not mandatory dependencies. They execute in fresh OpenCode containers without host workspace, Docker socket, credentials or external network. A temporary Unix socket bridges only the administrator-approved local Ollama model's inventory, show and chat-completions routes. Source/image/model digest and exact mode are rechecked before every call. No package is fetched during execution.
+The standard CORE-AI worker stays unchanged. Native Superpowers, Ponytail and combined profiles are optional Tools-mode agent capabilities, not mandatory dependencies. They execute in fresh OpenCode containers without host workspace, Docker socket, credentials or external network. A temporary Unix socket bridges only the administrator-approved local Ollama model's inventory, show and chat-completions routes. Source/image/model digest and exact mode are rechecked before every call. No package is fetched during execution. Each run starts one private server and waits for the exact OpenCode version, active native plugins, their complete skill inventories and the selected Ollama model before attaching the CLI.
 
 ## Operator qualification
 
