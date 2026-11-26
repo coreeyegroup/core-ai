@@ -432,3 +432,6 @@ app.include_router(execution_policy.router)
 from . import agent_factory, program_automation
 app.include_router(agent_factory.router)
 app.include_router(program_automation.router)
+
+from . import master_plans
+app.include_router(master_plans.router)

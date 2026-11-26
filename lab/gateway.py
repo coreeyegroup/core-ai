@@ -17,6 +17,7 @@ import uuid
 import batch_install as batch
 import manager
 import installation_review
+import native_profiles
 
 MAX_FILE=4*1024*1024
 MAX_OUTPUT=6*1024*1024
@@ -104,7 +105,7 @@ def build_catalog(root):
         programs.append(item)
     for row in rows.values():
         if "next_action" not in row:row.update(installation_review.classify(row["repository"],{}))
-    return {"schema":1,"programs":programs,"repositories":list(rows.values()),"native":installation_review.native_evidence(root)}
+    return {"schema":1,"programs":programs,"repositories":list(rows.values()),"native":installation_review.native_evidence(root),"native_profiles":native_profiles.evidence(root)}
 
 def catalog(root):
     with CATALOG_LOCK:

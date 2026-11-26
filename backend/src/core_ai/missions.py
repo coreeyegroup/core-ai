@@ -134,7 +134,7 @@ def update(ident:uuid.UUID,body:Update,user=Depends(auth.session)):
         access.project(conn,user,row["project_id"],True)
         access.project(conn,user,body.project_id,True)
         if row["version"]!=body.expected_version:raise HTTPException(409,"Mission changed; refresh before editing.")
-        updated=conn.execute("UPDATE mission_templates SET project_id=%s,title=%s,objective=%s,steps=%s,version=version+1,updated_at=now() WHERE id=%s RETURNING version",(body.project_id,body.title,body.objective,Jsonb(body.model_dump(mode="json")["steps"]),ident)).fetchone()
+        updated=conn.execute("UPDATE mission_templates SET project_id=%s,title=%s,objective=%s,steps=%s,reviewed_capabilities=NULL,version=version+1,updated_at=now() WHERE id=%s RETURNING version",(body.project_id,body.title,body.objective,Jsonb(body.model_dump(mode="json")["steps"]),ident)).fetchone()
         return updated
 
 @router.post("/{ident}/start",status_code=201)
@@ -154,16 +154,21 @@ def start(ident:uuid.UUID,body:Start,user=Depends(auth.session)):
             raise HTTPException(409,"Too many active missions.")
         if conn.execute("SELECT count(*) AS n FROM mission_runs WHERE owner_id=%s",(user["id"],)).fetchone()["n"]>=200:
             raise HTTPException(409,"Mission execution history limit reached.")
+        reviewed=row.get("reviewed_capabilities")
         steps=[]
         for original in row["steps"]:
             step=dict(original)
             if step["kind"]=="program":
                 pin=pins.get(step["recipe"])
                 if not pin:raise HTTPException(422,"Mission contains a program that is not qualified.")
+                if reviewed and any(pin[k]!=reviewed["programs"].get(step["recipe"],{}).get(k) for k in ("commit","image")):
+                    raise HTTPException(409,"Reviewed program changed. Generate and review a new master plan.")
                 step["pin"]={"commit":pin["commit"],"image":pin["image"]}
             else:
                 profile=access.agent(conn,user,uuid.UUID(step["agent_id"]))
                 if not profile["enabled"] or profile["deleted_at"]:raise HTTPException(422,"Mission contains a disabled agent.")
+                if reviewed and profile["version"]!=reviewed["agents"].get(step["agent_id"],{}).get("version"):
+                    raise HTTPException(409,"Reviewed agent changed. Generate and review a new master plan.")
                 step["agent_version"]=profile["version"]
             steps.append(step)
         run_id=uuid.uuid4()

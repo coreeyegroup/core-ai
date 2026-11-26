@@ -100,6 +100,8 @@ def execute(run):
     if run.get('research'):
         research.execute(run, stopping)
         return
+    from . import master_plans
+    master_plans.check_planner(run)
     actor=agent_runtime.actor(run)
     if run['operation']=='embedding':
         execute_embedding(run)
