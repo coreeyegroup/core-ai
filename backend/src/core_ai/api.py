@@ -438,3 +438,6 @@ app.include_router(master_plans.router)
 
 from . import resources
 app.include_router(resources.router)
+
+from . import agent_teams
+app.include_router(agent_teams.router)

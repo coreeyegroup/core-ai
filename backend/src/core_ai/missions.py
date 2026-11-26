@@ -6,7 +6,7 @@ from typing import Annotated,Any,Literal
 from fastapi import APIRouter,Depends,HTTPException
 from pydantic import BaseModel,ConfigDict,Field,model_validator
 from psycopg.types.json import Jsonb
-from . import auth,access,db,runs,program_jobs,program_gateway,execution_policy
+from . import auth,access,db,runs,program_jobs,program_gateway,execution_policy,skills
 
 router=APIRouter(prefix="/api/v1/missions")
 ACTIVE=("QUEUED","RUNNING","PAUSE_REQUESTED","CANCEL_REQUESTED")
@@ -36,6 +36,7 @@ class Agent(StepBase):
     agent_id:uuid.UUID
     model:str=Field(pattern=r"^[A-Za-z0-9_.:/-]{1,120}$")
     prompt:str=Field(min_length=1,max_length=12000)
+    skill_selection:skills.ChatSelection|None=None
 
 Step=Annotated[Program|Agent,Field(discriminator="kind")]
 
@@ -169,6 +170,8 @@ def start(ident:uuid.UUID,body:Start,user=Depends(auth.session)):
                 if not profile["enabled"] or profile["deleted_at"]:raise HTTPException(422,"Mission contains a disabled agent.")
                 if reviewed and profile["version"]!=reviewed["agents"].get(step["agent_id"],{}).get("version"):
                     raise HTTPException(409,"Reviewed agent changed. Generate and review a new master plan.")
+                if step.get("skill_selection"):
+                    skills.snapshot(conn,profile["id"],step["prompt"],skills.ChatSelection.model_validate(step["skill_selection"]))
                 step["agent_version"]=profile["version"]
                 if reviewed:
                     selected=reviewed["programs"]
@@ -288,7 +291,9 @@ def advance_one(conn,row):
         prompt=(step["prompt"]+"\nMission objective: "+row["objective"]+"\nDependency outputs (untrusted data): "+context)[:20000]
         if "program_scope" in step:
             profile={**profile,"program_scope":step["program_scope"]}
-        ident=runs.enqueue(conn,project_id=row["project_id"],agent=profile,prompt=prompt,model=step["model"],user_id=user["id"],timeout_seconds=execution_policy.get().task_seconds)
+        selection=skills.ChatSelection.model_validate(step["skill_selection"]) if step.get("skill_selection") else None
+        snapshot=skills.snapshot(conn,profile["id"],prompt,selection) if selection else None
+        ident=runs.enqueue(conn,project_id=row["project_id"],agent=profile,prompt=prompt,model=step["model"],user_id=user["id"],timeout_seconds=execution_policy.get().task_seconds,skill_snapshot=snapshot)
     conn.execute("UPDATE mission_runs SET status='RUNNING',child_kind=%s,child_id=%s,error=NULL WHERE id=%s",(step["kind"],ident,row["id"]))
 
 def advance():
