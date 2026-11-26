@@ -18,6 +18,7 @@ import batch_install as batch
 import manager
 import installation_review
 import native_profiles
+import native_execution
 import package_runtime
 
 MAX_FILE=4*1024*1024
@@ -106,7 +107,7 @@ def build_catalog(root):
         programs.append(item)
     for row in rows.values():
         if "next_action" not in row:row.update(installation_review.classify(row["repository"],{}))
-    return {"schema":1,"programs":programs,"repositories":list(rows.values()),"native":installation_review.native_evidence(root),"native_profiles":native_profiles.evidence(root),"packages":package_runtime.evidence(root)}
+    return {"schema":1,"programs":programs,"repositories":list(rows.values()),"native":installation_review.native_evidence(root),"native_profiles":native_profiles.evidence(root),"native_execution":native_execution.status(root),"packages":package_runtime.evidence(root)}
 
 def catalog(root):
     with CATALOG_LOCK:
@@ -264,6 +265,12 @@ def route(root,request,temp_root):
     if not isinstance(request,dict): raise ValueError("Expected an object")
     if request=={"action":"catalog"}: return catalog(root)
     if request.get("action")=="run": return execute(root,request,temp_root)
+    if request.get("action")=="native-run":
+        if set(request)!={"action","profile","endpoint","model","mode","prompt"}:raise ValueError("Invalid native request")
+        if not RUN_SLOT.acquire(blocking=False):raise Busy("Execution slot busy")
+        try:
+            return native_execution.execute(root,request["profile"],request["endpoint"],request["model"],request["mode"],request["prompt"],temp_root)
+        finally:RUN_SLOT.release()
     if set(request)=={"action","job_id"} and request["action"]=="cancel": return cancel_job(request["job_id"])
     raise ValueError("Unknown gateway action")
 

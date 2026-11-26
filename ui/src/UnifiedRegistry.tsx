@@ -13,7 +13,8 @@ export default function UnifiedRegistry({tick,go,visible=true}:{tick:number;go:(
    {name:'Programs and runtimes',request:api('programs','GET',undefined,50000),map:(d:any):Row[]=>{if(!Array.isArray(d?.programs))throw new Error('Unavailable');return [
     ...d.programs.map((x:any)=>({kind:x.mode==='diagnostic'?'Diagnostics':'Programs',name:x.id,state:x.state,version:x.commit,detail:x.repository+' · '+x.mode,view:'Tools' as View})),
     ...(d.native_profiles||[]).map((x:any)=>({kind:'Native profiles',name:x.profile,state:x.registration,version:x.report_id||'—',detail:'Model execution: '+x.model_execution,view:'Tools' as View})),
-    ...(d.packages||[]).map((x:any)=>({kind:'Package runtimes',name:x.id,state:x.state,version:x.commit,detail:x.scope||x.repo,view:'Tools' as View})),
+    ...(d.native_execution||[]).map((x:any)=>({kind:'Native profiles',name:x.profile+' · '+x.model,state:x.state,version:x.report_id||'—',detail:'Native model qualification · '+x.mode,view:'Tools' as View})),
+     ...(d.packages||[]).map((x:any)=>({kind:'Package runtimes',name:x.id,state:x.state,version:x.commit,detail:x.scope||x.repo,view:'Tools' as View})),
    ];}},
   ];
   void Promise.all(sources.map(async source=>{try{return {rows:source.map(await source.request),error:null};}catch{return {rows:[],error:source.name};}})).then(result=>{if(alive){setRows(result.flatMap(x=>x.rows));setErrors(result.flatMap(x=>x.error?[x.error]:[]));setLoading(false);}});

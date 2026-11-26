@@ -151,7 +151,7 @@ class Agent(BaseModel):
     instructions: str = Field(min_length=1, max_length=16000)
     enabled: bool = True
     runtime_mode: str = Field(default='analysis',pattern=r'^(analysis|tools)$')
-    tools: list[str] = Field(default_factory=lambda:['knowledge.search','project.inspect'],max_length=5)
+    tools: list[str] = Field(default_factory=lambda:['knowledge.search','project.inspect'],max_length=8)
     program_scope: list[str] | None = Field(default=None,max_length=200)
 
 @app.get('/api/v1/agents')

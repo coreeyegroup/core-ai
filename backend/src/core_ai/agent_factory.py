@@ -14,7 +14,7 @@ class Draft(BaseModel):
     name:str=Field(min_length=1,max_length=120)
     instructions:str=Field(min_length=1,max_length=16000)
     runtime_mode:str=Field(default="analysis",pattern=r"^(analysis|tools)$")
-    tools:list[str]=Field(default_factory=list,max_length=5)
+    tools:list[str]=Field(default_factory=list,max_length=8)
     program_scope:list[str]=Field(default_factory=list,max_length=200)
 
 class Import(BaseModel):

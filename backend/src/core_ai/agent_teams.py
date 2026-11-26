@@ -20,7 +20,7 @@ class Member(missions.StepBase):
     prompt:str=Field(min_length=1,max_length=12000)
     collections:list[Collection]=Field(default_factory=list,max_length=24)
     skill_selection:skills.ChatSelection=Field(default_factory=skills.ChatSelection)
-    tools:list[str]=Field(default_factory=list,max_length=5)
+    tools:list[str]=Field(default_factory=list,max_length=8)
     program_scope:list[str]=Field(default_factory=list,max_length=40)
 
 class Team(missions.Strict):

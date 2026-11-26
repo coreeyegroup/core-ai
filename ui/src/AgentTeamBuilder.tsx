@@ -9,7 +9,7 @@ type Skill=Choice&{name:string;repository:string;description:string};
 type Collection={id:string;repository:string;active_commit:string|null;skill_count:number};
 type Member={id:string;name:string;instructions:string;model:string;prompt:string;depends_on:string[];collections:{id:string;commit:string}[];skill_selection:SkillSelection;tools:string[];program_scope:string[]};
 const blank=(id:string):Member=>({id,name:'',instructions:'',model:'',prompt:'',depends_on:[],collections:[],skill_selection:{mode:'auto',selected:[]},tools:[],program_scope:[]});
-const toolNames=['knowledge.search','project.inspect','artifact.create','program.list','program.run'];
+const toolNames=['knowledge.search','project.inspect','artifact.create','program.list','program.run','native.superpowers','native.ponytail','native.combined'];
 const key=(x:Choice)=>x.collection_id+'@'+x.commit+':'+x.path;
 const toggle=(a:string[],v:string,checked:boolean)=>checked?[...a,v]:a.filter(x=>x!==v);
 const example=()=>[

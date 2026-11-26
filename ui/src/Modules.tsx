@@ -65,7 +65,7 @@ function Overview({tick,go}:{tick:number;go:(v:View)=>void}){
 }
 type AgentProfile = {name:string;instructions:string;enabled:boolean;runtime_mode:string;tools:string[];program_scope?:string[]};
 type AgentRecord = AgentProfile & {id:string;version:number;deleted_at?:string|null;imported_source?:{repository:string;commit:string;path:string}|null};
-const agentTools = ['knowledge.search','project.inspect','artifact.create','program.list','program.run'];
+const agentTools = ['knowledge.search','project.inspect','artifact.create','program.list','program.run','native.superpowers','native.ponytail','native.combined'];
 const initialProfile: AgentProfile = {name:'',instructions:'',enabled:true,runtime_mode:'analysis',tools:agentTools.slice(0,2),program_scope:[]};
 
 function Agents({tick,refresh,go,handoff,openSkills,openTask,openChat}:{
