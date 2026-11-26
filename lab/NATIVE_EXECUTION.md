@@ -9,7 +9,7 @@ Use the same private IPv4 endpoint and model name already configured in CORE-AI 
     python3 lab/native_execution.py review superpowers --endpoint http://10.8.0.2:11434 --model qwen3:4b
     python3 lab/native_execution.py qualify superpowers --endpoint http://10.8.0.2:11434 --model qwen3:4b --approve REVIEWED_DIGEST
 
-Repeat for ponytail and combined; default mode is full. Ponytail and combined also accept --mode lite or --mode ultra, on both review and qualify. Each model/mode needs its own qualification. Standard execution is the off alternative. A registration receipt alone is not model qualification. Superpowers requires an observed completed brainstorming skill tool call; Ponytail requires the upstream mode marker in the actual system message forwarded to Ollama, and combined requires both. A failed or timed-out fixture is not a qualification. No raw prompts or model responses are stored in qualification receipts.
+Repeat for ponytail and combined; default mode is full. Ponytail and combined also accept --mode lite or --mode ultra, on both review and qualify. Each model/mode needs its own qualification. Standard execution is the off alternative. A registration receipt alone is not model qualification. Superpowers requires an observed completed brainstorming skill tool call; Ponytail requires a completed ponytail-review skill call and the upstream mode marker in the actual system message forwarded to Ollama; combined requires both skill calls and the hook. A failed or timed-out fixture is not a qualification. No raw prompts or model responses are stored in qualification receipts.
 
     python3 lab/native_execution.py status
 

@@ -34,7 +34,7 @@ def endpoint(value):
         raise ValueError("Expected private Ollama IPv4 HTTP endpoint")
     ip=ipaddress.IPv4Address(u.hostname)
     port=u.port or 80
-    if not any(ip in ipaddress.IPv4Network(x) for x in ("10.0.0.0/8","172.16.0.0/12","192.168.0.0/16","127.0.0.0/8")):
+    if not 1<=port<=65535 or not any(ip in ipaddress.IPv4Network(x) for x in ("10.0.0.0/8","172.16.0.0/12","192.168.0.0/16","127.0.0.0/8")):
         raise ValueError("Expected private Ollama IPv4 endpoint")
     return f"http://{ip}:{port}"
 
@@ -190,10 +190,10 @@ def parse_events(raw):
 def qualification_ok(profile,result,hook,calls):
     return bool(calls and result.get("text") and
                 (profile=="ponytail" or "brainstorming" in result["skills"]) and
-                (profile=="superpowers" or hook))
+                (profile=="superpowers" or (hook and "ponytail-review" in result["skills"])))
 
 def fixture_prompt(profile):
-    skill="ponytail-review" if profile=="ponytail" else "brainstorming"
+    skill={"superpowers":"brainstorming","ponytail":"ponytail-review","combined":"brainstorming and ponytail-review"}[profile]
     return ("This is an isolated qualification fixture. Use the native skill tool to load "+skill+
             ". Then provide a short design review of a hypothetical calculator. Do not write files, use shell, ask questions, or perform external actions.")
 

@@ -25,9 +25,10 @@ class NativeExecutionTest(unittest.TestCase):
 
     def test_real_tool_events_not_plain_model_claims(self):
         events=[{"type":"text","part":{"text":"I loaded brainstorming"}},
-                {"type":"tool_use","part":{"tool":"skill","state":{"status":"completed","input":{"name":"brainstorming"}}}}]
+                {"type":"tool_use","part":{"tool":"skill","state":{"status":"completed","input":{"name":"brainstorming"}}}},
+                {"type":"tool_use","part":{"tool":"skill","state":{"status":"completed","input":{"name":"ponytail-review"}}}}]
         result=n.parse_events("\n".join(json.dumps(x) for x in events))
-        self.assertEqual(result["skills"],["brainstorming"])
+        self.assertEqual(result["skills"],["brainstorming","ponytail-review"])
         self.assertFalse(n.qualification_ok("combined",result,False,1))
         self.assertTrue(n.qualification_ok("combined",result,True,1))
         self.assertFalse(n.qualification_ok("superpowers",n.parse_events(json.dumps(events[0])),False,1))
