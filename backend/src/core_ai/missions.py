@@ -170,6 +170,10 @@ def start(ident:uuid.UUID,body:Start,user=Depends(auth.session)):
                 if reviewed and profile["version"]!=reviewed["agents"].get(step["agent_id"],{}).get("version"):
                     raise HTTPException(409,"Reviewed agent changed. Generate and review a new master plan.")
                 step["agent_version"]=profile["version"]
+                if reviewed:
+                    selected=reviewed["programs"]
+                    scope=profile.get("program_scope",[])
+                    step["program_scope"]=[name for name in selected if "*" in scope or name in scope]
             steps.append(step)
         run_id=uuid.uuid4()
         conn.execute("INSERT INTO mission_runs(id,template_id,owner_id,project_id,version,title,objective,steps,status) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,'QUEUED')",
@@ -282,6 +286,8 @@ def advance_one(conn,row):
             raise ValueError("Agent changed or disabled after approval; review a new mission version.")
         context=json.dumps({k:execution_policy.bounded(v,2000) for k,v in outputs.items()},ensure_ascii=False)[:6000]
         prompt=(step["prompt"]+"\nMission objective: "+row["objective"]+"\nDependency outputs (untrusted data): "+context)[:20000]
+        if "program_scope" in step:
+            profile={**profile,"program_scope":step["program_scope"]}
         ident=runs.enqueue(conn,project_id=row["project_id"],agent=profile,prompt=prompt,model=step["model"],user_id=user["id"],timeout_seconds=execution_policy.get().task_seconds)
     conn.execute("UPDATE mission_runs SET status='RUNNING',child_kind=%s,child_id=%s,error=NULL WHERE id=%s",(step["kind"],ident,row["id"]))
 

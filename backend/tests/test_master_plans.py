@@ -47,3 +47,24 @@ def test_master_rejects_unapproved_capability_and_changed_agent(signed,work):
         detail=signed.get("/api/v1/master-plans/"+r["id"]).json()
         db.query("UPDATE agents SET version=version+1 WHERE id=%s",(work["agent_id"],))
         assert signed.post("/api/v1/master-plans/"+r["id"]+"/approve",json={"digest":detail["digest"]}).status_code==409
+
+def test_master_delegation_intersects_selected_program_scope(signed,work):
+    from core_ai import missions
+    agent=work["agent_id"]
+    r=signed.put("/api/v1/agents/"+agent,json={"name":"Broad agent","instructions":"Review sizing","runtime_mode":"tools","tools":["program.list","program.run"],"program_scope":["*"]})
+    assert r.status_code==200,r.text
+    with patch.object(program_gateway,"get_catalog",return_value=catalog()):
+        candidate=submit(signed,work)
+        row=worker.claim()
+        plan={"title":"Delegate","steps":[{"id":"review","kind":"agent","agent_id":agent,"model":work["model"],"prompt":"Review the data"}]}
+        worker.finish(row["id"],"SUCCEEDED",output=json.dumps(plan))
+        detail=signed.get("/api/v1/master-plans/"+candidate["id"]).json()
+        assert detail["state"]=="REVIEW_REQUIRED"
+        saved=signed.post("/api/v1/master-plans/"+candidate["id"]+"/approve",json={"digest":detail["digest"]})
+        assert saved.status_code==201,saved.text
+        launched=signed.post("/api/v1/missions/"+saved.json()["mission_id"]+"/start",json={"version":1})
+        assert launched.status_code==201,launched.text
+        missions.advance()
+        child=worker.claim()
+        assert child["program_scope"]==["position-sizing"]
+        assert child["runtime_mode"]=="tools"

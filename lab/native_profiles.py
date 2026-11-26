@@ -17,7 +17,7 @@ PROFILES={
 }
 # The discovery route follows the upstream loader-file convention. The directory
 # route is separately reviewable. Profiles are never combined implicitly.
-BOOTSTRAP='set -eu; mkdir -p "$XDG_CONFIG_HOME/opencode/plugins" /workspace; printf "%s\\n" "$PROFILE_CONFIG" > "$XDG_CONFIG_HOME/opencode/opencode.json"; if [ -n "$PROFILE_LOADER" ]; then printf "%s\\n" "$PROFILE_LOADER" > "$XDG_CONFIG_HOME/opencode/plugins/profile.mjs"; fi; unset OPENCODE_CONFIG; cd /workspace; exec /opt/opencode/node_modules/.bin/opencode "$@"'
+BOOTSTRAP='set -eu; mkdir -p "$XDG_CONFIG_HOME/opencode/plugins" /workspace; printf "%s\\n" "$PROFILE_CONFIG" > "$XDG_CONFIG_HOME/opencode/opencode.json"; if [ -n "$PROFILE_LOADER" ]; then printf "%s\\n" "$PROFILE_LOADER" > "$XDG_CONFIG_HOME/opencode/plugins/profile.js"; fi; unset OPENCODE_CONFIG; cd /workspace; rc=0; /opt/opencode/node_modules/.bin/opencode "$@" || rc=$?; log="$XDG_DATA_HOME/opencode/log/opencode.log"; if [ -f "$log" ]; then for message in "permission denied" "cannot find" "not a directory" "plugin disabled" "module not found"; do if grep -qiF "$message" "$log"; then printf "%s\\n" "$message" >&2; fi; done; fi; exit "$rc"'
 CHECKS=[["--version"],["api","GET","/api/plugin"],["api","GET","/api/skill"]]
 
 def plan(root,profile,route):

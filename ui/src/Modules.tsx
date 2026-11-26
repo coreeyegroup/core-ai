@@ -6,6 +6,7 @@ import MissionPanel from './MissionPanel';
 import AgentFactory from './AgentFactory';
 import ExecutionPolicy from './ExecutionPolicy';
 import ResourcePanel from './ResourcePanel';
+import UnifiedRegistry from './UnifiedRegistry';
 import {generationModel,modelLabel,type Program} from './CapabilityFields';
 import Chat,{MessageMarkdown} from './Chat';
 import Connections from './Connections';
@@ -47,7 +48,7 @@ export function Module({view,tick,refresh,go,appearance,changeAppearance,visible
   case 'Artifacts':return <ArtifactLibrary tick={tick} refresh={refresh}/>;
   case 'Files':return <FilesPanel tick={tick} refresh={refresh}/>;
   case 'Access':return <AccessPanel tick={tick} refresh={refresh}/>;
-  case 'Capabilities':return <CapabilitiesPanel tick={tick}/>;
+  case 'Capabilities':return <><UnifiedRegistry tick={tick} visible={visible} go={go}/><CapabilitiesPanel tick={tick}/></>;
   case 'Workflows':return <><MissionPanel tick={tick} visible={visible}/><AgentFactory tick={tick}/><Tasks tick={tick} refresh={refresh} go={go} researchOnly/></>;
   case 'Models':return <Models tick={tick} refresh={refresh}/>;
   case 'Tools':return <Tools tick={tick} visible={visible}/>;

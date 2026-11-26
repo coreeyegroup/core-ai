@@ -59,3 +59,5 @@ References:
 - https://github.com/egonex-ai/understand-anything/blob/b232f356446295e4eaa05b9b285e08ce5cd5e8a0/understand-anything-plugin/packages/mcp/README.md
 - https://github.com/staskh/trading_skills/blob/b025c283f16d6c49344d00e384b4b0cc347546da/pyproject.toml
 - https://docs.astral.sh/uv/guides/integration/docker/
+
+Master-generated missions narrow delegated program permissions to the intersection of the reviewed plan's selected programs and the agent's own permissions. Current permissions are rechecked at each call. Capabilities provides a unified searchable read-only explorer; Diagnostics remains a separate Tools category. Planning history and cancellation use the existing task queue. General inbound MCP execution, arbitrary native model dispatch, distributed workers and other upstream package builds remain open, not qualified by this release.
