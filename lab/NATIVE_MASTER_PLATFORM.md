@@ -22,3 +22,40 @@ Models reports server CPU, memory and disk, plus remote Ollama's loaded-model si
 
 ## Evidence and deployment
 Run full CI before promoting. Deploy with the existing integration installer after explicit operator approval, pulling identical main commits into both checkouts. Migration 023 is additive. Actual native profile and model execution tests require Ubuntu and the laptop. The implementation is based on the pinned upstream OpenCode installation guides, existing mission queue, and durable checkpoint/approval patterns in LangGraph. Existing n8n and trading interfaces remain independent.
+
+## Full upstream package build paths
+
+Two additional package runtimes use the original upstream locked dependencies and
+source tree instead of isolated wrapper calculations:
+- Understand Anything: pinned pnpm workspace, core and skill compilation,
+  dashboard and viewer build, core tests, MCP discovery.
+- Trading Skills: Python 3.13, uv.lock, actual installed package, offline
+  Black-Scholes fixture, MCP discovery and get_version call.
+
+The second requires a reviewed local uv base image. Official uv documentation
+lists ghcr.io/astral-sh/uv:python3.13-trixie-slim. Pull only after reviewing
+the upstream image and its digest. The review pins the exact local image ID.
+
+    python3 lab/package_runtime.py review understand-anything
+    python3 lab/package_runtime.py review trading-skills
+    # After explicit review and approval, for each:
+    python3 lab/package_runtime.py install understand-anything --approve REVIEWED_DIGEST
+    python3 lab/package_runtime.py install trading-skills --approve REVIEWED_DIGEST
+    python3 lab/package_runtime.py status
+
+These are real Docker image builds and can use substantial RAM/disk; run them
+on an isolated trusted build host with sufficient capacity, not while production
+jobs are running. Dependency installation explicitly permits network access;
+Python package build backends may execute during dependency installation.
+Review upstream lockfiles, licenses, build instructions and network policy before
+approval. Build scripts receive no credentials, secrets or host source mounts.
+The runtime qualification container has no network, no host mounts, no Docker
+socket and a read-only root. No existing receipts or runtime images are removed.
+The build uses a versioned image tag and reports only after successful probes.
+MCP discovery is not proof of all tools' correctness; live trading providers,
+LLM graph ingestion and dashboard access remain separate integrations.
+
+References:
+- https://github.com/egonex-ai/understand-anything/blob/b232f356446295e4eaa05b9b285e08ce5cd5e8a0/understand-anything-plugin/packages/mcp/README.md
+- https://github.com/staskh/trading_skills/blob/b025c283f16d6c49344d00e384b4b0cc347546da/pyproject.toml
+- https://docs.astral.sh/uv/guides/integration/docker/
