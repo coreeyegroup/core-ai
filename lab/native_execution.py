@@ -33,7 +33,7 @@ def endpoint(value):
     if u.scheme!="http" or u.username or u.password or u.path not in ("","/") or u.query or u.fragment:
         raise ValueError("Expected private Ollama IPv4 HTTP endpoint")
     ip=ipaddress.IPv4Address(u.hostname)
-    port=u.port or 80
+    port=u.port if u.port is not None else 80
     if not 1<=port<=65535 or not any(ip in ipaddress.IPv4Network(x) for x in ("10.0.0.0/8","172.16.0.0/12","192.168.0.0/16","127.0.0.0/8")):
         raise ValueError("Expected private Ollama IPv4 endpoint")
     return f"http://{ip}:{port}"
@@ -181,7 +181,7 @@ def parse_events(raw):
         if event.get("type")=="text" and isinstance(part.get("text"),str):text.append(part["text"])
         if event.get("type")=="tool_use" and part.get("tool")=="skill":
             state=part.get("state") or {}
-            name=(state.get("input") or {}).get("name")
+            name=(state.get("input") or {}).get("id")
             if state.get("status")=="completed" and isinstance(name,str) and re.fullmatch(r"[A-Za-z0-9_-]{1,100}",name):skills.append(name)
     output="\n".join(text).strip()
     if not output:raise ValueError("Native session returned no answer")
