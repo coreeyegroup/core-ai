@@ -65,3 +65,11 @@ Master-generated missions narrow delegated program permissions to the intersecti
 ## Consolidated native and package installation
 
 Review the combined plan with python3 lab/platform_install.py review. It includes the exact discovery and fallback directory routes, both package Dockerfiles, and base image IDs. After explicit operator approval, run python3 lab/platform_install.py apply --approve REVIEWED_DIGEST. Independent failures are recorded; the batch returns nonzero if any final profile or package fails. If a package base is not available, --native-only is available for both commands; it intentionally omits the package builds, not the requirements. The status command and Tools catalog distinguish observed registration, package smoke tests, and unqualified model/provider execution.
+
+## Native registration and build-network correction
+
+The 2.4.1 one-shot API handler does not wait for plugin startup (upstream issue #63221). Registration now uses one private loopback-only server per reviewed profile route, authenticated with an ephemeral credential created inside the isolated container. It polls the same /workspace location until the plugin is active and every expected skill is registered, or a bounded deadline expires. Version is checked from the server's /api/info response. The full probe is included in the approved plan digest. Prior probe reports are not current qualification evidence. Native inference remains unqualified.
+
+The original package build used --network=none globally; BuildKit RUN --network=default inherits the build default. The corrected plan specifies build_network=default, validates every RUN has an explicit network policy and retains --network=none for build/test stages and runtime. Review the changed digest before rerunning the consolidated batch. No daemon configuration changes, host networking, or existing image replacement.
+
+References: https://github.com/anomalyco/opencode/issues/63221 ; https://github.com/anomalyco/opencode/blob/v2.4.1/packages/cli/src/commands/handlers/api.ts ; https://github.com/moby/buildkit/blob/master/frontend/dockerfile/dockerfile2llb/convert_runnetwork.go

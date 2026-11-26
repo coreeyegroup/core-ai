@@ -67,7 +67,8 @@ def plan(root,name):
         if not p.is_file() or not p.resolve().is_relative_to(src.resolve()):raise ValueError("Required pinned package file missing")
     base=inspect(r["base"])
     dockerfile="FROM "+r["base"]+"\n"+r["build"]+"\nENTRYPOINT []\n"
-    return {"schema":1,"id":name,"repo":r["repo"],"commit":r["commit"],"source":str(src),"base":r["base"],"base_id":base["Id"],
+    if any(not line.startswith(("RUN --network=default ","RUN --network=none ")) for line in dockerfile.splitlines() if line.startswith("RUN ")):raise ValueError("Every build command must declare its network policy")
+    return {"schema":2,"build_network":"default","id":name,"repo":r["repo"],"commit":r["commit"],"source":str(src),"base":r["base"],"base_id":base["Id"],
         "dockerfile":dockerfile,"server":r["server"],"tools":r["tools"],"scope":r["scope"],
         "network":"dependency installation only; upstream build backend may run during Python dependency installation; offline runtime",
         "build_timeout":1800,"probe_timeout":90}
@@ -133,6 +134,12 @@ def probe(p,image):
                 subprocess.run(["docker","kill",name],check=False,timeout=15,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
                 proc.kill();proc.wait(timeout=5)
 
+def build_command(p,context,approved):
+    # RUN --network=default inherits the CLI build network mode. Explicit
+    # --network=none instructions still remain offline with this default.
+    return ["docker","build","--pull=false","--network="+p["build_network"],"--label","io.coreeye.lab.package.plan="+approved,
+        "--label","io.coreeye.lab.package.source="+p["commit"],"--tag",image_tag(p),str(context)]
+
 def install(root,name,approved):
     p=plan(root,name)
     if native_host.digest(p)!=approved:raise ValueError("Exact reviewed digest required")
@@ -150,8 +157,7 @@ def install(root,name,approved):
             env={k:os.environ[k] for k in ("PATH","LANG","LC_ALL") if k in os.environ}
             env.update(HOME=tmp,DOCKER_CONFIG=str(cfg),DOCKER_BUILDKIT="1")
             # No credentials, build secrets, host filesystem mounts or Docker socket are forwarded to the build.
-            subprocess.run(["docker","build","--pull=false","--network=none","--label","io.coreeye.lab.package.plan="+approved,
-                "--label","io.coreeye.lab.package.source="+p["commit"],"--tag",tag,str(context)],
+            subprocess.run(build_command(p,context,approved),
                 timeout=p["build_timeout"],check=True,env=env)
         built=inspect(tag)
     labels=built["Config"].get("Labels") or {}

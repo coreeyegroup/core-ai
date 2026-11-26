@@ -17,8 +17,8 @@ PROFILES={
 }
 # The discovery route follows the upstream loader-file convention. The directory
 # route is separately reviewable. Profiles are never combined implicitly.
-BOOTSTRAP='set -eu; mkdir -p "$XDG_CONFIG_HOME/opencode/plugins" /workspace; printf "%s\\n" "$PROFILE_CONFIG" > "$XDG_CONFIG_HOME/opencode/opencode.json"; if [ -n "$PROFILE_LOADER" ]; then printf "%s\\n" "$PROFILE_LOADER" > "$XDG_CONFIG_HOME/opencode/plugins/profile.js"; fi; unset OPENCODE_CONFIG; cd /workspace; rc=0; /opt/opencode/node_modules/.bin/opencode "$@" || rc=$?; log="$XDG_DATA_HOME/opencode/log/opencode.log"; if [ -f "$log" ]; then for message in "permission denied" "cannot find" "not a directory" "plugin disabled" "module not found"; do if grep -qiF "$message" "$log"; then printf "%s\\n" "$message" >&2; fi; done; fi; exit "$rc"'
-CHECKS=[["--version"],["api","GET","/api/plugin"],["api","GET","/api/skill"]]
+BOOTSTRAP='set -eu; mkdir -p "$XDG_CONFIG_HOME/opencode/plugins" /workspace; printf "%s\\n" "$PROFILE_CONFIG" > "$XDG_CONFIG_HOME/opencode/opencode.json"; if [ -n "$PROFILE_LOADER" ]; then printf "%s\\n" "$PROFILE_LOADER" > "$XDG_CONFIG_HOME/opencode/plugins/profile.js"; fi; unset OPENCODE_CONFIG; cd /workspace; exec node --input-type=module -e "$1"'
+CHECKS=[["api","GET","/api/info"],["api","GET","/api/plugin"],["api","GET","/api/skill"]]
 
 def plan(root,profile,route):
     cfg=PROFILES[profile]
@@ -33,10 +33,10 @@ def plan(root,profile,route):
     image,version=native_host.inspect_image(native_host.IMAGE_TAG)
     config={"plugins":[cfg["directory"]]} if route=="directory" else {}
     loader="export { default } from "+json.dumps("/plugin/"+cfg["entry"])+";" if route=="discovery" else ""
-    return {"schema":1,"profile":profile,"route":route,"repo":cfg["repo"],"commit":cfg["commit"],"source":str(source),"image":image,
-            "version":version,"expected_skills":skills,"config":config,"loader":loader,"bootstrap":BOOTSTRAP,"checks":CHECKS,"timeout":90}
+    return {"schema":2,"profile":profile,"route":route,"repo":cfg["repo"],"commit":cfg["commit"],"source":str(source),"image":image,
+            "version":version,"expected_skills":skills,"config":config,"loader":loader,"bootstrap":BOOTSTRAP,"probe":Path(__file__).with_name("native_probe.mjs").read_text()+"\nawait main();","checks":CHECKS,"timeout":90}
 
-def command(p,args,name):
+def command(p,name):
     return ["docker","run","--rm","--name",name,"--pull=never","--network=none","--read-only","--user","1000:1000",
         "--cap-drop=ALL","--security-opt=no-new-privileges:true","--pids-limit=128","--memory=2g","--memory-swap=2g","--cpus=2",
         "--tmpfs","/tmp:rw,nosuid,nodev,size=256m,mode=1777",
@@ -44,7 +44,8 @@ def command(p,args,name):
         "--tmpfs","/workspace:rw,nosuid,nodev,size=64m,uid=1000,gid=1000,mode=0700",
         "--workdir","/workspace","--mount","type=bind,src="+p["source"]+",dst=/plugin,readonly",
         "--env","PROFILE_CONFIG="+json.dumps(p["config"]),"--env","PROFILE_LOADER="+p["loader"],
-        "--entrypoint","/bin/sh",p["image"],"-c",p["bootstrap"],"probe",*args]
+        "--env","PROFILE_NAME="+p["profile"],"--env","PROFILE_SKILLS="+json.dumps(p["expected_skills"]),
+        "--entrypoint","/bin/sh",p["image"],"-c",p["bootstrap"],"probe",p["probe"]]
 
 def identifiers(raw):
     data=json.loads(raw)["data"]
@@ -57,29 +58,26 @@ def registered(plugins,skills,profile,expected):
 def verify(root,p,approval):
     if native_host.digest(p)!=approval:raise ValueError("Approval does not match exact plan")
     if p!=plan(root,p["profile"],p["route"]):raise ValueError("Pinned profile changed")
-    results=[];plugins=[];skills=[];version_ok=False
-    for args in p["checks"]:
-        name="core-ai-native-profile-"+uuid.uuid4().hex
-        row={"arguments":args,"state":"failed"}
-        try:
-            proc=subprocess.run(command(p,args,name),timeout=p["timeout"],capture_output=True,text=True,check=False)
-            row["exit_code"]=proc.returncode
-            if proc.returncode==0:
-                if args==["--version"]:
-                    version_ok=proc.stdout.strip()==p["version"]
-                    row["state"]="version-matched" if version_ok else "version-mismatch"
-                else:
-                    ids=identifiers(proc.stdout)
-                    if args[-1]=="/api/plugin":plugins=ids
-                    else:skills=ids
-                    row.update(state="observed",ids=ids)
-            # Keep only bounded diagnostic classification, not raw plugin output.
-            row["diagnostics"]=[k for k in ("permission denied","cannot find","not a directory","plugin disabled","module not found") if k in proc.stderr.lower()]
-        except subprocess.TimeoutExpired:
-            row["state"]="timeout"
-            subprocess.run(["docker","kill",name],timeout=15,check=False,capture_output=True)
-        except (ValueError,KeyError,TypeError,OSError):row["state"]="invalid-api-result"
-        results.append(row)
+    name="core-ai-native-profile-"+uuid.uuid4().hex
+    results=[{"arguments":args,"state":"failed"} for args in p["checks"]]
+    plugins=[];skills=[];version_ok=False
+    try:
+        proc=subprocess.run(command(p,name),timeout=p["timeout"],capture_output=True,text=True,check=False)
+        for row in results:row["exit_code"]=proc.returncode
+        if proc.returncode==0:
+            data=json.loads(proc.stdout)
+            version=data.get("version")
+            version_ok=version==p["version"]
+            results[0].update(state="version-matched" if version_ok else "version-mismatch",observed_version=version,attempts=data.get("attempts"),api_status=data.get("api_status",{}))
+            plugins=identifiers(json.dumps({"data":[{"id":x} for x in data["plugins"]]}))
+            skills=identifiers(json.dumps({"data":[{"id":x} for x in data["skills"]]}))
+            results[1].update(state="observed",ids=plugins,failed=data.get("failed",[]))
+            results[2].update(state="observed",ids=skills)
+            results[0]["diagnostics"]=data.get("diagnostics",[])
+    except subprocess.TimeoutExpired:
+        results[0]["state"]="timeout"
+        subprocess.run(["docker","kill",name],timeout=15,check=False,capture_output=True)
+    except (ValueError,KeyError,TypeError,OSError):results[0]["state"]="invalid-api-result"
     ok=version_ok and registered(plugins,skills,p["profile"],p["expected_skills"])
     record={"plan":p,"approval":approval,"results":results,"registration":"observed" if ok else "not-observed","model_execution":"not-qualified"}
     path=manager.safe_path(root,"reports","native-profiles",uuid.uuid4().hex+".json")
@@ -99,7 +97,7 @@ def evidence(root):
                     r=json.loads(path.read_text());p=r.get("plan",{})
                     if p.get("profile")!=name or native_host.digest(p)!=r.get("approval"):continue
                     if p!=plan(root,name,p["route"]):continue
-                    checks=r["results"];version_ok=any(c["arguments"]==["--version"] and c["state"]=="version-matched" for c in checks)
+                    checks=r["results"];version_ok=any(c["arguments"]==["api","GET","/api/info"] and c["state"]=="version-matched" for c in checks)
                     ids=lambda endpoint:next((c.get("ids",[]) for c in checks if c["arguments"][-1]==endpoint),[])
                     ok=version_ok and registered(ids("/api/plugin"),ids("/api/skill"),name,p["expected_skills"])
                     row.update(registration="observed" if ok else "not-observed",route=p["route"],report_id=path.stem,checks=checks)
