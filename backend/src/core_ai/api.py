@@ -435,3 +435,6 @@ app.include_router(program_automation.router)
 
 from . import master_plans
 app.include_router(master_plans.router)
+
+from . import resources
+app.include_router(resources.router)

@@ -1,3 +1,4 @@
+import MasterPlanPanel from './MasterPlanPanel';
 import {useEffect,useState,type FormEvent} from 'react';
 import {api} from './api';
 import {useSession} from './Session';
@@ -33,6 +34,7 @@ export default function MissionPanel({tick,visible=true}:{tick:number;visible?:b
  return <section className="box">
   <header>Mission workspace <button type="button" disabled={busy||readonly} onClick={()=>open(null)}>New mission</button></header>
   <p>Define an objective, select existing agents and programs, review dependencies, then launch a versioned workflow. Execution is sequential on the current resource-limited host; independent steps may be ordered explicitly.</p>
+  <MasterPlanPanel projects={projects} agents={agents} models={models} programs={programs} visible={visible} onApproved={reload}/>
   {error&&<div className="error" role="alert">{error}</div>}
   <div className="fields"><label>Saved mission<select value={selected?.id||''} onChange={e=>open(data?.templates.find(t=>t.id===e.target.value)||null)}><option value="">New mission</option>{data?.templates.map(t=><option value={t.id} key={t.id}>{t.title} · v{t.version}</option>)}</select></label><label>Execution history<select value={runId} onChange={e=>{setRunId(e.target.value);setRun(null);setChild(null);}}><option value="">Select execution</option>{data?.runs.map(r=><option value={r.id} key={r.id}>{r.title} · {r.status}</option>)}</select></label></div>
   <form className="form" onSubmit={save}>
