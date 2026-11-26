@@ -1,6 +1,7 @@
 import importlib
 from pathlib import Path
 import sys
+import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -30,4 +31,14 @@ class PackageRuntimeTests(unittest.TestCase):
     def test_unqualified_when_no_receipts(self):
         with tempfile.TemporaryDirectory() as tmp:
             self.assertTrue(all(x["state"]=="build-not-qualified" for x in p.evidence(Path(tmp))))
+    def test_stdio_round_trip_real_fixture_process(self):
+        source="import sys,json\nfor line in sys.stdin:\n r=json.loads(line)\n if 'id' in r: print(json.dumps({'jsonrpc':'2.0','id':r['id'],'result':{'method':r['method']}}),flush=True)"
+        with subprocess.Popen([sys.executable,"-u","-c",source],stdin=subprocess.PIPE,stdout=subprocess.PIPE) as proc:
+            try:
+                peer=p.Stdio(proc,3)
+                self.assertEqual(peer.request("initialize",{})["method"],"initialize")
+                peer.send({"jsonrpc":"2.0","method":"notifications/initialized"})
+                self.assertEqual(peer.request("tools/list",{})["method"],"tools/list")
+            finally:
+                proc.stdin.close();proc.wait(timeout=3)
 if __name__=="__main__":unittest.main()

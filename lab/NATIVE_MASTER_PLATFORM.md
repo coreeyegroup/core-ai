@@ -61,3 +61,7 @@ References:
 - https://docs.astral.sh/uv/guides/integration/docker/
 
 Master-generated missions narrow delegated program permissions to the intersection of the reviewed plan's selected programs and the agent's own permissions. Current permissions are rechecked at each call. Capabilities provides a unified searchable read-only explorer; Diagnostics remains a separate Tools category. Planning history and cancellation use the existing task queue. General inbound MCP execution, arbitrary native model dispatch, distributed workers and other upstream package builds remain open, not qualified by this release.
+
+## Consolidated native and package installation
+
+Review the combined plan with python3 lab/platform_install.py review. It includes the exact discovery and fallback directory routes, both package Dockerfiles, and base image IDs. After explicit operator approval, run python3 lab/platform_install.py apply --approve REVIEWED_DIGEST. Independent failures are recorded; the batch returns nonzero if any final profile or package fails. If a package base is not available, --native-only is available for both commands; it intentionally omits the package builds, not the requirements. The status command and Tools catalog distinguish observed registration, package smoke tests, and unqualified model/provider execution.
