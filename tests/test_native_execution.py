@@ -4,6 +4,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 import socket
 import tempfile
 import threading
+import time
 from pathlib import Path
 import sys
 import unittest
@@ -46,13 +47,20 @@ class NativeExecutionTest(unittest.TestCase):
             def do_POST(self):
                 body=json.loads(self.rfile.read(int(self.headers["Content-Length"])))
                 requests.append((self.path,body,self.headers.get("Authorization")))
+                if body.get("messages")==[{"role":"user","content":"reject"}]:
+                    self.send_error(503,"fixture-private-detail");return
+                if body.get("messages")==[{"role":"user","content":"slow"}]:
+                    time.sleep(0.35)
+                    self.send_response(200)
+                    self.end_headers()
+                    return
                 self.send_response(200)
                 self.send_header("Content-Type","text/event-stream")
                 self.end_headers()
                 self.wfile.write(b"data: [DONE]\n\n")
         with HTTPServer(("127.0.0.1",0),Model) as provider,tempfile.TemporaryDirectory() as d:
             t=threading.Thread(target=provider.serve_forever,daemon=True);t.start()
-            p={"endpoint":"http://127.0.0.1:"+str(provider.server_port),"model":"local","mode":"full"}
+            p={"endpoint":"http://127.0.0.1:"+str(provider.server_port),"model":"local","mode":"full","inference_timeout":0.1}
             path=Path(d)/"relay.sock"
             with n.Relay(path,p,{"model":"local"},{"capabilities":["tools","completion"]}) as relay:
                 thread=threading.Thread(target=relay.serve_forever,daemon=True);thread.start()
@@ -80,6 +88,13 @@ class NativeExecutionTest(unittest.TestCase):
                     self.assertIsNone(requests[0][2])
                     self.assertEqual(relay.calls,1)
                     self.assertTrue(relay.hook)
+                    rejected=call("POST","/v1/chat/completions",{"model":"local","messages":[{"role":"user","content":"reject"}]})
+                    self.assertEqual(rejected[0],502)
+                    self.assertNotIn(b"fixture-private-detail",rejected[1])
+                    slow=call("POST","/v1/chat/completions",{"model":"local","messages":[{"role":"user","content":"slow"}]})
+                    self.assertEqual(slow[0],504)
+                    self.assertIn("upstream-http-503",relay.diagnostics())
+                    self.assertIn("upstream-timeout",relay.diagnostics())
                 finally:
                     relay.shutdown();thread.join(timeout=5)
                     provider.shutdown();t.join(timeout=5)
