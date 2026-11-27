@@ -98,7 +98,7 @@ def plan(root,profile,url,model,mode):
     plugins=["/profiles/"+x["profile"]+("/.opencode/plugins" if x["profile"]=="ponytail" else "") for x in entries]
     return {"schema":1,"profile":profile,"mode":mode,"endpoint":url,"model":model,"model_digest":item["digest"],
         "image":image,"version":entries[0]["version"],"sources":[{k:x[k] for k in ("profile","source","repo","commit","expected_skills")} for x in entries],
-        "config":{"plugins":plugins,"providers":{"ollama":{"settings":{"baseURL":"http://127.0.0.1:11434/v1"}}}},
+        "config":{"plugins":plugins,"agents":{"title":{"disabled":True}},"providers":{"ollama":{"settings":{"baseURL":"http://127.0.0.1:11434/v1"}}}},
         "runner":Path(__file__).with_name("native_execution.mjs").read_text(),"implementation":hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
         "timeout":task_timeout,"inference_timeout":inference_timeout,"max_model_calls":MAX_CALLS,"network":"none; only exact local Ollama model via filtered Unix socket"}
 
@@ -119,11 +119,13 @@ def command(p,name,socket_path):
 class Relay(socketserver.ThreadingMixIn,socketserver.UnixStreamServer):
     daemon_threads=True
     request_queue_size=4
-    def __init__(self,path,p,item,show):
+    def __init__(self,path,p,item,show,progress=None):
         super().__init__(str(path),Handler)
         self.p=p;self.item=item;self.show=show
         self.calls=0;self.hook=False;self.lock=threading.Lock();self.slot=threading.BoundedSemaphore(2)
-        self.failures=[]
+        self.failures=[];self.progress=progress
+    def report(self,event,**fields):
+        if self.progress is not None:self.progress({"event":event,**fields})
     def note_failure(self,code):
         with self.lock:
             if len(self.failures)<32:self.failures.append(code)
@@ -150,7 +152,7 @@ class Handler(BaseHTTPRequestHandler):
         raw=json.dumps(data).encode()
         self.send_response(200);self.send_header("Content-Type","application/json");self.send_header("Content-Length",str(len(raw)));self.end_headers();self.wfile.write(raw)
     def handle_request(self):
-        c=None;started=False;stage="request"
+        c=None;started=False;stage="request";call=None;total=0;began=time.monotonic()
         try:
             if self.headers.get("Transfer-Encoding"):raise ValueError("Unsupported request encoding")
             body=None
@@ -164,15 +166,18 @@ class Handler(BaseHTTPRequestHandler):
             if self.path=="/api/show":self.send_json(self.server.show);return
             with self.server.lock:
                 if self.server.calls>=MAX_CALLS:raise ValueError("Model call budget exhausted")
-                self.server.calls+=1
+                self.server.calls+=1;call=self.server.calls
                 marker="PONYTAIL MODE ACTIVE — level: "+p["mode"]
                 self.server.hook |= any(isinstance(m,dict) and m.get("role")=="system" and marker in json.dumps(m.get("content"),ensure_ascii=False) for m in body["messages"])
             # Do not forward client headers, authentication, proxy settings or redirects.
             body["max_tokens"]=min(4096,max(1,int(body.get("max_tokens") or 4096)))
+            self.server.report("model-request",call=call,request_bytes=len(json.dumps(body).encode()),
+                messages=len(body["messages"]),tools=len(body.get("tools") or []),max_tokens=body["max_tokens"])
             stage="upstream"
             c=connection(p["endpoint"],p.get("inference_timeout",INFERENCE_TIMEOUT))
             c.request("POST",self.path,json.dumps(body).encode(),{"Content-Type":"application/json"})
             response=c.getresponse()
+            self.server.report("upstream-headers",call=call,status=response.status,elapsed_seconds=round(time.monotonic()-began,2))
             if response.status!=200:
                 self.server.note_failure("upstream-http-"+str(response.status))
                 stage="downstream"
@@ -185,6 +190,7 @@ class Handler(BaseHTTPRequestHandler):
                 stage="upstream-stream"
                 chunk=response.read1(16384)
                 if not chunk:break
+                if total==0:self.server.report("first-response-data",call=call,elapsed_seconds=round(time.monotonic()-began,2))
                 total+=len(chunk)
                 if total>MAX_RESPONSE:raise ValueError("Response exceeds limit")
                 stage="downstream"
@@ -200,12 +206,14 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 code=502;reason="upstream-stream-failed" if stage=="upstream-stream" else "upstream-connection-failed"
             self.server.note_failure(reason)
+            self.server.report("relay-error",call=call,reason=reason,elapsed_seconds=round(time.monotonic()-began,2))
             if not started and stage!="downstream":
                 try:self.send_error(code,"Native model "+reason)
                 except OSError:pass
         finally:
             if c:c.close()
             self.close_connection=True
+            if call is not None:self.server.report("request-end",call=call,response_bytes=total,elapsed_seconds=round(time.monotonic()-began,2))
 
 def parse_events(raw):
     skills=[];text=[]
@@ -235,14 +243,14 @@ def fixture_prompt(profile):
     return ("This is an isolated qualification fixture. Use the native skill tool to load "+skill+
             ". Then provide a short design review of a hypothetical calculator. Do not write files, use shell, ask questions, or perform external actions.")
 
-def run(root,p,prompt,temp_root=None):
+def run(root,p,prompt,temp_root=None,progress=None):
     if not isinstance(prompt,str) or not prompt.strip() or len(prompt.encode())>65536:raise ValueError("Native prompt exceeds limit")
     item,show=model_snapshot(p["endpoint"],p["model"])
     if item["digest"]!=p["model_digest"]:raise ValueError("Model changed; review again")
     name="core-ai-native-execution-"+uuid.uuid4().hex
     with tempfile.TemporaryDirectory(prefix="native-",dir=temp_root) as directory:
         path=Path(directory)/"relay.sock"
-        with Relay(path,p,item,show) as server:
+        with Relay(path,p,item,show,progress=progress) as server:
             path.chmod(0o666) # private parent; container receives only this socket
             thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
             try:
@@ -251,7 +259,7 @@ def run(root,p,prompt,temp_root=None):
                         proc=subprocess.run(["prlimit","--fsize="+str(MAX_RESPONSE),"--",*command(p,name,path)],
                             input=prompt.encode(),stdout=out,stderr=err,timeout=p["timeout"],check=False)
                     except subprocess.TimeoutExpired:
-                        raise ValueError("Native task deadline exceeded; relay: "+", ".join(server.diagnostics() or ["no-recorded-error"])) from None
+                        raise ValueError("Native task deadline exceeded; model calls: "+str(server.calls)+"; relay: "+", ".join(server.diagnostics() or ["no-recorded-error"])) from None
                     if proc.returncode or out.seek(0,os.SEEK_END)>=MAX_RESPONSE:
                         err.seek(max(0,err.seek(0,os.SEEK_END)-16384))
                         detail=err.read().decode("utf-8","replace").lower()
@@ -309,7 +317,9 @@ def main():
     sub=parser.add_subparsers(dest="action",required=True)
     for action in ("review","qualify"):
         q=sub.add_parser(action);q.add_argument("profile",choices=PROFILES);q.add_argument("--endpoint",required=True);q.add_argument("--model",required=True);q.add_argument("--mode",choices=MODES,default="full")
-        if action=="qualify":q.add_argument("--approve",required=True)
+        if action=="qualify":
+            q.add_argument("--approve",required=True)
+            q.add_argument("--trace",action="store_true",help="Print bounded request metadata, never prompt or response content")
     sub.add_parser("status")
     a=parser.parse_args()
     if a.action=="status":print(json.dumps(status(a.root),indent=2));return 0
@@ -317,7 +327,8 @@ def main():
     approval=native_host.digest(p)
     if a.action=="review":print(json.dumps(p,indent=2));print("Native execution approval digest:",approval);return 0
     if approval!=a.approve:raise ValueError("Reviewed plan changed")
-    result=run(a.root,p,fixture_prompt(a.profile))
+    progress=(lambda event: print(json.dumps(event),file=sys.stderr,flush=True)) if a.trace else None
+    result=run(a.root,p,fixture_prompt(a.profile),progress=progress)
     ok=qualification_ok(a.profile,result,result["hook_observed"],result["model_calls"])
     evidence={k:result[k] for k in ("skills","hook_observed","model_calls")}
     record={"plan":p,"approval":approval,"qualified":ok,"evidence":evidence}
