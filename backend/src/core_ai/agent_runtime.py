@@ -62,7 +62,7 @@ def dispatch(run,name,args,step):
             if name=='native.superpowers' and mode!='full':raise ValueError('Superpowers has no Ponytail mode.')
             result=program_gateway.request({'action':'native-run','profile':NATIVE_TOOLS[name],
                 'endpoint':models.validate_endpoint(models.config()['endpoint']),'model':run['model'],'mode':mode,
-                'prompt':body.prompt},timeout=260)
+                'prompt':body.prompt},timeout=720)
             capability_policy.require_tool(run,actor(run),name)
         else:
             result=program_gateway.agent_catalog(run,user) if name=='program.list' else program_gateway.agent_run(body,user,run)

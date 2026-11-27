@@ -8,6 +8,7 @@ import time
 from pathlib import Path
 import sys
 import unittest
+from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/"lab"))
 import native_execution as n
 
@@ -16,6 +17,13 @@ class NativeExecutionTest(unittest.TestCase):
         self.assertEqual(n.endpoint("http://10.8.0.2:11434/"),"http://10.8.0.2:11434")
         for bad in ("https://10.8.0.2:11434","http://8.8.8.8","http://localhost:11434","http://10.0.0.1/a","http://user:secret@10.0.0.1"):
             with self.assertRaises(ValueError): n.endpoint(bad)
+
+    def test_operator_timeout_bounds(self):
+        with patch.dict(n.os.environ,{"CORE_AI_NATIVE_TASK_SECONDS":"480","CORE_AI_NATIVE_INFERENCE_SECONDS":"240"}):
+            self.assertEqual(n.timeout_settings(),(480,240))
+        for task,inference in (("540","301"),("541","240"),("180","180"),("bad","240")):
+            with patch.dict(n.os.environ,{"CORE_AI_NATIVE_TASK_SECONDS":task,"CORE_AI_NATIVE_INFERENCE_SECONDS":inference}):
+                with self.assertRaises(ValueError):n.timeout_settings()
 
     def test_only_selected_model_and_paths(self):
         for method,path,body in (
@@ -51,8 +59,10 @@ class NativeExecutionTest(unittest.TestCase):
                     self.send_error(503,"fixture-private-detail");return
                 if body.get("messages")==[{"role":"user","content":"slow"}]:
                     time.sleep(0.35)
-                    self.send_response(200)
-                    self.end_headers()
+                    try:
+                        self.send_response(200)
+                        self.end_headers()
+                    except OSError:pass
                     return
                 self.send_response(200)
                 self.send_header("Content-Type","text/event-stream")

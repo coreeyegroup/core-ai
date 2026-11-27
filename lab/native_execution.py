@@ -25,8 +25,20 @@ PROFILES={"superpowers":("superpowers",),"ponytail":("ponytail",),"combined":("s
 MODES=("lite","full","ultra")
 MAX_BODY=4*1024*1024
 MAX_RESPONSE=8*1024*1024
-TIMEOUT=180
+TIMEOUT=540
+INFERENCE_TIMEOUT=300
 MAX_CALLS=16
+
+def timeout_settings():
+    # Operator settings are part of the reviewed plan, never model/tool input.
+    try:
+        task=int(os.environ.get("CORE_AI_NATIVE_TASK_SECONDS",TIMEOUT))
+        inference=int(os.environ.get("CORE_AI_NATIVE_INFERENCE_SECONDS",INFERENCE_TIMEOUT))
+    except ValueError:
+        raise ValueError("Invalid native timeout settings") from None
+    if not 180<=task<=540 or not 30<=inference<=300 or inference+60>task:
+        raise ValueError("Native timeouts outside approved bounds")
+    return task,inference
 
 def endpoint(value):
     u=urlsplit(value)
@@ -82,12 +94,13 @@ def plan(root,profile,url,model,mode):
     image=entries[0]["image"]
     if any(x["image"]!=image for x in entries):raise ValueError("Runtime changed")
     item,_=model_snapshot(url,model)
+    task_timeout,inference_timeout=timeout_settings()
     plugins=["/profiles/"+x["profile"]+("/.opencode/plugins" if x["profile"]=="ponytail" else "") for x in entries]
     return {"schema":1,"profile":profile,"mode":mode,"endpoint":url,"model":model,"model_digest":item["digest"],
         "image":image,"version":entries[0]["version"],"sources":[{k:x[k] for k in ("profile","source","repo","commit","expected_skills")} for x in entries],
         "config":{"plugins":plugins,"providers":{"ollama":{"settings":{"baseURL":"http://127.0.0.1:11434/v1"}}}},
         "runner":Path(__file__).with_name("native_execution.mjs").read_text(),"implementation":hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
-        "timeout":TIMEOUT,"max_model_calls":MAX_CALLS,"network":"none; only exact local Ollama model via filtered Unix socket"}
+        "timeout":task_timeout,"inference_timeout":inference_timeout,"max_model_calls":MAX_CALLS,"network":"none; only exact local Ollama model via filtered Unix socket"}
 
 def command(p,name,socket_path):
     args=["docker","run","--rm","-i","--name",name,"--pull=never","--network=none","--read-only","--user","1000:1000",
@@ -110,6 +123,12 @@ class Relay(socketserver.ThreadingMixIn,socketserver.UnixStreamServer):
         super().__init__(str(path),Handler)
         self.p=p;self.item=item;self.show=show
         self.calls=0;self.hook=False;self.lock=threading.Lock();self.slot=threading.BoundedSemaphore(2)
+        self.failures=[]
+    def note_failure(self,code):
+        with self.lock:
+            if len(self.failures)<32:self.failures.append(code)
+    def diagnostics(self):
+        with self.lock:return sorted(set(self.failures))
     def process_request(self,request,address):
         if not self.slot.acquire(blocking=False):
             self.shutdown_request(request);return
@@ -131,7 +150,7 @@ class Handler(BaseHTTPRequestHandler):
         raw=json.dumps(data).encode()
         self.send_response(200);self.send_header("Content-Type","application/json");self.send_header("Content-Length",str(len(raw)));self.end_headers();self.wfile.write(raw)
     def handle_request(self):
-        c=None;started=False
+        c=None;started=False;stage="request"
         try:
             if self.headers.get("Transfer-Encoding"):raise ValueError("Unsupported request encoding")
             body=None
@@ -150,21 +169,39 @@ class Handler(BaseHTTPRequestHandler):
                 self.server.hook |= any(isinstance(m,dict) and m.get("role")=="system" and marker in json.dumps(m.get("content"),ensure_ascii=False) for m in body["messages"])
             # Do not forward client headers, authentication, proxy settings or redirects.
             body["max_tokens"]=min(4096,max(1,int(body.get("max_tokens") or 4096)))
-            c=connection(p["endpoint"],90)
+            stage="upstream"
+            c=connection(p["endpoint"],p.get("inference_timeout",INFERENCE_TIMEOUT))
             c.request("POST",self.path,json.dumps(body).encode(),{"Content-Type":"application/json"})
             response=c.getresponse()
-            if response.status!=200:raise ValueError("Ollama completion rejected")
-            self.send_response(200);self.send_header("Content-Type",response.getheader("Content-Type","application/json"));self.end_headers();started=True
+            if response.status!=200:
+                self.server.note_failure("upstream-http-"+str(response.status))
+                stage="downstream"
+                self.send_error(502,"Native model upstream rejected request")
+                return
+            stage="downstream";started=True
+            self.send_response(200);self.send_header("Content-Type",response.getheader("Content-Type","application/json"));self.end_headers()
             total=0
             while True:
+                stage="upstream-stream"
                 chunk=response.read1(16384)
                 if not chunk:break
                 total+=len(chunk)
                 if total>MAX_RESPONSE:raise ValueError("Response exceeds limit")
+                stage="downstream"
                 self.wfile.write(chunk);self.wfile.flush()
-        except (ValueError,OSError,TypeError,KeyError,http.client.HTTPException):
-            if not started:
-                try:self.send_error(422,"Native model request rejected or unavailable")
+        except (ValueError,OSError,TypeError,KeyError,http.client.HTTPException) as exc:
+            if isinstance(exc,TimeoutError):
+                code=504
+                reason="client-timeout" if stage=="downstream" else "request-timeout" if stage=="request" else "upstream-timeout"
+            elif stage=="downstream":
+                code=502;reason="client-disconnected"
+            elif stage=="request":
+                code=422;reason="request-rejected"
+            else:
+                code=502;reason="upstream-stream-failed" if stage=="upstream-stream" else "upstream-connection-failed"
+            self.server.note_failure(reason)
+            if not started and stage!="downstream":
+                try:self.send_error(code,"Native model "+reason)
                 except OSError:pass
         finally:
             if c:c.close()
@@ -210,14 +247,21 @@ def run(root,p,prompt,temp_root=None):
             thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
             try:
                 with tempfile.TemporaryFile(dir=directory) as out,tempfile.TemporaryFile(dir=directory) as err:
-                    proc=subprocess.run(["prlimit","--fsize="+str(MAX_RESPONSE),"--",*command(p,name,path)],
-                        input=prompt.encode(),stdout=out,stderr=err,timeout=p["timeout"],check=False)
+                    try:
+                        proc=subprocess.run(["prlimit","--fsize="+str(MAX_RESPONSE),"--",*command(p,name,path)],
+                            input=prompt.encode(),stdout=out,stderr=err,timeout=p["timeout"],check=False)
+                    except subprocess.TimeoutExpired:
+                        raise ValueError("Native task deadline exceeded; relay: "+", ".join(server.diagnostics() or ["no-recorded-error"])) from None
                     if proc.returncode or out.seek(0,os.SEEK_END)>=MAX_RESPONSE:
                         err.seek(max(0,err.seek(0,os.SEEK_END)-16384))
                         detail=err.read().decode("utf-8","replace").lower()
                         tags=[tag for tag in ("native readiness failed","model not found","permission denied","module not found","connection refused","read-only file system","out of memory") if tag in detail]
+                        tags.extend(server.diagnostics())
                         raise ValueError("Native CLI failed or output limit reached"+(": "+", ".join(tags) if tags else ""))
-                    out.seek(0);result=parse_events(out.read().decode("utf-8"))
+                    out.seek(0)
+                    try:result=parse_events(out.read().decode("utf-8"))
+                    except ValueError as exc:
+                        raise ValueError(str(exc)+("; relay: "+", ".join(server.diagnostics()) if server.diagnostics() else "")) from None
                 return {**result,"hook_observed":server.hook,"model_calls":server.calls}
             finally:
                 try:subprocess.run(["docker","kill",name],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=15,check=False)
