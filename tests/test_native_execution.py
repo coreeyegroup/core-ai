@@ -62,7 +62,7 @@ class NativeExecutionTest(unittest.TestCase):
         with self.assertRaises(ValueError): n.parse_events(json.dumps({"type":"error"}))
 
     def test_socket_relay_filters_and_observes_actual_model_request(self):
-        requests=[]
+        requests=[];progress=[]
         class Model(BaseHTTPRequestHandler):
             def log_message(self,*args):pass
             def do_POST(self):
@@ -85,7 +85,7 @@ class NativeExecutionTest(unittest.TestCase):
             t=threading.Thread(target=provider.serve_forever,daemon=True);t.start()
             p={"endpoint":"http://127.0.0.1:"+str(provider.server_port),"model":"local","mode":"full","inference_timeout":0.1}
             path=Path(d)/"relay.sock"
-            with n.Relay(path,p,{"model":"local"},{"capabilities":["tools","completion"]}) as relay:
+            with n.Relay(path,p,{"model":"local"},{"capabilities":["tools","completion"]},progress=progress.append) as relay:
                 thread=threading.Thread(target=relay.serve_forever,daemon=True);thread.start()
                 class UnixConnection(http.client.HTTPConnection):
                     def connect(self):
@@ -111,6 +111,10 @@ class NativeExecutionTest(unittest.TestCase):
                     self.assertIsNone(requests[0][2])
                     self.assertEqual(relay.calls,1)
                     self.assertTrue(relay.hook)
+                    self.assertTrue(any(x["event"]=="model-request" and x["call"]==1 and x["tools"]==0 and x["max_tokens"]==4096 for x in progress))
+                    self.assertTrue(any(x["event"]=="upstream-headers" and x["status"]==200 for x in progress))
+                    self.assertNotIn("PONYTAIL MODE ACTIVE",json.dumps(progress))
+                    self.assertNotIn("fixture-not-forwarded",json.dumps(progress))
                     rejected=call("POST","/v1/chat/completions",{"model":"local","messages":[{"role":"user","content":"reject"}]})
                     self.assertEqual(rejected[0],502)
                     self.assertNotIn(b"fixture-private-detail",rejected[1])
