@@ -18,6 +18,19 @@ class NativeExecutionTest(unittest.TestCase):
         for bad in ("https://10.8.0.2:11434","http://8.8.8.8","http://localhost:11434","http://10.0.0.1/a","http://user:secret@10.0.0.1"):
             with self.assertRaises(ValueError): n.endpoint(bad)
 
+    def test_disposable_plan_disables_only_background_title_agent(self):
+        def source(root,profile,route):
+            return {"profile":profile,"source":"/fixture/"+profile,"repo":"fixture/"+profile,
+                    "commit":"abc","expected_skills":["fixture"],"image":"fixture-image","version":"2.4.1"}
+        with patch.object(n.native_profiles,"plan",side_effect=source), patch.object(n,"model_snapshot",return_value=({"digest":"fixture"},{})):
+            for profile in ("superpowers","ponytail","combined"):
+                p=n.plan(Path("/fixture"),profile,"http://127.0.0.1:11434","local","full")
+                self.assertEqual(p["config"].get("agents"),{"title":{"disabled":True}})
+                self.assertEqual(len(p["config"]["plugins"]),2 if profile=="combined" else 1)
+                args=n.command(p,"fixture","/fixture/relay.sock")
+                config=next(x for x in args if x.startswith("NATIVE_CONFIG="))
+                self.assertEqual(json.loads(config.split("=",1)[1]),p["config"])
+
     def test_operator_timeout_bounds(self):
         with patch.dict(n.os.environ,{"CORE_AI_NATIVE_TASK_SECONDS":"480","CORE_AI_NATIVE_INFERENCE_SECONDS":"240"}):
             self.assertEqual(n.timeout_settings(),(480,240))
